@@ -27,7 +27,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOKEN = os.environ[MTUxNDIzMzc5OTc5MjM5NDI3Mg.GfyxTa.3Dz1j6L03PhsHCWRkFnUc0Y_d8R0UBGS4LjmlE]
+TOKEN = os.environ["MTUxNDIzMzc5OTc5MjM5NDI3Mg.GfyxTa.3Dz1j6L03PhsHCWRkFnUc0Y_d8R0UBGS4LjmlE"]
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
