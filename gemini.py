@@ -92,24 +92,6 @@ Hadchi normal f football Twitter — machi 3nf, ghir emotional reaction.
 - Kteb b confiance — anta kataf 3la had l'équipe, machi kat-expliquer
 """
 
-
-async def _ask(prompt: str, max_tokens: int = 800) -> str | None:
-    full = PERSONA + "\n\n" + prompt
-    try:
-        loop = asyncio.get_event_loop()
-
-        response = await loop.run_in_executor(
-            None,
-            lambda: model.generate_content(full)
-        )
-
-        return (response.text or "").strip() or None
-
-    except Exception as e:
-        logger.error(f"Gemini error: {e}")
-        return None
-
-
 # ─── Match Report ─────────────────────────────────────────────────────────────
 
 async def match_report(m: dict) -> str:
