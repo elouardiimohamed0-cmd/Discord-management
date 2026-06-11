@@ -7,7 +7,6 @@ import os
 import asyncio
 import logging
 import google.generativeai as genai
-from google.genai import types
 
 logger = logging.getLogger(__name__)
 
