@@ -927,13 +927,6 @@ async def on_command_error(ctx, error):
         await ctx.send(f"❌ Error: `{error}`")
 
 
-# ── Entry Point ───────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    if not TOKEN:
-        raise ValueError("DISCORD_TOKEN not set")
-    bot.run(TOKEN)
-
 import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
@@ -942,5 +935,15 @@ def run_dummy():
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-threading.Thread(target=run_dummy).start()
-``
+
+# ── Entry Point ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    if not TOKEN:
+        raise ValueError("DISCORD_TOKEN not set")
+
+    # ✅ START DUMMY SERVER FIRST
+    threading.Thread(target=run_dummy, daemon=True).start()
+
+    # ✅ THEN RUN BOT
+    bot.run(TOKEN)
