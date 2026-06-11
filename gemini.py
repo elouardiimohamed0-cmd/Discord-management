@@ -19,7 +19,7 @@ client = OpenAI(
 
 
 # ✅ MAIN AI FUNCTION (FIXED)
-async def _ask(prompt: str, max_tokens: int = 800):
+async def _ask(prompt: str, max_tokens: int = 300):
     try:
         loop = asyncio.get_event_loop()
 
