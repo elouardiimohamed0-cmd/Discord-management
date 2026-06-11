@@ -2,11 +2,15 @@
 Gemini AI content generator — Moroccan Darija football social media manager.
 All functions take structured data dicts from ea_api.
 Optimized: low max_tokens, reuse data, no redundant calls.
+NOW WITH DARIJA CLEANER — auto-removes formal Arabic, enforces authentic Moroccan style.
 """
 import asyncio
 import logging
 import os
 from openai import OpenAI
+
+# ✅ Import Darija cleaner
+from darija import clean_darija, ask_and_clean
 
 # ✅ Logger
 logger = logging.getLogger(__name__)
@@ -18,7 +22,7 @@ client = OpenAI(
 )
 
 
-# ✅ MAIN AI FUNCTION (FIXED)
+# ✅ MAIN AI FUNCTION (UNCHANGED — still calls Groq)
 async def _ask(prompt: str, max_tokens: int = 300):
     try:
         loop = asyncio.get_event_loop()
@@ -98,6 +102,8 @@ async def match_report(m: dict) -> str:
     ) or "Bla stats joueurs."
 
     emoji = "🟢" if m["result"] == "W" else ("🟡" if m["result"] == "D" else "🔴")
+    situation = "win" if m["result"] == "W" else "lose" if m["result"] == "L" else "draw"
+
     prompt = f"""
 Match report:
 {emoji} **{m['our_name']}** {m['our_goals']} — {m['opp_goals']} **{m['opp_name']}**
@@ -114,7 +120,7 @@ Kteb b Darija:
 5. Closing: épique ila fouz, dramatique ila khsara
 Bold Discord, max 900 chars, Darija street 100%.
 """
-    result = await _ask(prompt, max_tokens=700)
+    result = await ask_and_clean(_ask, prompt, max_tokens=700, situation=situation)
     if not result:
         lines = [f"{emoji} **{m['our_name']}** {m['our_goals']}—{m['opp_goals']} **{m['opp_name']}**\n"]
         for p in m["players"][:5]:
@@ -135,7 +141,7 @@ Quick report, 2 jomla MAX b Darija street:
 {motm_info}
 Punchline directe, max 180 chars — kifach kaykteb Moroccan f Twitter lkora.
 """
-    result = await _ask(prompt, max_tokens=150)
+    result = await ask_and_clean(_ask, prompt, max_tokens=150, situation="general")
     fallback = f"{emoji} **{m['our_goals']}-{m['opp_goals']}** vs {m['opp_name']} — {motm_info}"
     return result or fallback
 
@@ -152,7 +158,7 @@ Post MOTM b Darija (max 220 chars, style tweet maghribi):
 Match: {m['our_goals']}-{m['opp_goals']} vs {m['opp_name']}
 Commence par 🌟 MOTM: — hype natural, machi robot.
 """
-    result = await _ask(prompt, max_tokens=180)
+    result = await ask_and_clean(_ask, prompt, max_tokens=180, situation="praise")
     return result or f"🌟 **MOTM: {best['name']}** — {best['rating']:.1f}/10 ({best['goals']}G {best['assists']}A) 🔥"
 
 
@@ -177,7 +183,7 @@ Chaque tweet b energy différente:
 - TWEET3: reaction funny/absurde ou "fin kan X?"
 Darija street 100%, natural code-switch m3a français.
 """
-    result = await _ask(prompt, max_tokens=350)
+    result = await ask_and_clean(_ask, prompt, max_tokens=350, situation="general")
     tweets = []
     if result:
         for line in result.splitlines():
@@ -196,7 +202,7 @@ async def reaction_post(m: dict) -> str:
 Réaction WhatsApp/Twitter b Darija pour: {emoji} {m['our_goals']}-{m['opp_goals']} vs {m['opp_name']} ({outcome})
 Max 150 chars, punch direct — ila fouz: hype, ila khsara: "t7ashsham" energy, ila taw: "safi 3iyet".
 """
-    result = await _ask(prompt, max_tokens=120)
+    result = await ask_and_clean(_ask, prompt, max_tokens=120, situation="general")
     return result or f"{emoji} {m['our_goals']}-{m['opp_goals']} vs {m['opp_name']} 🔥"
 
 
@@ -228,7 +234,7 @@ Inclure b Darija:
 5. Closing motivant ou critique 3la 7sab les résultats
 Max 800 chars.
 """
-    result = await _ask(prompt, max_tokens=650)
+    result = await ask_and_clean(_ask, prompt, max_tokens=650, situation="general")
     if result:
         return result
     lines = ["📊 **Derniers 5 matchs — Rachad L3ERGONI**", "",
@@ -272,7 +278,7 @@ Post SM b Darija — medals 🥇🥈🥉, Discord bold, commentaire funny/toxic 
 Ila shi wa7d ma dar walo → "fin kan had r7al?" energy.
 Max 650 chars.
 """
-    result = await _ask(prompt, max_tokens=550)
+    result = await ask_and_clean(_ask, prompt, max_tokens=550, situation="praise")
     return result or f"🏅 **Top Performers**\n{scorer_lines}"
 
 
@@ -301,7 +307,7 @@ Kteb:
 4. Closing hype kat-hype l'équipe
 Discord bold, max 750 chars.
 """
-    result = await _ask(prompt, max_tokens=650)
+    result = await ask_and_clean(_ask, prompt, max_tokens=650, situation="praise")
     text = result or "🏆 **TEAM OF THE WEEK**\n" + "\n".join(f"⭐ **{n}** — {r:.2f}/10" for n, r in player_tuples)
     return text, player_tuples
 
@@ -335,7 +341,7 @@ Rules:
 - Fini b réconciliation comique wa7d jomla (b7al "walakin 7na kanhibok s7abi 😂")
 - Max 280 chars, punch immédiat
 """
-    result = await _ask(prompt, max_tokens=250)
+    result = await ask_and_clean(_ask, prompt, max_tokens=250, situation="roast")
     return f"🔥 **ROAST: {player_name}**\n\n{result or f'{player_name} khaf mn lroast hahaha 😅'}"
 
 
@@ -357,7 +363,7 @@ Post d'appréciation b Darija Moroccan pour {player_name}:
 Stats: {stats_block}
 Style: fan hyped, éloge exagéré b7al kayt7adath m3a s7abo, funny walakin sincère. Max 200 chars.
 """
-    result = await _ask(prompt, max_tokens=180)
+    result = await ask_and_clean(_ask, prompt, max_tokens=180, situation="praise")
     return f"👏 **{player_name}**\n\n{result or f'Rah {player_name} kaydiri 7wayed! 💪🔥'}"
 
 
@@ -375,7 +381,7 @@ Post banter b Darija Moroccan Twitter football:
 Style: trash talk dial adversaires, provocation, slightly toxic — kima Moroccan Football Twitter.
 "Ma3ndhomch shi y3mlo kontra 7na" energy. Max 220 chars.
 """
-    result = await _ask(prompt, max_tokens=200)
+    result = await ask_and_clean(_ask, prompt, max_tokens=200, situation="general")
     return result or "😈 Rachad L3ERGONI — kol chi ghadi ye3raf men hna! 🔥"
 
 
@@ -393,7 +399,7 @@ Meme football post b Darija Moroccan pour Rachad L3ERGONI.
 Style: format meme maghribi (b7al "Rachad L3ERGONI f l-attack: ✅ f ldefense: ✅ f..." ou "had l-équipe waqila..." ou "ana o s7abi wqt..."),
 situational humor dial football. Max 200 chars.
 """
-    result = await _ask(prompt, max_tokens=180)
+    result = await ask_and_clean(_ask, prompt, max_tokens=180, situation="general")
     return f"😂 {result or 'Rachad L3ERGONI quand yji lmatch final: 💪🔥'}"
 
 
@@ -411,7 +417,7 @@ Post drama/polémique funny b Darija Moroccan sur: {context}
 Style: exagéré, théâtral, kima kayt7adath Moroccan Twitter 3la chi scandal kbir —
 "ma9dl t9addar walo", "kif kif f kol match", "والله ما صدقت" energy. Max 220 chars.
 """
-    result = await _ask(prompt, max_tokens=190)
+    result = await ask_and_clean(_ask, prompt, max_tokens=190, situation="general")
     return f"😱 {result or 'DRAMA f Rachad L3ERGONI! Chi 7aja waqe3at! 😱'}"
 
 
@@ -424,7 +430,7 @@ Hype post motivant b Darija Moroccan pour Rachad L3ERGONI.
 Style: war cry, ultra confiant, rally l'équipe — "7na 7na walo ghayrina" energy.
 Max 220 chars, punch direct.
 """
-    result = await _ask(prompt, max_tokens=200)
+    result = await ask_and_clean(_ask, prompt, max_tokens=200, situation="hype")
     return result or "🔥 RACHAD L3ERGONI — MA3NDHOMCH SHI Y3MLO KONTRA! LET'S GO! 💪⚽"
 
 
@@ -447,7 +453,7 @@ Inclure:
 4. Verdict confiant — "ghadi n9lb fihom" ou "mochkil 3lihom"
 Max 280 chars.
 """
-    result = await _ask(prompt, max_tokens=250)
+    result = await ask_and_clean(_ask, prompt, max_tokens=250, situation="general")
     return f"🎯 **PREDICTION: vs {opponent}**\n\n{result or 'Le7ya khaf ye-predict 😅'}"
 
 
@@ -469,7 +475,7 @@ Joueurs: {players_str}
 Style: 🚨 EXCLU, journaliste dramatique maghribi, complètement inventé walakin crédible.
 "Sma3t mn masdar mowataq" energy. Max 220 chars.
 """
-    result = await _ask(prompt, max_tokens=200)
+    result = await ask_and_clean(_ask, prompt, max_tokens=200, situation="general")
     return f"🚨 **TRANSFER NEWS**\n\n{result or '🚨 EXCLU: Rachad L3ERGONI f discussions ma3 club kayn! 👀'}"
 
 
@@ -485,7 +491,7 @@ Post "Breaking News" style b Darija Moroccan sur Rachad L3ERGONI:
 Style: journaliste dramatique maghribi, BREAKING urgent, "wakha golha" energy.
 Peut être résultat, performance, ou rumeur inventée funny. Max 220 chars.
 """
-    result = await _ask(prompt, max_tokens=200)
+    result = await ask_and_clean(_ask, prompt, max_tokens=200, situation="general")
     return f"📰 **BREAKING**\n\n{result or '📰 BREAKING: Rachad L3ERGONI kadir 7wayed f l-saison! 🔥'}"
 
 
@@ -515,7 +521,7 @@ W{wins} D{draws} L{losses} | +{gf} -{ga} | Form: {form}
 4. Conseil tactique funny ou critique
 Max 450 chars.
 """
-    result = await _ask(prompt, max_tokens=380)
+    result = await ask_and_clean(_ask, prompt, max_tokens=380, situation="general")
     return f"📈 **ANALYSE DE FORME**\n\n{result or f'W{wins} D{draws} L{losses} — Form: {form}'}"
 
 
@@ -542,7 +548,7 @@ Ratings: {ratings_str or 'N/A'}
 3. Reaction funny dial s7abo f WhatsApp
 Max 300 chars.
 """
-    result = await _ask(prompt, max_tokens=260)
+    result = await ask_and_clean(_ask, prompt, max_tokens=260, situation="general")
     fallback = f"{s['goals']}G {s['assists']}A {s['avg_rating']:.2f}/10 avg"
     return f"📊 **FORM: {player_name}**\n\n{result or fallback}"
 
@@ -567,7 +573,7 @@ Biggest loss: {biggest_loss['our_goals'] if biggest_loss else '?'}-{biggest_loss
 "Wakha golha" energy — honest walakin ma t9arrechch bzzaf.
 Max 450 chars.
 """
-    result = await _ask(prompt, max_tokens=380)
+    result = await ask_and_clean(_ask, prompt, max_tokens=380, situation="general")
     return f"🔍 **INSIGHTS**\n\n{result or f'W{wins} L{losses} | {gf} pour / {ga} contre'}"
 
 
@@ -592,7 +598,7 @@ Top scorer: {top_scorer['name'] if top_scorer else '?'} ({top_scorer['goals'] if
 Trends (scoring, conceding, momentum) — style analyst b Darija, honest walakin machi khutba.
 Max 400 chars.
 """
-    result = await _ask(prompt, max_tokens=350)
+    result = await ask_and_clean(_ask, prompt, max_tokens=350, situation="general")
     return f"📉📈 **TRENDS**\n\n{result or f'Résultats: {results_str}'}"
 
 
@@ -617,7 +623,7 @@ Total buts: {total_goals} f {len(matches)} matchs | Wins: {wins}
 
 Choisit la stat la plus impressionnante, présente-la style infographie SM b Darija. Max 180 chars.
 """
-    result = await _ask(prompt, max_tokens=160)
+    result = await ask_and_clean(_ask, prompt, max_tokens=160, situation="general")
     return f"📊 **STAT DU JOUR**\n\n{result or f'⚽ {total_goals} buts f {len(matches)} matchs — {wins} victoires'}"
 
 
@@ -640,7 +646,7 @@ Player spotlight b Darija Moroccan: **{s['name']}**
 
 Profil joueur SM: compliments sincères + petites piques funny b Darija. Max 250 chars.
 """
-    result = await _ask(prompt, max_tokens=220)
+    result = await ask_and_clean(_ask, prompt, max_tokens=220, situation="praise")
     fallback = f"{s['goals']}G {s['assists']}A {s['avg_rating']:.2f}/10 avg"
     return f"🔦 **PLAYER SPOTLIGHT: {s['name']}**\n\n{result or fallback}"
 
@@ -670,7 +676,7 @@ Top scorers post b Darija Moroccan:
 
 Post classement SM b Darija, commentaire funny pour le #1, shout-out ou pique pour les autres. Max 400 chars.
 """
-    result = await _ask(prompt, max_tokens=350)
+    result = await ask_and_clean(_ask, prompt, max_tokens=350, situation="praise")
     return f"⚽ **TOP SCORERS**\n\n{result or scorer_lines}"
 
 
@@ -699,7 +705,7 @@ Top assisteurs post b Darija Moroccan:
 
 Post classement SM b Darija, commentaire 3la l-passeur dial l'équipe. Max 350 chars.
 """
-    result = await _ask(prompt, max_tokens=300)
+    result = await ask_and_clean(_ask, prompt, max_tokens=300, situation="general")
     return f"🎯 **TOP ASSISTS**\n\n{result or assist_lines}"
 
 
@@ -718,7 +724,7 @@ MVP post b Darija Moroccan pour: **{mvp['name']}**
 
 Style: couronnement hype maximal, "had r7al kaykhdem bzzaf" energy. Max 250 chars.
 """
-    result = await _ask(prompt, max_tokens=220)
+    result = await ask_and_clean(_ask, prompt, max_tokens=220, situation="praise")
     fallback = f"{mvp['goals']}G {mvp['assists']}A — {mvp['avg_rating']:.2f}/10 💪"
     return f"👑 **MVP: {mvp['name']}**\n\n{result or fallback}"
 
@@ -735,11 +741,11 @@ async def compare_players(p1_name: str, p2_name: str, matches: list[dict]):
     s1, s2 = _find(p1_name), _find(p2_name)
 
     if not s1 and not s2:
-        return f"❌ Ma3endnach stats dial **{p1_name}** ou **{p2_name}**."
+        return f"❌ Ma3endnach stats dial **{p1_name}** ou **{p2_name}**.", None, None
     if not s1:
-        return f"❌ Ma3endnach stats dial **{p1_name}**."
+        return f"❌ Ma3endnach stats dial **{p1_name}**.", None, None
     if not s2:
-        return f"❌ Ma3endnach stats dial **{p2_name}**."
+        return f"❌ Ma3endnach stats dial **{p2_name}**.", None, None
 
     prompt = f"""
 Head-to-head b Darija Moroccan Twitter:
@@ -751,7 +757,7 @@ Head-to-head b Darija Moroccan Twitter:
 3. Verdict final funny/toxic — golha b confiance, machi "les deux sont bons"
 Max 400 chars.
 """
-    result = await _ask(prompt, max_tokens=380)
+    result = await ask_and_clean(_ask, prompt, max_tokens=380, situation="general")
     if not result:
         winner = s1["name"] if s1["avg_rating"] >= s2["avg_rating"] else s2["name"]
         result = (f"**{s1['name']}** vs **{s2['name']}**\n"
