@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # ✅ FREE model
-model = genai.GenerativeModel("gemini-1.5-flash-latest")
+_MODEL  = "gemini-2.0-flash"
 
 
 # ✅ Base function
