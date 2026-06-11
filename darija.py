@@ -27,7 +27,7 @@ import asyncio
 import urllib.request
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AUTO-DOWNLOAD CONFIG
@@ -55,15 +55,14 @@ DATASET_FILES = {
 @dataclass
 class DarijaWord:
     """A Darija word with variations and metadata."""
-    primary: str                    # Most common form
-    variations: List[str]          # Alternative spellings
-    english: str                   # English translation
-    arabic: Optional[str] = None   # Arabic script
-    category: str = "general"      # semantic category
+    primary: str
+    variations: List[str]
+    english: str
+    arabic: Optional[str] = None
+    category: str = "general"
 
 # Built-in football vocabulary (always available)
 FOOTBALL_VOCAB = {
-    # Core football terms
     "goal": DarijaWord("goal", ["gol", "goul"], "goal", "هدف", "football"),
     "match": DarijaWord("match", ["match", "macth"], "match", "مباراة", "football"),
     "player": DarijaWord("player", ["player", "joueur"], "player", "لاعب", "football"),
@@ -81,8 +80,6 @@ FOOTBALL_VOCAB = {
     "gk": DarijaWord("gk", ["gk", "goalkeeper", "7aris"], "goalkeeper", "حارس", "football"),
     "rating": DarijaWord("rating", ["rating", "note", "ta9im"], "rating", "تقييم", "football"),
     "assist": DarijaWord("assist", ["assist", "passe_d", "7elwa"], "assist", "مساعدة", "football"),
-
-    # Adjectives
     "good": DarijaWord("mzyan", ["mzyan", "mzyen", "zwin", "mezyan"], "good", "جيد", "quality"),
     "bad": DarijaWord("khayb", ["khayb", "khayeb", "5ayb"], "bad", "سيء", "quality"),
     "strong": DarijaWord("9awi", ["9awi", "qawi", "9awwi"], "strong", "قوي", "quality"),
@@ -91,16 +88,12 @@ FOOTBALL_VOCAB = {
     "slow": DarijaWord("bati2", ["bati2", "bati", "bati9"], "slow", "بطيء", "quality"),
     "beautiful": DarijaWord("zwin", ["zwin", "zwina", "zouin"], "beautiful", "جميل", "quality"),
     "ugly": DarijaWord("khayb", ["khayb", "khayeb"], "ugly", "قبيح", "quality"),
-
-    # Emotions/Expressions
     "tired": DarijaWord("3iyet", ["3iyet", "t3ab", "ta3ab"], "tired", "تعب", "emotions"),
     "angry": DarijaWord("t3assab", ["t3assab", "3assab", "ghadab"], "angry", "غاضب", "emotions"),
     "happy": DarijaWord("far7an", ["far7an", "farhan", "mezyan"], "happy", "سعيد", "emotions"),
     "sad": DarijaWord("m7sen", ["m7sen", "m7assin", "hazin"], "sad", "حزين", "emotions"),
     "shocked": DarijaWord("t7e9er", ["t7e9er", "t7ayyar", "t7e9er"], "shocked", "مصدوم", "emotions"),
     "proud": DarijaWord("fakher", ["fakher", "fakhar", "iftikhar"], "proud", "فخور", "emotions"),
-
-    # Common Darija words
     "now": DarijaWord("daba", ["daba", "daba", "daba"], "now", "الآن", "time"),
     "later": DarijaWord("mora", ["mora", "m3a", "ba3d"], "later", "لاحقاً", "time"),
     "never": DarijaWord("walo", ["walo", "wala", "hata"], "never/nothing", "أبداً", "quantity"),
@@ -110,16 +103,14 @@ FOOTBALL_VOCAB = {
     "friend": DarijaWord("s7bi", ["s7bi", "sahbi", "s7abi"], "friend", "صديق", "people"),
     "brother": DarijaWord("khouya", ["khouya", "khoya", "akhi"], "brother", "أخ", "people"),
     "guy": DarijaWord("weld", ["weld", "walad", "weld_nas"], "guy", "ولد", "people"),
-
-    # Verbs (conjugated as "he" past tense)
     "work": DarijaWord("kaykhdem", ["kaykhdem", "kaykhdem", "khedem"], "work", "يعمل", "verbs"),
     "watch": DarijaWord("kaytferrej", ["kaytferrej", "kaytferrej", "tferrej"], "watch", "يشاهد", "verbs"),
     "run": DarijaWord("kayrkeb", ["kayrkeb", "kayrkeb", "rkeb"], "run", "يركض", "verbs"),
     "play": DarijaWord("kayl3eb", ["kayl3eb", "kayl3eb", "l3eb"], "play", "يلعب", "verbs"),
     "score": DarijaWord("kaysjel", ["kaysjel", "kaysjel", "sjel"], "score", "يسجل", "verbs"),
-    "pass": DarijaWord("kay3ett", ["kay3ett", "kay3ett", "3ett"], "pass", "يمرر", "verbs"),
-    "win": DarijaWord("kayrbe7", ["kayrbe7", "kayrbe7", "rbe7"], "win", "يربح", "verbs"),
-    "lose": DarijaWord("kaykhsar", ["kaykhsar", "kaykhsar", "khsar"], "lose", "يخسر", "verbs"),
+    "pass_verb": DarijaWord("kay3ett", ["kay3ett", "kay3ett", "3ett"], "pass", "يمرر", "verbs"),
+    "win_verb": DarijaWord("kayrbe7", ["kayrbe7", "kayrbe7", "rbe7"], "win", "يربح", "verbs"),
+    "lose_verb": DarijaWord("kaykhsar", ["kaykhsar", "kaykhsar", "khsar"], "lose", "يخسر", "verbs"),
     "come": DarijaWord("kayji", ["kayji", "kayji", "ji"], "come", "يأتي", "verbs"),
     "go": DarijaWord("kaymchi", ["kaymchi", "kaymchi", "mchi"], "go", "يذهب", "verbs"),
     "know": DarijaWord("kay3ref", ["kay3ref", "kay3ref", "3ref"], "know", "يعرف", "verbs"),
@@ -132,6 +123,7 @@ FOOTBALL_VOCAB = {
 # Authentic Darija phrases (from real Moroccan speech patterns)
 AUTHENTIC_PHRASES = {
     "win": [
+        "**{player}** dar match mzyan 🔥",
         "wach hadchi bssah???",
         "t9awed 3la had niveau",
         "kanb9aw nchoufou f film",
@@ -150,7 +142,7 @@ AUTHENTIC_PHRASES = {
     ],
     "lose": [
         "walo men walo 💀",
-        "fin kan had r7al?",
+        "fin kan **{player}**?",
         "kaydour f terrain b7al tourist",
         "goal? mission impossible 💀",
         "yji lmatch ykhtarbo",
@@ -393,7 +385,8 @@ class DarijaEngine:
         # Get authentic examples from dataset
         similar = self.loader.find_similar(task + " " + context, n=3)
         examples = ""
-".join([f"  - {s}" for s in similar]) if similar else ""
+        if similar:
+            examples = "\n".join([f"  - {s}" for s in similar])
 
         # Get style-specific instructions
         style_instructions = self._get_style_instructions(style)
@@ -428,7 +421,7 @@ Speak Moroccan Darija ONLY. Mix with French words naturally.
   - "kaykoun" (not "est")
   - "kay3ref" (not "sait")
 
-❌ FORBIDDEN (using these = you failed):
+❌ FORBIDDEN (never use):
   - "لقد" / "إنه" / "إنها" / "أنه" / "أنها"
   - "جميل" / "جيد" / "سيئ"
   - "لقد فاز" / "لقد خسر" / "لقد سجل"
@@ -524,12 +517,42 @@ Fire emojis 🔥🔥🔥""",
             return "walo men walo 💀"
 
         # Step 1: Remove formal Arabic patterns
-        for pattern in FORMAL_ARABIC_PATTERNS:
+        formal_patterns = [
+            r'لقد', r'إنه', r'إنها', r'أنه', r'أنها',
+            r'جميل', r'جيد', r'سيئ', r'أداء',
+            r'لقد فاز', r'لقد خسر', r'لقد سجل', r'لقد قدم',
+            r'لقد كان', r'لقد لعب', r'لقد أظهر',
+            r'أعتقد', r'أظن', r'أفكر',
+            r'بشكل', r'بطريقة', r'بأسلوب',
+            r'من المهم', r'يجب أن', r'ينبغي', r'من الضروري',
+            r'في الواقع', r'حقيقة', r'الحقيقة', r'في الحقيقة',
+            r'بخصوص', r'فيما يتعلق', r'بخصوص',
+            r'أود أن أشير', r'أود أن', r'أشير إلى',
+            r'بناءً على', r'استناداً إلى', r'بناء على',
+            r'من الجدير', r'من المفيد', r'من الأفضل', r'من المستحسن',
+            r'باختصار', r'في النهاية', r'ختاماً', r'أخيراً', r'في الختام',
+            r'لذلك', r'وبالتالي', r'علاوة على', r'إضافة إلى',
+            r'من ناحية', r'من جهة', r'من ناحية أخرى',
+            r'على سبيل المثال', r'مثلاً', r'كمثال',
+            r'بمعنى', r'أي', r'حيث', r'الذي', r'التي', r'الذين',
+            r'وذلك', r'وقد', r'قد', r'كان', r'كانت', r'يكون', r'تكون',
+            r'يمكن', r'يمكننا', r'يمكنني', r'يجب', r'ينبغي',
+            r'من الممكن', r'من المفترض', r'من البديهي',
+            r'لا شك', r'من الواضح', r'من المؤكد', r'بلا شك',
+            r'تلخيصاً', r'بشكل مختصر', r'مختصراً',
+            r'بكل بساطة', r'ببساطة', r'بشكل مباشر', r'مباشرة',
+            r'بصراحة', r'صراحةً', r'بكل صراحة',
+            r'بكل أمانة', r'بأمانة', r'بكل موضوعية',
+            r'بكل حيادية', r'بحيادية', r'بكل شفافية',
+            r'بكل وضوح', r'بوضوح', r'بكل دقة', r'بدقة',
+            r'بكل تفصيل', r'بتفصيل',
+        ]
+
+        for pattern in formal_patterns:
             text = re.sub(pattern, '', text, flags=re.IGNORECASE)
 
         # Step 2: Replace formal words with Darija equivalents
         replacements = {
-            # Formal Arabic → Darija
             'لقد': '',
             'إنه': '', 'إنها': '', 'أنه': '', 'أنها': '',
             'جميل': 'zwin', 'جيد': 'mzyan', 'سيئ': 'khayb',
@@ -556,55 +579,6 @@ Fire emojis 🔥🔥🔥""",
             'يجب': 'khass', 'ينبغي': 'khass',
             'من الضروري': 'mohim', 'من المفيد': 'mzyan',
             'من الأفضل': '7sen', 'من المستحسن': '7sen',
-
-            # French formalisms → Darija
-            'très': 'bzf', 'beaucoup': 'bzf', 'trop': 'bzf',
-            'maintenant': 'daba', 'maintenant': 'daba',
-            'comme': 'b7al', 'parce que': '7it',
-            'alors': 'dakchi', 'donc': 'dakchi',
-            'mais': 'walakin', 'ou': 'w',
-            'et': 'w', 'avec': 'm3a',
-            'pour': 'b', 'dans': 'f', 'sur': '3la',
-            'de': 'dyal', 'des': 'dyal',
-            'le': 'had', 'la': 'had', 'les': 'had',
-            'un': 'wa7ed', 'une': 'wa7ed',
-            'ce': 'had', 'cette': 'had',
-            'mon': 'dyali', 'ton': 'dyalek', 'son': 'dyalo',
-            'notre': 'dyalna', 'votre': 'dyalkom', 'leur': 'dyalhom',
-            'je': 'ana', 'tu': 'nti', 'il': 'howa', 'elle': 'hiya',
-            'nous': '7na', 'vous': 'ntoma', 'ils': 'homa',
-            'suis': 'kaykoun', 'es': 'kaykoun', 'est': 'kaykoun',
-            'sommes': 'kaykounou', 'êtes': 'kaykounou', 'sont': 'kaykounou',
-            'ai': '3endi', 'as': '3endek', 'a': '3endo',
-            'avons': '3endna', 'avez': '3endkom', 'ont': '3endhom',
-            'faire': 'dar', 'fais': 'kaydir', 'fait': 'kaydir',
-            'faisons': 'kaydiro', 'faites': 'kaydiro', 'font': 'kaydiro',
-            'aller': 'mchi', 'vais': 'kaymchi', 'vas': 'kaymchi',
-            'va': 'kaymchi', 'allons': 'kaymchiw', 'allez': 'kaymchiw', 'vont': 'kaymchiw',
-            'venir': 'ji', 'viens': 'kayji', 'vient': 'kayji',
-            'venons': 'kayjiw', 'venez': 'kayjiw', 'viennent': 'kayjiw',
-            'pouvoir': '9der', 'peux': 'kay9der', 'peut': 'kay9der',
-            'pouvons': 'kay9derou', 'pouvez': 'kay9derou', 'peuvent': 'kay9derou',
-            'vouloir': 'bgha', 'veux': 'kaybghi', 'veut': 'kaybghi',
-            'voulons': 'kaybghiw', 'voulez': 'kaybghiw', 'veulent': 'kaybghiw',
-            'savoir': '3ref', 'sais': 'kay3ref', 'sait': 'kay3ref',
-            'savons': 'kay3refou', 'savez': 'kay3refou', 'savent': 'kay3refou',
-            'penser': '7sab', 'pense': 'kay7sab', 'penses': 'kay7sab',
-            'pensons': 'kay7sabou', 'pensez': 'kay7sabou', 'pensent': 'kay7sabou',
-            'dire': 'goul', 'dis': 'kaygoul', 'dit': 'kaygoul',
-            'disons': 'kaygoulou', 'dites': 'kaygoulou', 'disent': 'kaygoulou',
-            'voir': 'chouf', 'vois': 'kaychouf', 'voit': 'kaychouf',
-            'voyons': 'kaychoufou', 'voyez': 'kaychoufou', 'voient': 'kaychoufou',
-            'savoir': '3ref', 'sais': 'kay3ref', 'sait': 'kay3ref',
-            'savons': 'kay3refou', 'savez': 'kay3refou', 'savent': 'kay3refou',
-            'falloir': 'khass', 'faut': 'khass',
-            'fallait': 'kan khass', 'fallu': 'khass',
-            'devoir': 'khass', 'dois': 'khass', 'doit': 'khass',
-            'devons': 'khass', 'devez': 'khass', 'doivent': 'khass',
-            'pouvoir': '9der', 'peux': 'kay9der', 'peut': 'kay9der',
-            'pouvons': 'kay9derou', 'pouvez': 'kay9derou', 'peuvent': 'kay9derou',
-            'vouloir': 'bgha', 'veux': 'kaybghi', 'veut': 'kaybghi',
-            'voulons': 'kaybghiw', 'voulez': 'kaybghiw', 'veulent': 'kaybghiw',
         }
 
         for formal, darija in replacements.items():
@@ -627,22 +601,19 @@ Fire emojis 🔥🔥🔥""",
         result = []
         for line in lines:
             if len(line) > 120:
-                # Break long lines at spaces
-                words = line.split()
-                current = ""
-                for word in words:
-                    if len(current) + len(word) + 1 > 120:
-                        if current:
-                            result.append(current)
-                        current = word
-                    else:
-                        current += " " + word if current else word
-                if current:
-                    result.append(current)
+                # Break at last space before 120
+                idx = line.rfind(' ', 0, 120)
+                if idx > 0:
+                    result.append(line[:idx])
+                    remainder = line[idx+1:].strip()
+                    if remainder:
+                        result.append(remainder[:120])
+                else:
+                    result.append(line[:120])
             else:
                 result.append(line)
 
-        # Step 6: Ensure it ends with energy
+        # Step 6: Ensure energy at end
         if result and not any(c in result[-1] for c in '🔥💀😂👏!!!???'):
             result[-1] += random.choice([' 🔥', ' 💀', ' 😂', ' !!!', ' ???'])
 
@@ -663,9 +634,13 @@ Fire emojis 🔥🔥🔥""",
 
         # Check for formal Arabic (BAD)
         formal_found = []
-        for pattern in FORMAL_ARABIC_PATTERNS:
+        formal_patterns = [
+            r'لقد', r'إنه', r'إنها', r'أنه', r'أنها',
+            r'جميل', r'جيد', r'سيئ', r'أداء',
+        ]
+        for pattern in formal_patterns:
             if re.search(pattern, text, re.IGNORECASE):
-                formal_found.append(pattern.replace(r'', '').replace(r'', ''))
+                formal_found.append(pattern.replace(r'', ''))
                 score -= 15
 
         if formal_found:
@@ -698,12 +673,6 @@ Fire emojis 🔥🔥🔥""",
         if len(lines) > 7:
             score -= 10
             issues.append(f"Too many lines ({len(lines)}, max 7)")
-
-        # Check line length
-        for line in lines:
-            if len(line) > 120:
-                score -= 5
-                issues.append(f"Line too long: {line[:30]}...")
 
         # Check emoji count
         emoji_count = sum(1 for c in text if c in '🔥💀😂👏🟢🟡🔴⚽🎯⭐🏆📊🗓️🐦⚔️🎮💥🛡️😈😱🚨📰')
@@ -954,53 +923,25 @@ If you sound like a Moroccan guy ranting on WhatsApp → you PERFECT.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# EXAMPLE USAGE (for testing)
+# EASY INTEGRATION: Wrap your _ask function
 # ═══════════════════════════════════════════════════════════════════════════════
 
-if __name__ == "__main__":
-    print("🧪 Testing Darija Engine...")
+async def ask_and_clean(_ask_func, prompt: str, max_tokens: int = 300, situation: str = "general"):
+    """
+    Wrapper for your existing _ask function.
+    Calls AI, then cleans the output.
 
-    # Test 1: Enhance prompt
-    print("
-1. Enhanced Prompt:")
-    prompt = enhance_prompt(
-        task="Write match report for 3-1 win vs FC Casa",
-        context="Best player: Hessaidi, 2 goals, 9.2 rating",
-        style="hype"
-    )
-    print(prompt[:500] + "...")
+    Usage in gemini.py:
+        from darija import ask_and_clean
 
-    # Test 2: Clean output
-    print("
-2. Clean Output:")
-    dirty = "لقد فاز الفريق بشكل جميل. إنه أداء جيد."
-    clean = clean_output(dirty)
-    print(f"  Dirty: {dirty}")
-    print(f"  Clean: {clean}")
+        # Instead of:
+        # result = await _ask(prompt, max_tokens)
 
-    # Test 3: Validate
-    print("
-3. Validation:")
-    good_text = "**Hessaidi** dar match mzyan 🔥
-wach hadchi bssah???
-kanb9aw nchoufou f film"
-    result = validate_darija(good_text)
-    print(f"  Score: {result['score']}/100")
-    print(f"  Natural: {result['is_natural']}")
-    print(f"  Issues: {result['issues']}")
+        # Use:
+        result = await ask_and_clean(_ask, prompt, max_tokens, situation="win")
+    """
+    raw = await _ask_func(prompt, max_tokens)
+    if not raw:
+        return generate_template(situation)
 
-    # Test 4: Templates
-    print("
-4. Templates (win):")
-    templates = get_templates("win", player="Hessaidi", score="3-1")
-    for t in templates[:3]:
-        print(f"  - {t}")
-
-    # Test 5: Generate from template (no AI)
-    print("
-5. Generated from template:")
-    generated = generate_template("win", n_lines=5, player="Hessaidi", score="3-1")
-    print(generated)
-
-    print("
-✅ All tests passed!")
+    return clean_output(raw, situation)
