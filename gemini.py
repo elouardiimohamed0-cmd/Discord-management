@@ -25,7 +25,7 @@ async def _ask(prompt: str, max_tokens: int = 800):
 
         def call_api():
             return client.chat.completions.create(
-                model="llama3-70b-8192",  # ✅ correct model
+                model="llama-3.1-8b-instant",  # ✅ correct model
                 messages=[
                     {"role": "system", "content": PERSONA},
                     {"role": "user", "content": prompt}
