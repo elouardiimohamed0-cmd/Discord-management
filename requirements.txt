@@ -1,5 +1,5 @@
 discord.py
-google-generativeai
+openai
 playwright
 pillow
 httpx
