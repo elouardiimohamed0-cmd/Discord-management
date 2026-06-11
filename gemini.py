@@ -75,14 +75,16 @@ async def _ask(prompt: str, max_tokens: int = 800) -> str | None:
     full = PERSONA + "\n\n" + prompt
     try:
         loop = asyncio.get_event_loop()
-        cfg = types.GenerateContentConfig(temperature=0.88, max_output_tokens=max_tokens)
-        resp = await loop.run_in_executor(
+
+        response = await loop.run_in_executor(
             None,
-            lambda: _client.models.generate_content(model=_MODEL, contents=full, config=cfg),
+            lambda: model.generate_content(full)
         )
-        return (resp.text or "").strip() or None
+
+        return (response.text or "").strip() or None
+
     except Exception as e:
-        logger.error("Gemini error: %s", e)
+        logger.error(f"Gemini error: {e}")
         return None
 
 
