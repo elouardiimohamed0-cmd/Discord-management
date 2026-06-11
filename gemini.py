@@ -33,7 +33,6 @@ response = client.chat.completions.create(
     temperature=0.92,
     max_tokens=max_tokens,
 )
-            )
         )
 
         return response.choices[0].message.content.strip()
