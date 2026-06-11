@@ -449,7 +449,7 @@ Inclure:
 Max 280 chars.
 """
     result = await _ask(prompt, max_tokens=250)
-    return f"🎯 **PREDICTION: vs {opponent}**\n\n{result or 'Gemini khaf ye-predict 😅'}"
+    return f"🎯 **PREDICTION: vs {opponent}**\n\n{result or 'Le7ya khaf ye-predict 😅'}"
 
 
 # ─── Transfer / Breaking News ──────────────────────────────────────────────────
