@@ -11,7 +11,7 @@ from openai import OpenAI
 # ✅ Logger
 logger = logging.getLogger(__name__)
 
-# ✅ Groq client (OpenAI-compatible)
+# ✅ Groq client
 client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
     base_url="https://api.groq.com/openai/v1"
@@ -21,27 +21,26 @@ client = OpenAI(
 # ✅ MAIN AI FUNCTION (FIXED)
 async def _ask(prompt: str, max_tokens: int = 800):
     try:
-        # ✅ run blocking API safely (important for async bot)
         loop = asyncio.get_event_loop()
 
-response = client.chat.completions.create(
-    model=_MODEL,
-    messages=[
-        {"role": "system", "content": PERSONA},
-        {"role": "user", "content": prompt}
-    ],
-    temperature=0.92,
-    max_tokens=max_tokens,
-)
-        )
+        def call_api():
+            return client.chat.completions.create(
+                model="llama3-70b-8192",  # ✅ correct model
+                messages=[
+                    {"role": "system", "content": PERSONA},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.9,
+                max_tokens=max_tokens,
+            )
+
+        response = await loop.run_in_executor(None, call_api)
 
         return response.choices[0].message.content.strip()
 
     except Exception as e:
         logger.error(f"GROQ error: {e}")
         return None
-
-
 
 PERSONA = """
 Nta social media manager dial l'équipe "Rachad L3ERGONI" f Pro Clubs FC 26.
