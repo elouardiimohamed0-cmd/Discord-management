@@ -24,16 +24,15 @@ async def _ask(prompt: str, max_tokens: int = 800):
         # ✅ run blocking API safely (important for async bot)
         loop = asyncio.get_event_loop()
 
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.chat.completions.create(
-                model="llama3-70b-8192",
-                messages=[
-                    {"role": "system", "content": PERSONA},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.9,
-                max_tokens=max_tokens,
+response = client.chat.completions.create(
+    model=_MODEL,
+    messages=[
+        {"role": "system", "content": PERSONA},
+        {"role": "user", "content": prompt}
+    ],
+    temperature=0.92,
+    max_tokens=max_tokens,
+)
             )
         )
 
