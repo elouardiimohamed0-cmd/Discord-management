@@ -392,7 +392,7 @@ class DarijaEngine:
         """
         # Get authentic examples from dataset
         similar = self.loader.find_similar(task + " " + context, n=3)
-        examples = "
+        examples = ""
 ".join([f"  - {s}" for s in similar]) if similar else ""
 
         # Get style-specific instructions
