@@ -4,23 +4,31 @@ All functions take structured data dicts from ea_api.
 Optimized: low max_tokens, reuse data, no redundant calls.
 """
 import os
-import asyncio
-import logging
-import google.generativeai as genai
+from openai import OpenAI
 
-logger = logging.getLogger(__name__)
-
-# Configure API
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
-# ✅ FREE model
-model = genai.GenerativeModel("gemini-pro")
+client = OpenAI(
+    api_key=os.getenv("GROQ_API_KEY"),
+    base_url="https://api.groq.com/openai/v1"
+)
 
 
-# ✅ Base function
-def generate_text(prompt):
-    response = model.generate_content(prompt)
-    return response.text
+async def _ask(prompt: str, max_tokens: int = 800):
+    try:
+        response = client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[
+                {"role": "system", "content": PERSONA},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.9,
+            max_tokens=max_tokens,
+        )
+
+        return response.choices[0].message.content.strip()
+
+    except Exception as e:
+        logger.error(f"GROQ error: {e}")
+        return None
 
 
 PERSONA = """
