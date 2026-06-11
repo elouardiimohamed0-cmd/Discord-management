@@ -97,9 +97,13 @@ async def _post_match(channel, m: dict):
     """Full match package: poster + report + MOTM card + 3 reaction tweets."""
     try:
         loop = asyncio.get_event_loop()
-        report_t = asyncio.create_task(gemini.match_report(m))
-        motm_t   = asyncio.create_task(gemini.motm_post(m))
-        tweets_t = asyncio.create_task(gemini.funny_reactions(m))
+report = await gemini.match_report(m)
+await asyncio.sleep(3)   # ✅ delay to avoid rate limit
+
+motm_text = await gemini.motm_post(m)
+await asyncio.sleep(3)
+
+tweets = await gemini.funny_reactions(m)
 
         poster_buf = await loop.run_in_executor(None, lambda: image_gen.make_match_poster(
             m["our_name"], m["opp_name"], m["our_goals"], m["opp_goals"], m["date"],
@@ -169,7 +173,7 @@ async def check_new_matches():
     for r in reversed(new):
         m = ea_api.parse_match(r)
         await _post_match(channel, m)
-        await asyncio.sleep(3)
+        await asyncio.sleep(8)
 
 
 @tasks.loop(minutes=30)
