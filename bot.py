@@ -94,39 +94,67 @@ def _result_icon(r: str) -> str:
 
 
 async def _post_match(channel, m: dict):
-    """Full match package: poster + report + MOTM card + 3 reaction tweets."""
     try:
         loop = asyncio.get_event_loop()
-report = await gemini.match_report(m)
-await asyncio.sleep(3)   # ✅ delay to avoid rate limit
 
-motm_text = await gemini.motm_post(m)
-await asyncio.sleep(3)
+        # ✅ CALL AI SEQUENTIALLY (FIX RATE LIMIT)
+        report = await gemini.match_report(m)
+        await asyncio.sleep(3)
 
-tweets = await gemini.funny_reactions(m)
+        motm_text = await gemini.motm_post(m)
+        await asyncio.sleep(3)
 
-        poster_buf = await loop.run_in_executor(None, lambda: image_gen.make_match_poster(
-            m["our_name"], m["opp_name"], m["our_goals"], m["opp_goals"], m["date"],
-        ))
-        report, motm_text, tweets = await asyncio.gather(report_t, motm_t, tweets_t)
+        tweets = await gemini.funny_reactions(m)
 
-        await _send(channel, report, poster_buf, f"match_{m['our_goals']}_{m['opp_goals']}.png")
-        await asyncio.sleep(1.5)
+        # ✅ IMAGE
+        poster_buf = await loop.run_in_executor(
+            None,
+            lambda: image_gen.make_match_poster(
+                m["our_name"],
+                m["opp_name"],
+                m["our_goals"],
+                m["opp_goals"],
+                m["date"],
+            ),
+        )
 
+        # ✅ SEND REPORT
+        await _send(
+            channel,
+            report,
+            poster_buf,
+            f"match_{m['our_goals']}_{m['opp_goals']}.png",
+        )
+
+        await asyncio.sleep(2)
+
+        # ✅ MOTM
         if motm_text and m["players"]:
             best = m["players"][0]
-            motm_buf = await loop.run_in_executor(None, lambda: image_gen.make_motm_card(
-                best["name"], best["rating"], best["goals"], best["assists"],
-                match_context=f"vs {m['opp_name']} ({m['our_goals']}-{m['opp_goals']})",
-            ))
-            await _send(channel, motm_text, motm_buf, "motm.png")
-            await asyncio.sleep(1.5)
 
+            motm_buf = await loop.run_in_executor(
+                None,
+                lambda: image_gen.make_motm_card(
+                    best["name"],
+                    best["rating"],
+                    best["goals"],
+                    best["assists"],
+                    match_context=f"vs {m['opp_name']} ({m['our_goals']}-{m['opp_goals']})",
+                ),
+            )
+
+            await _send(channel, motm_text, motm_buf, "motm.png")
+            await asyncio.sleep(2)
+
+        # ✅ TWEETS
         if tweets:
-            await channel.send("🐦 **Réactions:**\n\n" + "\n\n".join(f"> {t}" for t in tweets))
+            await channel.send(
+                "🐦 **Réactions:**\n\n" +
+                "\n\n".join(f"> {t}" for t in tweets)
+            )
+
     except Exception as e:
         logger.error("_post_match error: %s", e, exc_info=True)
-
 
 async def _post_five_summary(channel, matches: list, members: list):
     loop = asyncio.get_event_loop()
