@@ -4,19 +4,19 @@ All functions take structured data dicts from ea_api.
 Optimized: low max_tokens, reuse data, no redundant calls.
 """
 import os
-import asyncio
-import logging
 import google.generativeai as genai
 
-logger = logging.getLogger(__name__)
+# Configure API key
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-_MODEL  = "gemini-2.0-flash"
+# Load model
+model = genai.GenerativeModel("gemini-pro")
 
-
+# ✅ Base function
 def generate_text(prompt):
     response = model.generate_content(prompt)
     return response.text
+
 
 PERSONA = """
 Nta social media manager dial l'équipe "Rachad L3ERGONI" f Pro Clubs FC 26.
