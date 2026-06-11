@@ -4,13 +4,18 @@ All functions take structured data dicts from ea_api.
 Optimized: low max_tokens, reuse data, no redundant calls.
 """
 import os
+import asyncio
+import logging
 import google.generativeai as genai
 
-# Configure API key
+logger = logging.getLogger(__name__)
+
+# Configure API
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# Load model
-model = genai.GenerativeModel("gemini-pro")
+# ✅ FREE model
+model = genai.GenerativeModel("gemini-1.5-flash")
+
 
 # ✅ Base function
 def generate_text(prompt):
