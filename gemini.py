@@ -6,13 +6,18 @@ Optimized: low max_tokens, reuse data, no redundant calls.
 import os
 import asyncio
 import logging
-from google import genai
+import google.generativeai as genai
 from google.genai import types
 
 logger = logging.getLogger(__name__)
 
 _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 _MODEL  = "gemini-2.0-flash"
+
+
+def generate_text(prompt):
+    response = model.generate_content(prompt)
+    return response.text
 
 PERSONA = """
 Nta social media manager dial l'équipe "Rachad L3ERGONI" f Pro Clubs FC 26.
