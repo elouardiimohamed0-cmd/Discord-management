@@ -7,6 +7,7 @@ Rachad L3ERGONI Pro Clubs Bot — Humanized Darija Version v5
 import os
 import io
 import asyncio
+import random
 import logging
 import time
 from typing import Dict, List
