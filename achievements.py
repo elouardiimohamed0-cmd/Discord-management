@@ -1,1074 +1,271 @@
 """
-Rachad L3ERGONI Pro Clubs Bot — Complete Working Version v4
-- Uses scraper.py correctly (returns parsed format now)
-- ALL commands from original + AllCalculatedRoast features
-- Position-aware roast engine with Darija output
-- Achievements & Curses system (Crowns + Powers)
-- Silent Treatment for boring games
-- Proper error handling
-- Native Darija output via AI + cleaner
+Achievements & Curses System v2.0
+Inspired by AllCalculatedRoast — adds gamification, crowns, powers, and curses.
+
+Achievements (Crowns) = good performance rewards
+Curses = bad performance punishments
 """
-import os
-import io
-import asyncio
-import logging
-import time
-from typing import Dict, List
+from typing import Dict, List, Any
 
-import discord
-from discord.ext import commands, tasks
+Player = Dict[str, Any]
 
-import scraper as _scraper
-import gemini
-import image_gen
-import achievements
-import roast_engine
-from state import load_seen, save_seen
+# ── Conditions ────────────────────────────────────────────────────────────────
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger("RachadBot")
+def _perfect_passing(p: Player) -> bool:
+    """100% pass accuracy with at least 10 passes attempted."""
+    return p.get("passes_attempted", 0) >= 10 and p.get("passes_completed", 0) == p.get("passes_attempted", 0)
 
-TOKEN = os.getenv("DISCORD_TOKEN")
-if not TOKEN:
-    raise ValueError("DISCORD_TOKEN not set!")
+def _holy_trifecta(p: Player) -> bool:
+    """Goal + 2 assists + 100% passing (min 10 passes) in one match."""
+    return p.get("goals", 0) >= 1 and p.get("assists", 0) >= 2 and _perfect_passing(p)
 
-# ─── CONFIG ───
-MATCH_CHANNEL_ID = int(os.environ.get("MATCH_CHANNEL_ID", 0)) or None
-POLL_MINUTES = 5
-TIMEOUT_MINUTES = 45
+def _sniper(p: Player) -> bool:
+    """2+ long-range goals."""
+    return p.get("long_goals", 0) >= 2
 
-# ─── BOT ───
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+def _hat_trick(p: Player) -> bool:
+    """5+ goals in one match."""
+    return p.get("goals", 0) >= 5
 
-seen_matches = set()
-_session_active = False
-_last_match_id = None
-_last_activity_ts = 0.0
+def _midfield_wizard(p: Player) -> bool:
+    """3+ assists in one match — any position."""
+    return p.get("assists", 0) >= 3
 
-# ─── HELPERS ───
-def _match_channel():
-    return bot.get_channel(MATCH_CHANNEL_ID) if MATCH_CHANNEL_ID else None
+def _midfield_maestro(p: Player) -> bool:
+    """Midfielder with 90%+ passing (min 15 attempts) AND 2+ interceptions."""
+    pos = p.get("position", "").lower()
+    is_mid = any(k in pos for k in ("midfield", "creator", "magician", "recycler", "maestro", "spark", "cam", "cm", "cdm", "box"))
+    if not is_mid:
+        return False
+    pas_pct = (p.get("passes_completed", 0) / max(p.get("passes_attempted", 1), 1) * 100
+               if p.get("passes_attempted", 0) >= 15 else 0)
+    return pas_pct >= 90 and p.get("interceptions", 0) >= 2
 
-async def _send(ch, text="", image=None, filename="image.png"):
-    text = (text or "").strip()
-    text = text.replace("\\n", "\n")
-    if not text and not image:
-        return
-    if image:
-        image.seek(0)
-        file = discord.File(image, filename=filename)
-        await ch.send(text[:1900] or None, file=file)
-    else:
-        while text:
-            chunk, text = text[:2000], text[2000:]
-            await ch.send(chunk)
+def _defensive_titan(p: Player) -> bool:
+    """Defender/CDM with 10+ combined tackles+interceptions."""
+    pos = p.get("position", "").lower()
+    is_def = any(k in pos for k in ("defend", "boss", "cdm", "sweeper", "centre back", "fullback", "wall", "recycler", "keeper"))
+    if not is_def:
+        return False
+    return (p.get("tackles", 0) + p.get("interceptions", 0)) >= 10
 
-def _result_icon(r: str) -> str:
-    return "🟢" if r == "W" else ("🟡" if r == "D" else "🔴")
+def _iron_wall(p: Player) -> bool:
+    """Any position — interceptions + tackles reach 12 or more."""
+    return (p.get("interceptions", 0) + p.get("tackles", 0)) >= 12
 
-def _aggregate_stats(matches: List[Dict]) -> Dict:
-    """Aggregate player stats across matches."""
-    agg = {}
-    for m in matches:
-        for p in m.get("players", []) or []:
-            name = p.get("name", "Unknown")
-            if name not in agg:
-                agg[name] = {
-                    "name": name,
-                    "games": 0, "goals": 0, "assists": 0,
-                    "shots": 0, "tackles": 0, "tackles_attempted": 0,
-                    "interceptions": 0, "passes_attempted": 0, "passes_completed": 0,
-                    "ratings": [], "avg_rating": 0.0,
-                }
-            agg[name]["games"] += 1
-            agg[name]["goals"] += p.get("goals", 0)
-            agg[name]["assists"] += p.get("assists", 0)
-            agg[name]["shots"] += p.get("shots", 0)
-            agg[name]["tackles"] += p.get("tackles", 0)
-            agg[name]["tackles_attempted"] += p.get("tackles_attempted", 0)
-            agg[name]["interceptions"] += p.get("interceptions", 0)
-            agg[name]["passes_attempted"] += p.get("passes_attempted", 0)
-            agg[name]["passes_completed"] += p.get("passes_completed", 0)
-            agg[name]["ratings"].append(p.get("rating", 0))
+def _own_goal_jester(p: Player) -> bool:
+    """Score an own goal."""
+    return p.get("own_goals", 0) >= 1
 
-    for name in agg:
-        ratings = agg[name]["ratings"]
-        agg[name]["avg_rating"] = sum(ratings) / len(ratings) if ratings else 0
+def _brickfoot(p: Player) -> bool:
+    """Miss 3 or more big chances in one match."""
+    return p.get("big_chances_missed", 0) >= 3
 
-    return agg
+def _ice_cold(p: Player) -> bool:
+    """Striker who took zero shots."""
+    return any(k in p.get("position", "").upper() for k in ("ST", "CF", "LW", "RW")) and p.get("shots", 0) == 0
 
-def _clean_lines(text, max_lines=5):
-    lines = [l.strip() for l in text.split('\n') if l.strip()]
-    return '\n'.join(lines[:max_lines])
-
-# ─── GET MATCHES SAFELY ─────────────────────────────────────────────────────
-
-async def _get_matches(n: int = 5) -> List[Dict]:
-    """Get matches safely with error handling."""
-    try:
-        data = await _scraper.fetch_all(max_matches=n, force=False)
-        raw_matches = data.get("matches", [])
-        if not raw_matches:
-            logger.warning("No matches returned from scraper")
-            return []
-        return raw_matches  # Now scraper returns already-parsed format
-    except Exception as e:
-        logger.error(f"Get matches error: {e}")
-        return []
-
-async def _get_all_data(n: int = 1) -> Dict:
-    """Get all club data safely."""
-    try:
-        return await _scraper.fetch_all(max_matches=n, force=False)
-    except Exception as e:
-        logger.error(f"Get all data error: {e}")
-        return {}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# SESSION POLLING
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@tasks.loop(minutes=POLL_MINUTES)
-async def poll_matches():
-    global _session_active, _last_activity_ts, _last_match_id
-
-    if not _session_active:
-        return
-
-    idle_min = (time.monotonic() - _last_activity_ts) / 60
-    if idle_min >= TIMEOUT_MINUTES:
-        await _stop_session("timeout")
-        return
-
-    try:
-        data = await _scraper.fetch_all(max_matches=1, force=True)
-        raw_matches = data.get("matches", [])
-        if not raw_matches:
-            return
-
-        raw = raw_matches[0]
-        mid = str(raw.get("match_id", ""))
-
-        if mid == _last_match_id or not mid:
-            return
-
-        _last_match_id = mid
-        _last_activity_ts = time.monotonic()
-        logger.info(f"🆕 New match: {mid}")
-
-        await _post_match(_match_channel(), raw)
-
-    except Exception as e:
-        logger.error(f"Poll error: {e}")
-
-@poll_matches.before_loop
-async def before_poll():
-    await bot.wait_until_ready()
-
-async def _start_session(channel):
-    global _session_active, _last_activity_ts, _last_match_id
-
-    if _session_active:
-        await channel.send("⏳ Session déjà active!")
-        return
-
-    try:
-        data = await _scraper.fetch_all(max_matches=1, force=False)
-        raw_matches = data.get("matches", [])
-        if raw_matches:
-            raw = raw_matches[0]
-            _last_match_id = str(raw.get("match_id", ""))
-    except:
-        _last_match_id = None
-
-    _session_active = True
-    _last_activity_ts = time.monotonic()
-
-    if not poll_matches.is_running():
-        poll_matches.start()
-
-    await channel.send(
-        "🎮 **Session démarrée!**\n"
-        f"• Check every {POLL_MINUTES} min\n"
-        f"• Auto-stop après {TIMEOUT_MINUTES} min d'inactivité\n"
-        f"• Type `!stop` pour arrêter manuellement"
+def _ghost(p: Player) -> bool:
+    """Played the full match but 0 goals, 0 assists, 0 interceptions, 0 tackles."""
+    return (
+        p.get("goals", 0) == 0
+        and p.get("assists", 0) == 0
+        and p.get("interceptions", 0) == 0
+        and p.get("tackles", 0) == 0
+        and p.get("passes_attempted", 0) >= 5
     )
 
-async def _stop_session(reason="manual"):
-    global _session_active
-    _session_active = False
-    if poll_matches.is_running():
-        poll_matches.stop()
-
-    ch = _match_channel()
-    if not ch:
-        return
-
-    if reason == "timeout":
-        await ch.send(
-            "⏹️ **Session terminée**\n"
-            f"Pas de nouveau match depuis {TIMEOUT_MINUTES} min.\n"
-            "Type `!roast` quand tu rejoues!"
-        )
-    else:
-        await ch.send("⏹️ **Session arrêtée**")
-
-async def _post_match(ch, m):
-    """Post match with badges, roast engine, and MOTM photo."""
-    try:
-        # 1. Match Header
-        emoji = _result_icon(m["result"])
-        header = f"{emoji} **{m['our_goals']}-{m['opp_goals']}** vs **{m['opp_name']}**"
-        await ch.send(header)
-
-        # 2. AllCalculatedRoast: Silent Treatment for boring games
-        if roast_engine.is_boring_game(m.get("players", []), m):
-            silent = roast_engine.build_silent_treatment(m)
-            await ch.send(silent)
-            return
-
-        # 3. AllCalculatedRoast: Achievements & Curses (Crowns)
-        if m.get("players"):
-            chaos_results = achievements.evaluate_players(m["players"])
-            chaos_report = achievements.format_chaos_report(chaos_results)
-            if chaos_report:
-                await ch.send(chaos_report)
-
-        # 4. AllCalculatedRoast: Position-aware Roast Engine
-        if m.get("players"):
-            roast_text = roast_engine.build_roast_text(
-                roast_engine.get_roast_victims(m["players"]),
-                m,
-                m["players"]
-            )
-            if roast_text:
-                await ch.send(roast_text)
-
-        # 5. AI Report (Darija)
-        report = await gemini.match_report(m)
-        report = _clean_lines(report, 3)
-        await ch.send(report)
-
-        # 6. MOTM with Photo
-        if m.get("players"):
-            best = m["players"][0]
-            motm_text = f"🌟 **MOTM: {best['name']}** ⭐ {best['rating']:.1f}/10"
-
-            loop = asyncio.get_event_loop()
-            motm_img = await loop.run_in_executor(
-                None,
-                image_gen.make_motm_card,
-                best["name"], best["rating"], best["goals"], best["assists"],
-                f"vs {m['opp_name']}"
-            )
-            await _send(ch, motm_text, motm_img, "motm.png")
-
-    except Exception as e:
-        logger.error(f"Post error: {e}")
-        await ch.send(f"⚠️ Error posting match: {str(e)[:100]}")
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ALL COMMANDS
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# ─── SESSION ───
-
-@bot.command(name="roast")
-async def cmd_roast_session(ctx):
-    """Start session monitoring."""
-    await _start_session(ctx.channel)
-
-@bot.command(name="stop")
-async def cmd_stop(ctx):
-    """Stop session monitoring."""
-    await _stop_session("manual")
-
-# ─── MATCH COMMANDS ───
-
-@bot.command(name="lastmatch", aliases=["report", "last"])
-async def cmd_lastmatch(ctx):
-    """Last match report + MOTM photo + roast engine."""
-    async with ctx.typing():
-        matches = await _get_matches(1)
-        if not matches:
-            await ctx.send("❌ Ma3endnach match daba 😴")
-            return
-        await _post_match(ctx.channel, matches[0])
-
-@bot.command(name="match")
-async def cmd_match(ctx, index: int = 1):
-    """Rapport d'un match spécifique. !match 1 = dernier."""
-    if not 1 <= index <= 10:
-        await ctx.send("❌ Index bin 1 w 10.")
-        return
-    async with ctx.typing():
-        matches = await _get_matches(10)
-        if index > len(matches):
-            await ctx.send(f"❌ Ghir {len(matches)} matchs disponibles.")
-            return
-        await _post_match(ctx.channel, matches[index - 1])
-
-@bot.command(name="last5", aliases=["recap"])
-async def cmd_last5(ctx):
-    """Analyse des 5 derniers matchs + TOTW + performers + roast leaderboard."""
-    await ctx.send("⏳ Kan-load last 5 matchs... 🤖")
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach matches daba 😴")
-            return
-        data = await _get_all_data(1)
-        members = data.get("members", [])
-        await _post_five_summary(ctx.channel, matches, members)
-
-@bot.command(name="last10")
-async def cmd_last10(ctx):
-    """Analyse des 10 derniers matchs."""
-    await ctx.send("⏳ Kan-load last 10 matchs... 🤖")
-    async with ctx.typing():
-        matches = await _get_matches(10)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        wins = sum(1 for m in matches if m["result"] == "W")
-        draws = sum(1 for m in matches if m["result"] == "D")
-        losses = sum(1 for m in matches if m["result"] == "L")
-        gf = sum(m["our_goals"] for m in matches)
-        ga = sum(m["opp_goals"] for m in matches)
-        form = "".join(m["result"] for m in matches[:10])
-        lines = [
-            "📊 **LAST 10 MATCHS — Rachad L3ERGONI**",
-            f"🏆 W: **{wins}** | 🟡 D: **{draws}** | 💀 L: **{losses}**",
-            f"⚽ {gf} pour / {ga} contre | Form: `{form}`",
-            "",
-        ]
-        for m in matches:
-            e = _result_icon(m["result"])
-            lines.append(f"{e} {m['date']} — **{m['our_goals']}-{m['opp_goals']}** vs {m['opp_name']}")
-        await ctx.send("\n".join(lines[:2000]))
-
-        text = await gemini.form_analysis(matches)
-        await _send(ctx.channel, text)
-
-@bot.command(name="results")
-async def cmd_results(ctx):
-    """Tableau des 10 derniers résultats."""
-    async with ctx.typing():
-        matches = await _get_matches(10)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        lines = ["📋 **RÉSULTATS — Rachad L3ERGONI**", ""]
-        for i, m in enumerate(matches, 1):
-            e = _result_icon(m["result"])
-            lines.append(f"`{i:2}.` {e} `{m['our_goals']}-{m['opp_goals']}` vs **{m['opp_name']}** — {m['date']}")
-        await ctx.send("\n".join(lines))
-
-@bot.command(name="quickreport")
-async def cmd_quickreport(ctx):
-    """Rapport court du dernier match (1-2 lignes)."""
-    async with ctx.typing():
-        matches = await _get_matches(1)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        text = await gemini.quick_report(matches[0])
-        await ctx.send(text)
-
-@bot.command(name="schedule")
-async def cmd_schedule(ctx):
-    """Prochains matchs (basé sur la forme récente)."""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        opponents = [m["opp_name"] for m in matches[:3]]
-        text = await gemini.match_prediction(", ".join(opponents), matches)
-        await ctx.send(f"🗓️ **Prochains adversaires potentiels:**\n{', '.join(opponents)}\n\n{text}")
-
-# ─── PLAYER COMMANDS ───
-
-@bot.command(name="players")
-async def cmd_players(ctx):
-    """Liste tous les joueurs avec stats saison."""
-    async with ctx.typing():
-        data = await _get_all_data(1)
-        members = data.get("members", [])
-        if not members:
-            await ctx.send("❌ Ma3endnach données membres 😴")
-            return
-        lines = ["👥 **SQUAD — Rachad L3ERGONI**", ""]
-        for m in sorted(members, key=lambda x: float(x.get("ratingAve", 0) or 0), reverse=True):
-            name = m.get("proName") or m.get("name", "?")
-            games = m.get("gamesPlayed", 0)
-            goals = m.get("goals", 0)
-            assists = m.get("assists", 0)
-            rating = m.get("ratingAve", "?")
-            pos = m.get("favoritePosition", "MID").upper()[:3]
-            lines.append(f"**{name}** `{pos}` — {goals}G {assists}A | ⭐ {rating} | {games} matchs")
-        await ctx.send("\n".join(lines)[:2000])
-
-@bot.command(name="player")
-async def cmd_player(ctx, *, player_name: str = ""):
-    """Stats d'un joueur. !player Hamza"""
-    if not player_name:
-        await ctx.send("Usage: `!player NomJoueur`")
-        return
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        agg = _aggregate_stats(matches)
-        key = next((k for k in agg if player_name.lower() in k.lower()), None)
-        if not key:
-            await ctx.send(f"❌ **{player_name}** — ma3endnach stats f les derniers matchs.\nTry: `!players` bach tchouf l'ism exact.")
-            return
-        s = agg[key]
-        lines = [
-            f"👤 **{s['name']}** — Stats 5 Derniers Matchs",
-            f"🎮 Matchs: **{s['games']}**",
-            f"⚽ Buts: **{s['goals']}** | 🎯 Assists: **{s['assists']}**",
-            f"⭐ Rating: **{s['avg_rating']:.2f}/10**",
-            f"💥 Shots: **{s['shots']}** | 🛡️ Tackles: **{s['tackles']}**",
-        ]
-        await ctx.send("\n".join(lines))
-
-@bot.command(name="form")
-async def cmd_form(ctx, *, player_name: str = ""):
-    """Analyse de forme. !form → team | !form Hamza → joueur"""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        if player_name:
-            text = await gemini.player_form(player_name, matches)
-        else:
-            text = await gemini.form_analysis(matches)
-    await _send(ctx.channel, text)
-
-@bot.command(name="topscorer")
-async def cmd_topscorer(ctx):
-    """Classement des meilleurs buteurs."""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        data = await _get_all_data(1)
-        text = await gemini.top_scorer_post(matches, data.get("members", []))
-    await _send(ctx.channel, text)
-
-@bot.command(name="topassists")
-async def cmd_topassists(ctx):
-    """Classement des meilleurs assisteurs."""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        data = await _get_all_data(1)
-        text = await gemini.top_assists_post(matches, data.get("members", []))
-    await _send(ctx.channel, text)
-
-@bot.command(name="mvp")
-async def cmd_mvp(ctx):
-    """MVP des 5 derniers matchs avec photo."""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        agg = _aggregate_stats(matches)
-        if not agg:
-            await ctx.send("❌ Ma3endnach stats 😴")
-            return
-        mvp = max(agg.values(), key=lambda x: x["avg_rating"] + x["goals"] * 0.5 + x["assists"] * 0.3)
-
-        loop = asyncio.get_event_loop()
-        mvp_img = await loop.run_in_executor(
-            None,
-            image_gen.make_motm_card,
-            mvp["name"], mvp["avg_rating"], mvp["goals"], mvp["assists"],
-            "MVP — Last 5 Matches"
-        )
-
-        text = (
-            f"👑 **MVP: {mvp['name']}**\n"
-            f"🎮 {mvp['games']} matchs | ⚽ {mvp['goals']} buts | 🎯 {mvp['assists']} assists\n"
-            f"⭐ Rating: **{mvp['avg_rating']:.2f}/10**"
-        )
-        await _send(ctx.channel, text, mvp_img, "mvp.png")
-
-@bot.command(name="compare")
-async def cmd_compare(ctx, player1: str = "", *, player2: str = ""):
-    """Compare 2 joueurs. !compare Hamza Karim"""
-    if not player1 or not player2:
-        await ctx.send("Usage: `!compare Joueur1 Joueur2`")
-        return
-    await ctx.send(f"⚔️ **{player1}** vs **{player2}**...")
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        result = await gemini.compare_players(player1, player2, matches)
-        if isinstance(result, str):
-            await ctx.send(result)
-            return
-        text, s1, s2 = result
-        loop = asyncio.get_event_loop()
-        card_buf = await loop.run_in_executor(None, lambda: image_gen.make_comparison_card(s1, s2))
-    await _send(ctx.channel, text, card_buf, f"compare_{player1}_{player2}.png")
-
-# ─── CONTENT COMMANDS ───
-
-@bot.command(name="motm")
-async def cmd_motm(ctx, match_index: int = 1):
-    """Man of the Match. !motm [1-5]"""
-    async with ctx.typing():
-        matches = await _get_matches(match_index)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        m = matches[match_index - 1]
-        if not m.get("players"):
-            await ctx.send("❌ Bla stats joueurs pour ce match.")
-            return
-        best = m["players"][0]
-        loop = asyncio.get_event_loop()
-        motm_text, motm_buf = await asyncio.gather(
-            gemini.motm_post(m),
-            loop.run_in_executor(None, lambda: image_gen.make_motm_card(
-                best["name"], best["rating"], best["goals"], best["assists"],
-                f"vs {m['opp_name']} ({m['our_goals']}-{m['opp_goals']})"
-            )),
-        )
-    await _send(ctx.channel, motm_text or "", motm_buf, "motm.png")
-
-@bot.command(name="totw")
-async def cmd_totw(ctx):
-    """Team of the Week avec image."""
-    await ctx.send("⏳ Building TOTW...")
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        loop = asyncio.get_event_loop()
-        totw_text, totw_players = await gemini.team_of_the_week(matches)
-        totw_img = await loop.run_in_executor(None, lambda: image_gen.make_totw_card(totw_players))
-    await _send(ctx.channel, totw_text, totw_img, "totw.png")
-
-@bot.command(name="hype")
-async def cmd_hype(ctx, *, context: str = ""):
-    """Post de motivation. !hype [adversaire]"""
-    async with ctx.typing():
-        text = await gemini.hype_post(context)
-    await _send(ctx.channel, text)
-
-@bot.command(name="reaction")
-async def cmd_reaction(ctx):
-    """Réaction courte sur le dernier match."""
-    async with ctx.typing():
-        matches = await _get_matches(1)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        text = await gemini.reaction_post(matches[0])
-    await ctx.send(text)
-
-@bot.command(name="rankings")
-async def cmd_rankings(ctx):
-    """Top performers des 5 derniers matchs."""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        data = await _get_all_data(1)
-        text = await gemini.top_performers(matches, data.get("members", []))
-    await _send(ctx.channel, text)
-
-@bot.command(name="spotlight")
-async def cmd_spotlight(ctx, *, player_name: str = ""):
-    """Spotlight d'un joueur. !spotlight [nom]"""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        text = await gemini.player_spotlight(player_name, matches)
-    await _send(ctx.channel, text)
-
-# ─── FUN COMMANDS ───
-
-@bot.command(name="roastplayer")
-async def cmd_roast(ctx, *, player_name: str = ""):
-    """Roast brutal d'un joueur. !roastplayer Hamza 🔥"""
-    if not player_name:
-        await ctx.send("Kteb ism: `!roastplayer NomDuJoueur` 🔥")
-        return
-    await ctx.send(f"🔥 Incoming roast dial **{player_name}**...")
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        text = await gemini.roast(player_name, matches)
-        text = _clean_lines(text, 4)
-    await _send(ctx.channel, text)
-
-@bot.command(name="cheer")
-async def cmd_cheer(ctx, *, player_name: str = ""):
-    """Célèbre un joueur. !cheer Hamza 👏"""
-    if not player_name:
-        await ctx.send("Kteb ism: `!cheer NomDuJoueur` 👏")
-        return
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        text = await gemini.cheer(player_name, matches)
-    await _send(ctx.channel, text)
-
-@bot.command(name="banter")
-async def cmd_banter(ctx):
-    """Football banter trash talk 😈"""
-    async with ctx.typing():
-        matches = await _get_matches(1)
-        text = await gemini.banter(matches)
-    await ctx.send(text[:2000])
-
-@bot.command(name="meme")
-async def cmd_meme(ctx):
-    """Meme football b Darija 😂"""
-    async with ctx.typing():
-        matches = await _get_matches(1)
-        text = await gemini.meme_post(matches)
-    await ctx.send(text[:2000])
-
-@bot.command(name="drama")
-async def cmd_drama(ctx):
-    """Drama / polémique exagérée 😱"""
-    async with ctx.typing():
-        matches = await _get_matches(1)
-        text = await gemini.drama_post(matches)
-    await ctx.send(text[:2000])
-
-# ─── ALLCALCULATEDROAST FEATURES ───
-
-@bot.command(name="roastreport")
-async def cmd_roastreport(ctx):
-    """AllCalculatedRoast: Full pundit roast report for last match."""
-    async with ctx.typing():
-        matches = await _get_matches(1)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        m = matches[0]
-
-        if roast_engine.is_boring_game(m.get("players", []), m):
-            await ctx.send(roast_engine.build_silent_treatment(m))
-            return
-
-        roast_text = roast_engine.build_roast_text(
-            roast_engine.get_roast_victims(m.get("players", [])),
-            m,
-            m.get("players", [])
-        )
-        if roast_text:
-            await ctx.send(roast_text)
-        else:
-            await ctx.send("✅ Kolchi mzyan f had match — bla roast! 🔥")
-
-@bot.command(name="crowns")
-async def cmd_crowns(ctx):
-    """AllCalculatedRoast: Show crown leaderboard."""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-
-        all_crowns = {}
-        for m in matches:
-            if m.get("players"):
-                results = achievements.evaluate_players(m["players"])
-                crowns = achievements.count_crowns(results)
-                for name, count in crowns.items():
-                    all_crowns[name] = all_crowns.get(name, 0) + count
-
-        if not all_crowns:
-            await ctx.send("🏆 **Crown Leaderboard**\n\nGhir klach 💀 — ma3endnach crowns daba!")
-            return
-
-        sorted_crowns = sorted(all_crowns.items(), key=lambda x: x[1], reverse=True)
-        lines = ["🏆 **CROWN LEADERBOARD**", ""]
-        for i, (name, count) in enumerate(sorted_crowns, 1):
-            medal = "👑" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
-            lines.append(f"{medal} **{name}** — {count} crown{'s' if count > 1 else ''}")
-
-        await ctx.send("\n".join(lines))
-
-@bot.command(name="curses")
-async def cmd_curses(ctx):
-    """AllCalculatedRoast: Show curse leaderboard."""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-
-        all_curses = {}
-        for m in matches:
-            if m.get("players"):
-                results = achievements.evaluate_players(m["players"])
-                curses = achievements.count_curses(results)
-                for name, count in curses.items():
-                    all_curses[name] = all_curses.get(name, 0) + count
-
-        if not all_curses:
-            await ctx.send("💀 **Curse Leaderboard**\n\nMashi 7ed m3lih curse — kolchi mzyan!")
-            return
-
-        sorted_curses = sorted(all_curses.items(), key=lambda x: x[1], reverse=True)
-        lines = ["💀 **CURSE LEADERBOARD**", ""]
-        for i, (name, count) in enumerate(sorted_curses, 1):
-            emoji = "😈" if i == 1 else "👻" if i == 2 else "🧱" if i == 3 else "💀"
-            lines.append(f"{emoji} **{name}** — {count} curse{'s' if count > 1 else ''}")
-
-        await ctx.send("\n".join(lines))
-
-@bot.command(name="funroast")
-async def cmd_funroast(ctx, *, player_name: str = ""):
-    """AllCalculatedRoast: Fun lifetime roast. !funroast Hamza"""
-    if not player_name:
-        await ctx.send("Usage: `!funroast NomDuJoueur`")
-        return
-
-    async with ctx.typing():
-        matches = await _get_matches(10)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-
-        agg = _aggregate_stats(matches)
-        key = next((k for k in agg if player_name.lower() in k.lower()), None)
-        if not key:
-            await ctx.send(f"❌ **{player_name}** — ma3endnach stats.")
-            return
-
-        s = agg[key]
-        stats = {
-            "matches": s["games"],
-            "goals": s["goals"],
-            "assists": s["assists"],
-            "rating_total": s["avg_rating"] * s["games"],
-        }
-        roast = roast_engine.get_fun_roast(s["name"], stats)
-        await ctx.send(roast)
-
-# ─── NEWS COMMANDS ───
-
-@bot.command(name="transfer", aliases=["rumour", "rumours"])
-async def cmd_transfer(ctx):
-    """Transfer rumor (humour). !transfer 🚨"""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        data = await _get_all_data(1)
-        text = await gemini.transfer_rumor(data.get("members", []), matches)
-    await _send(ctx.channel, text)
-
-@bot.command(name="breaking")
-async def cmd_breaking(ctx):
-    """Breaking news style. !breaking 📰"""
-    async with ctx.typing():
-        matches = await _get_matches(1)
-        data = await _get_all_data(1)
-        text = await gemini.breaking_news(matches, data.get("members", []))
-    await _send(ctx.channel, text)
-
-# ─── ANALYTICS COMMANDS ───
-
-@bot.command(name="stats")
-async def cmd_stats(ctx):
-    """Stats saison complète du club."""
-    async with ctx.typing():
-        data = await _get_all_data(1)
-    s = data.get("club_stats") or {}
-    i = data.get("club_info") or {}
-    name = i.get("name", "Rachad L3ERGONI")
-
-    try:
-        w = int(s.get("wins", 0))
-        t = int(s.get("ties", 0))
-        l = int(s.get("losses", 0))
-        total = w + t + l
-        wr = f"{w/total*100:.1f}%" if total else "?"
-    except:
-        wr = "?"
-
-    lines = [
-        f"📊 **{name} — Season Stats**",
-        "─────────────────────────────",
-        f"🏆 W: **{s.get('wins','?')}** | 🟡 D: **{s.get('ties','?')}** | 💀 L: **{s.get('losses','?')}**",
-        f"📈 Win Rate: **{wr}** | Games: **{s.get('gamesPlayed','?')}**",
-        f"⚽ Goals: **{s.get('goals','?')}** / **{s.get('goalsAgainst','?')}** concédés",
-        f"🎯 Skill Rating: **{s.get('skillRating','?')}**",
-        f"🏅 Best Division: **Div {s.get('bestDivision','?')}**",
-        f"🔥 Win Streak: **{s.get('wstreak','?')}** | Unbeaten: **{s.get('unbeatenstreak','?')}**",
-        "",
-        f"🔗 proclubstracker.com/club/1427607?platform=common-gen5",
-    ]
-    await ctx.send("\n".join(lines))
-
-@bot.command(name="insights")
-async def cmd_insights(ctx):
-    """Insights analytiques sur les 5 derniers matchs."""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        text = await gemini.insights(matches)
-    await _send(ctx.channel, text)
-
-@bot.command(name="trends")
-async def cmd_trends(ctx):
-    """Tendances et patterns de jeu."""
-    async with ctx.typing():
-        matches = await _get_matches(10)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        text = await gemini.trends(matches)
-    await _send(ctx.channel, text)
-
-@bot.command(name="stat")
-async def cmd_stat(ctx):
-    """Stat du jour."""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        text = await gemini.stat_of_day(matches)
-    await _send(ctx.channel, text)
-
-@bot.command(name="predict")
-async def cmd_predict(ctx, *, opponent: str = "Prochain adversaire"):
-    """Prediction du prochain match. !predict NomAdversaire"""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        text = await gemini.match_prediction(opponent, matches)
-    await _send(ctx.channel, text)
-
-@bot.command(name="clubinfo")
-async def cmd_clubinfo(ctx):
-    """Info du club."""
-    async with ctx.typing():
-        data = await _get_all_data(1)
-    info = data.get("club_info") or {}
-    lines = [
-        f"🏟️ **{info.get('name','Rachad L3ERGONI')}**",
-        f"🎮 Platform: **common-gen5**",
-        f"🔗 proclubstracker.com/club/1427607?platform=common-gen5",
-    ]
-    await ctx.send("\n".join(lines))
-
-# ─── ADMIN COMMANDS ───
-
-@bot.command(name="setchannel")
-@commands.has_permissions(manage_channels=True)
-async def cmd_setchannel(ctx, channel_type: str = "match"):
-    global MATCH_CHANNEL_ID
-    if channel_type == "match":
-        MATCH_CHANNEL_ID = ctx.channel.id
-        await ctx.send(f"✅ Match channel set! Auto-check kol {POLL_MINUTES}h 🔔")
-    elif channel_type == "general":
-        await ctx.send("✅ General channel set! 📅")
-    else:
-        await ctx.send("Usage: `!setchannel match` ou `!setchannel general`")
-
-@bot.command(name="weekly")
-@commands.has_permissions(manage_channels=True)
-async def cmd_weekly(ctx):
-    """Déclenche le weekly recap manuellement (admin)."""
-    await ctx.send("⏳ Generating weekly recap...")
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        data = await _get_all_data(1)
-        await _post_five_summary(ctx.channel, matches, data.get("members", []))
-
-@bot.command(name="refreshdata")
-@commands.has_permissions(manage_channels=True)
-async def cmd_refreshdata(ctx):
-    """Force re-fetch des données (ignore cache)."""
-    await ctx.send("🔄 Forçage refresh des données...")
-    _scraper.invalidate_cache()
-    matches = await _get_matches(5)
-    if matches:
-        await ctx.send(f"✅ Data refreshed — **{len(matches)}** matchs chargés!")
-    else:
-        await ctx.send("❌ Refresh failed 😴")
-
-@bot.command(name="ping")
-async def cmd_ping(ctx):
-    """Test de connexion."""
-    cache_age = int(_scraper.cache_age_seconds())
-    cache_str = f"{cache_age}s" if cache_age < 3600 else "stale"
-    await ctx.send(f"Pong ✅ | Cache: **{cache_str}** | Check: kol **{POLL_MINUTES}min**")
-
-# ─── HELP ───
-
-@bot.command(name="help", aliases=["pchelp", "commands"])
-async def cmd_help(ctx):
-    lines = [
-        "⚽ **Rachad L3ERGONI Bot** _(Gemini AI · PCT API · Pillow Images · AllCalculatedRoast)_",
-        "══════════════════════════════════════════",
-        "",
-        "**🎮 SESSION**",
-        "`!roast` — Start session monitoring (checks every 5 min)",
-        "`!stop` — Stop session monitoring",
-        "",
-        "**📋 MATCH** — Résultats & Rapports",
-        "`!last5` · `!last10` · `!results` · `!match <1-10>`",
-        "`!lastmatch` / `!report` · `!quickreport` · `!schedule`",
-        "",
-        "**👥 PLAYERS** — Stats & Comparaisons",
-        "`!players` · `!player <nom>` · `!form [nom]`",
-        "`!topscorer` · `!topassists` · `!mvp` · `!compare <p1> <p2>`",
-        "",
-        "**🎬 CONTENT** — Posts & Reports",
-        "`!motm [1-5]` · `!totw` · `!hype [adversaire]`",
-        "`!reaction` · `!rankings` · `!spotlight [nom]`",
-        "",
-        "**🔥 ALLCALCULATEDROAST** — Gamification",
-        "`!roastreport` — Full pundit roast (position-aware)",
-        "`!crowns` — Crown leaderboard (achievements)",
-        "`!curses` — Curse leaderboard",
-        "`!funroast <nom>` — Lifetime fun roast",
-        "",
-        "**😂 FUN** — Banter & Humour",
-        "`!roastplayer <nom>` 🔥 · `!cheer <nom>` 👏 · `!banter` 😈",
-        "`!meme` 😂 · `!drama` 😱",
-        "",
-        "**📰 NEWS** — Rumeurs & Breaking",
-        "`!transfer` / `!rumour` 🚨 · `!breaking` 📰",
-        "",
-        "**📊 ANALYTICS** — Stats & Insights",
-        "`!stats` · `!insights` · `!trends` · `!stat` · `!predict <adversaire>`",
-        "`!clubinfo`",
-        "",
-        "**⚙️ ADMIN** _(manage_channels)_",
-        "`!setchannel match` · `!setchannel general` · `!weekly` · `!refreshdata`",
-        "",
-        "_Auto: matchs kol 5min 🔔 · Session: 45min timeout · Darija 100%_",
-    ]
-    await ctx.send("\n".join(lines))
-
-# ─── INTERNAL HELPERS ───
-
-async def _post_five_summary(channel, matches: list, members: list):
-    """5-match summary with parallel AI + images + AllCalculatedRoast leaderboards."""
-    loop = asyncio.get_event_loop()
-
-    summary_t = asyncio.create_task(gemini.five_match_summary(matches))
-    performers_t = asyncio.create_task(gemini.top_performers(matches, members))
-    totw_t = asyncio.create_task(gemini.team_of_the_week(matches))
-
-    results_data = [
-        {"opponent": m["opp_name"], "our_goals": m["our_goals"],
-         "opp_goals": m["opp_goals"], "date": m["date"]}
-        for m in matches
-    ]
-    summary_img = await loop.run_in_executor(
-        None, lambda: image_gen.make_five_match_summary(results_data)
-    )
-
-    summary_text, performers_text, (totw_text, totw_players) = await asyncio.gather(
-        summary_t, performers_t, totw_t
-    )
-    totw_img = await loop.run_in_executor(None, lambda: image_gen.make_totw_card(totw_players))
-
-    await _send(channel, summary_text, summary_img, "last5.png")
-    await asyncio.sleep(1)
-    await _send(channel, performers_text)
-    await asyncio.sleep(1)
-    await _send(channel, totw_text, totw_img, "totw.png")
-
-    # AllCalculatedRoast: Crown/Curse leaderboard
-    all_crowns = {}
-    all_curses = {}
-    for m in matches:
-        if m.get("players"):
-            results = achievements.evaluate_players(m["players"])
-            crowns = achievements.count_crowns(results)
-            curses = achievements.count_curses(results)
-            for name, count in crowns.items():
-                all_crowns[name] = all_crowns.get(name, 0) + count
-            for name, count in curses.items():
-                all_curses[name] = all_curses.get(name, 0) + count
-
-    if all_crowns or all_curses:
-        lines = ["🏆 **Gamification Recap**", ""]
-        if all_crowns:
-            sorted_crowns = sorted(all_crowns.items(), key=lambda x: x[1], reverse=True)[:3]
-            lines.append("👑 **Crowns:**")
-            for name, count in sorted_crowns:
-                lines.append(f"  {name}: {count} crown{'s' if count > 1 else ''}")
-            lines.append("")
-        if all_curses:
-            sorted_curses = sorted(all_curses.items(), key=lambda x: x[1], reverse=True)[:3]
-            lines.append("💀 **Curses:**")
-            for name, count in sorted_curses:
-                lines.append(f"  {name}: {count} curse{'s' if count > 1 else ''}")
-        await channel.send("\n".join(lines))
-
-# ─── EVENTS ───
-
-@bot.event
-async def on_ready():
-    global seen_matches
-    seen_matches = load_seen()
-    logger.info(f"✅ Bot ready: {bot.user}")
-    logger.info(f"   Session poll: every {POLL_MINUTES}min | Timeout: {TIMEOUT_MINUTES}min")
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="your matches 👀"))
-
-@bot.event
-async def on_message(message):
-    if message.author == bot.user:
-        return
-    if message.content:
-        logger.info("[MSG] #%s | %s: %s",
-                    getattr(message.channel, "name", "DM"),
-                    message.author.name, message.content[:80])
-    await bot.process_commands(message)
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ Ma3ndekch permission! 🚫")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ Naqes argument — `!help` bach tchouf l'usage.")
-    elif isinstance(error, commands.CommandNotFound):
-        pass
-    else:
-        logger.error("Command error [%s]: %s", ctx.command, error, exc_info=True)
-        await ctx.send(f"❌ Error: `{str(error)[:100]}`")
-
-# ─── HEALTH SERVER ───
-def start_health_server():
-    import threading
-    from http.server import HTTPServer, SimpleHTTPRequestHandler
-    port = int(os.environ.get("PORT", 10000))
-    class H(SimpleHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"Rachad L3ERGONI OK")
-        def log_message(self, *a): pass
-    s = HTTPServer(("0.0.0.0", port), H)
-    threading.Thread(target=s.serve_forever, daemon=True).start()
-
-# ─── START ───
-if __name__ == "__main__":
-    start_health_server()
-    bot.run(TOKEN)
+def _playmaker(p: Player) -> bool:
+    """5 or more assists in one match."""
+    return p.get("assists", 0) >= 5
+
+def _clinical_finisher(p: Player) -> bool:
+    """3+ goals with 80%+ conversion rate."""
+    shots = p.get("shots", 0)
+    goals = p.get("goals", 0)
+    return goals >= 3 and shots >= 3 and (goals / shots * 100) >= 80
+
+def _brick_wall_keeper(p: Player) -> bool:
+    """Keeper with 5+ saves (implied by low goals against if keeper)."""
+    pos = p.get("position", "").lower()
+    return "keeper" in pos or "goalkeeper" in pos or "gk" in pos
+
+# ── Achievement Catalogue (Crowns) ───────────────────────────────────────────
+
+ACHIEVEMENTS = [
+    {
+        "key": "holy_trifecta",
+        "label": "👑 Holy Trifecta Crown",
+        "condition": _holy_trifecta,
+        "power": "Controls lineup and positions for the next 3 matches",
+        "emoji": "👑",
+    },
+    {
+        "key": "sniper",
+        "label": "🎯 Sniper",
+        "condition": _sniper,
+        "power": "Must attempt at least 5 long shots next match",
+        "emoji": "🎯",
+    },
+    {
+        "key": "hat_trick_tyrant",
+        "label": "🎩 Hat-Trick Tyrant",
+        "condition": _hat_trick,
+        "power": "Team must feed this player exclusively for one half",
+        "emoji": "🎩",
+    },
+    {
+        "key": "midfield_wizard",
+        "label": "🧙 Midfield Wizard",
+        "condition": _midfield_wizard,
+        "power": "Chooses the team formation next match",
+        "emoji": "🧙",
+    },
+    {
+        "key": "playmaker",
+        "label": "🎪 Playmaker",
+        "condition": _playmaker,
+        "power": "Everyone must attempt at least one assist next match",
+        "emoji": "🎪",
+    },
+    {
+        "key": "midfield_maestro",
+        "label": "🎼 Midfield Maestro",
+        "condition": _midfield_maestro,
+        "power": "Calls all set pieces next match",
+        "emoji": "🎼",
+    },
+    {
+        "key": "defensive_titan",
+        "label": "🧱 Defensive Titan",
+        "condition": _defensive_titan,
+        "power": "Chooses who plays at the back next match",
+        "emoji": "🧱",
+    },
+    {
+        "key": "iron_wall",
+        "label": "🛡️ Iron Wall",
+        "condition": _iron_wall,
+        "power": "Team must play ultra-defensive next match",
+        "emoji": "🛡️",
+    },
+    {
+        "key": "clinical_finisher",
+        "label": "⚡ Clinical Finisher",
+        "condition": _clinical_finisher,
+        "power": "Gets penalty duty next match",
+        "emoji": "⚡",
+    },
+]
+
+# ── Curse Catalogue ────────────────────────────────────────────────────────────
+
+CURSES = [
+    {
+        "key": "own_goal_jester",
+        "label": "🤡 Own Goal Jester",
+        "condition": _own_goal_jester,
+        "curse": "Team votes your position next match",
+        "emoji": "🤡",
+    },
+    {
+        "key": "brickfoot",
+        "label": "🧱 Brickfoot",
+        "condition": _brickfoot,
+        "curse": "Must play as a defender next match",
+        "emoji": "🧱",
+    },
+    {
+        "key": "ice_cold",
+        "label": "🥶 Ice Cold",
+        "condition": _ice_cold,
+        "curse": "Cannot shoot next match — passes only",
+        "emoji": "🥶",
+    },
+    {
+        "key": "ghost",
+        "label": "👻 Ghost",
+        "condition": _ghost,
+        "curse": "Must announce every touch in voice chat next match",
+        "emoji": "👻",
+    },
+]
+
+# ── Public Engine ────────────────────────────────────────────────────────────
+
+def evaluate_players(players: List[Player]) -> List[Dict]:
+    """Run every rule against every player and return structured results."""
+    results = []
+    for player in players:
+        earned_achievements = [a for a in ACHIEVEMENTS if a["condition"](player)]
+        earned_curses = [c for c in CURSES if c["condition"](player)]
+        results.append({
+            "player": player,
+            "achievements": earned_achievements,
+            "curses": earned_curses,
+        })
+    return results
+
+
+def evaluate_player(p: Player) -> Dict:
+    """Check achievements and curses for a single player."""
+    earned = [a for a in ACHIEVEMENTS if a["condition"](p)]
+    curses = [c for c in CURSES if c["condition"](p)]
+    return {"achievements": earned, "curses": curses}
+
+
+def format_badges(results: Dict) -> str:
+    """Format achievements/curses as emoji string."""
+    badges = []
+    for a in results.get("achievements", []):
+        badges.append(a["emoji"] + " " + a["label"])
+    for c in results.get("curses", []):
+        badges.append(c["emoji"] + " " + c["label"])
+    return " ".join(badges) if badges else ""
+
+
+def format_chaos_report(results: List[Dict]) -> str:
+    """Format full chaos report with achievements and curses."""
+    lines = []
+
+    # Crowns section
+    crown_players = [r for r in results if r["achievements"]]
+    if crown_players:
+        lines.append("🏆 **CROWNS**")
+        for r in crown_players:
+            p = r["player"]
+            for a in r["achievements"]:
+                lines.append(f"  {a['emoji']} **{p['name']}** — {a['label']}")
+                lines.append(f"    ⚡ Power: *{a['power']}*")
+        lines.append("")
+
+    # Curses section
+    cursed_players = [r for r in results if r["curses"]]
+    if cursed_players:
+        lines.append("💀 **CURSES**")
+        for r in cursed_players:
+            p = r["player"]
+            for c in r["curses"]:
+                lines.append(f"  {c['emoji']} **{p['name']}** — {c['label']}")
+                lines.append(f"    😈 Curse: *{c['curse']}*")
+        lines.append("")
+
+    return "\n".join(lines) if lines else ""
+
+
+def count_crowns(results: List[Dict]) -> Dict[str, int]:
+    """Return {player_name: crown_count} for leaderboard."""
+    return {
+        r["player"]["name"]: len(r["achievements"])
+        for r in results
+        if r["achievements"]
+    }
+
+
+def count_curses(results: List[Dict]) -> Dict[str, int]:
+    """Return {player_name: curse_count} for leaderboard."""
+    return {
+        r["player"]["name"]: len(r["curses"])
+        for r in results
+        if r["curses"]
+    }
