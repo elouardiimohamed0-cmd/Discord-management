@@ -1,11 +1,7 @@
 """
 Pro Clubs Tracker scraper — two-tier strategy + in-memory cache.
-
-  Tier 1 (fast):  Direct httpx GET to proclubstracker.com's own JSON API.
-  Tier 2 (fallback): Playwright DOM extraction (click Matches tab, parse cards).
-
-Cache: data is reused for CACHE_TTL_SECONDS to avoid repeated API calls and
-save Replit credits. Call fetch_all(force=True) to bypass the cache.
+Returns data in the format bot.py expects: {matches, members, club_info, club_stats}
+Each match has: match_id, our_name, opp_name, our_goals, opp_goals, result, date, players[]
 """
 import asyncio
 import json
@@ -24,7 +20,7 @@ PLATFORM = "common-gen5"
 PCT_URL  = f"https://proclubstracker.com/club/{CLUB_ID}?platform={PLATFORM}&div=6"
 PCT_API  = f"https://proclubstracker.com/api/clubs/{CLUB_ID}?platform={PLATFORM}"
 
-CACHE_TTL_SECONDS = 1800   # 30 minutes — reuse data within this window
+CACHE_TTL_SECONDS = 1800
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -38,10 +34,8 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# ── In-memory cache ────────────────────────────────────────────────────────────
-
-_cache: dict = {}          # {max_matches: data}
-_cache_ts: float = 0.0     # epoch of last successful fetch
+_cache: dict = {}
+_cache_ts: float = 0.0
 _cache_lock = asyncio.Lock()
 
 
@@ -50,7 +44,6 @@ def cache_age_seconds() -> float:
 
 
 def invalidate_cache():
-    """Force next fetch to bypass the cache."""
     global _cache, _cache_ts
     _cache = {}
     _cache_ts = 0.0
@@ -58,7 +51,6 @@ def invalidate_cache():
 
 
 def get_cached(max_matches: int = 5) -> Optional[dict]:
-    """Return cached data if fresh, else None."""
     if not _cache or cache_age_seconds() > CACHE_TTL_SECONDS:
         return None
     raw = _cache.get("raw", {})
@@ -69,11 +61,6 @@ def get_cached(max_matches: int = 5) -> Optional[dict]:
 # ── Tier 1: Direct PCT API ─────────────────────────────────────────────────────
 
 async def _pct_api_fetch(max_matches: int = 10) -> dict:
-    """
-    Call the proclubstracker.com JSON API directly.
-    Returns {matches, members, club_info, club_stats} or {} on failure.
-    Always fetches up to 10 matches so the cache is useful for !last10 too.
-    """
     try:
         async with httpx.AsyncClient(
             headers=HEADERS, follow_redirects=True, timeout=20
@@ -103,6 +90,13 @@ async def _pct_api_fetch(max_matches: int = 10) -> dict:
         len(league), len(playoff), len(friendly), len(all_matches),
     )
 
+    # Parse each match into the format bot.py expects
+    parsed_matches = []
+    for raw_match in all_matches:
+        parsed = _parse_pct_match(raw_match)
+        if parsed:
+            parsed_matches.append(parsed)
+
     member_stats = data.get("memberStats") or {}
     members = member_stats.get("members") or []
 
@@ -126,25 +120,79 @@ async def _pct_api_fetch(max_matches: int = 10) -> dict:
     }
 
     return {
-        "matches":    all_matches,
+        "matches":    parsed_matches,
         "members":    members,
         "club_info":  club_info,
         "club_stats": club_stats,
     }
 
 
+def _parse_pct_match(raw: dict) -> dict:
+    """Parse raw PCT API match into bot-friendly format."""
+    try:
+        our_id = str(CLUB_ID)
+        clubs = raw.get("clubs", {})
+
+        our_club = None
+        opp_club = None
+        for cid, club in clubs.items():
+            if str(cid) == our_id:
+                our_club = club
+            else:
+                opp_club = club
+
+        if not our_club:
+            return None
+
+        our_goals = int(our_club.get("goals", 0))
+        opp_goals = int(our_club.get("goalsAgainst", 0))
+        result = "W" if our_goals > opp_goals else "L" if our_goals < opp_goals else "D"
+
+        # Parse players
+        players = []
+        our_players_raw = raw.get("players", {}).get(our_id, {})
+
+        for pid, p in our_players_raw.items():
+            passes_att = int(p.get("passattempts", 0))
+            passes_comp = int(p.get("passesmade", 0))
+            pass_pct = round(passes_comp / max(passes_att, 1) * 100, 1)
+
+            players.append({
+                "name": p.get("playername", "Unknown"),
+                "position": p.get("pos", ""),
+                "rating": float(p.get("rating", 0)) / 10.0 if float(p.get("rating", 0)) > 10 else float(p.get("rating", 0)),
+                "goals": int(p.get("goals", 0)),
+                "assists": int(p.get("assists", 0)),
+                "shots": int(p.get("shots", 0)),
+                "tackles": int(p.get("tacklesmade", 0)),
+                "tackles_attempted": int(p.get("tackleattempts", 0)),
+                "interceptions": int(p.get("interceptions", 0)),
+                "passes_attempted": passes_att,
+                "passes_completed": passes_comp,
+                "pass_pct": pass_pct,
+                "own_goals": int(p.get("owngoals", 0)),
+                "big_chances_missed": int(p.get("chancescreated", 0)) - int(p.get("assists", 0)),
+                "long_goals": int(p.get("longshots", 0)),
+            })
+
+        players.sort(key=lambda x: x["rating"], reverse=True)
+
+        return {
+            "match_id": str(raw.get("matchId", raw.get("timestamp", ""))),
+            "our_name": our_club.get("details", {}).get("name", "Rachad L3ERGONI"),
+            "opp_name": opp_club.get("details", {}).get("name", "Unknown") if opp_club else "Unknown",
+            "our_goals": our_goals,
+            "opp_goals": opp_goals,
+            "result": result,
+            "date": str(raw.get("timestamp", "")),
+            "players": players,
+        }
+    except Exception as e:
+        logger.error("Parse match error: %s", e)
+        return None
+
+
 # ── Tier 2: Playwright DOM fallback ───────────────────────────────────────────
-
-def _find_chromium() -> Optional[str]:
-    for c in [
-        shutil.which("chromium"),
-        shutil.which("chromium-browser"),
-        shutil.which("google-chrome"),
-    ]:
-        if c and shutil.os.path.isfile(c):
-            return c
-    return None
-
 
 async def _playwright_dom_fetch(max_matches: int = 10) -> dict:
     try:
@@ -153,7 +201,7 @@ async def _playwright_dom_fetch(max_matches: int = 10) -> dict:
         logger.error("playwright not installed")
         return {}
 
-    chrome = _find_chromium()
+    chrome = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
     if not chrome:
         logger.error("No Chromium binary found")
         return {}
@@ -243,15 +291,9 @@ async def _playwright_dom_fetch(max_matches: int = 10) -> dict:
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 async def fetch_all(max_matches: int = 5, force: bool = False) -> dict:
-    """
-    Fetch club data with cache.
-    - Returns cached data if fresh (< 30 min) and force=False.
-    - Tries PCT API first, then Playwright DOM fallback.
-    """
     global _cache, _cache_ts
 
     async with _cache_lock:
-        # ── Cache hit ──────────────────────────────────────────────────────────
         if not force:
             cached = get_cached(max_matches)
             if cached:
@@ -259,7 +301,6 @@ async def fetch_all(max_matches: int = 5, force: bool = False) -> dict:
                 logger.info("📦 Cache hit (%ds old) — %d matches", age, len(cached.get("matches",[])))
                 return cached
 
-        # ── Tier 1: PCT JSON API ───────────────────────────────────────────────
         try:
             data = await asyncio.wait_for(_pct_api_fetch(max_matches=10), timeout=25)
             if data.get("matches"):
@@ -272,7 +313,6 @@ async def fetch_all(max_matches: int = 5, force: bool = False) -> dict:
         except (asyncio.TimeoutError, Exception) as e:
             logger.warning("PCT API failed: %s", e)
 
-        # ── Tier 2: Playwright DOM ─────────────────────────────────────────────
         try:
             data = await asyncio.wait_for(_playwright_dom_fetch(max_matches=10), timeout=75)
             if data.get("matches"):
