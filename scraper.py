@@ -155,7 +155,7 @@ def _parse_pct_match(raw: dict) -> dict:
         for pid, p in our_players_raw.items():
             passes_att = int(p.get("passattempts", 0))
             passes_comp = int(p.get("passesmade", 0))
-            pass_pct = round(passes_comp / max(passes_att, 1) * 100, 1)
+            pass_pct = round(passes_comp / max(passes_att, 1) * 100, 1) if passes_att > 0 else 0
 
             players.append({
                 "name": p.get("playername", "Unknown"),
@@ -171,7 +171,7 @@ def _parse_pct_match(raw: dict) -> dict:
                 "passes_completed": passes_comp,
                 "pass_pct": pass_pct,
                 "own_goals": int(p.get("owngoals", 0)),
-                "big_chances_missed": int(p.get("chancescreated", 0)) - int(p.get("assists", 0)),
+                "big_chances_missed": max(0, int(p.get("chancescreated", 0)) - int(p.get("assists", 0))),
                 "long_goals": int(p.get("longshots", 0)),
             })
 
