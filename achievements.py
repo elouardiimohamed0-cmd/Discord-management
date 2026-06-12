@@ -1,9 +1,9 @@
 """
-Achievements & Curses System v2.0
-Inspired by AllCalculatedRoast — adds gamification, crowns, powers, and curses.
+Achievements & Curses System v3.0
+Inspired by AllCalculatedRoast — gamification with crowns, powers, and curses.
 
-Achievements (Crowns) = good performance rewards
-Curses = bad performance punishments
+Achievements (Crowns) = good performance rewards with POWERS
+Curses = bad performance punishments with CURSES
 """
 from typing import Dict, List, Any
 
@@ -158,7 +158,7 @@ ACHIEVEMENTS = [
     },
 ]
 
-# ── Curse Catalogue ────────────────────────────────────────────────────────────
+# ── Curse Catalogue ──────────────────────────────────────────────────────────
 
 CURSES = [
     {
