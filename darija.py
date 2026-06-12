@@ -1,15 +1,16 @@
 """
-DARIJA CLEANER v1.0 — Post-processes AI output for authentic Moroccan Darija
-Usage: from darija import clean_darija, validate_darija, ask_and_clean
+DARIJA CLEANER v2.0 — Post-processes AI output for authentic Moroccan Darija
+Usage: from darija import clean_darija, ask_and_clean
+
+KEY FIX: Now preserves AI-generated sentences, only removes formal Arabic words.
+Does NOT replace entire sentences with random templates.
 """
 
 import re
 import random
 from typing import Dict, List, Optional
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# FORBIDDEN FORMAL WORDS (Auto-remove from AI output)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── FORBIDDEN FORMAL WORDS (Auto-remove from AI output) ──────────────────────
 
 FORMAL_ARABIC = [
     'لقد', 'إنه', 'إنها', 'أنه', 'أنها', 'إن', 'أن',
@@ -44,7 +45,7 @@ FORMAL_ARABIC = [
 
 # French formalisms that sound robotic
 FORMAL_FRENCH = [
-    'très', 'beaucoup', 'trop', 'maintenant',
+    'très bien', 'très mal', 'beaucoup de', 'trop de',
     'parce que', 'alors', 'donc', 'mais', 'ou',
     'et', 'avec', 'pour', 'dans', 'sur',
     'de', 'des', 'le', 'la', 'les',
@@ -66,9 +67,7 @@ FORMAL_FRENCH = [
     'devoir', 'dois', 'doit', 'devons', 'devez', 'doivent',
 ]
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# DARIJA REPLACEMENTS (Formal -> Natural Darija)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── DARIJA REPLACEMENTS (Formal -> Natural Darija) ───────────────────────────
 
 REPLACEMENTS = {
     'لقد': '',
@@ -212,9 +211,7 @@ REPLACEMENTS = {
     'doivent': 'khass',
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AUTHENTIC DARIJA TEMPLATES (Fallback when AI fails)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── AUTHENTIC DARIJA TEMPLATES (Only used when AI completely fails) ──────────
 
 TEMPLATES = {
     "win": [
@@ -324,70 +321,57 @@ TEMPLATES = {
     ],
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# MAIN FUNCTIONS
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── MAIN FUNCTIONS ───────────────────────────────────────────────────────────
 
 def clean_darija(text: str, situation: str = "general") -> str:
     """
     Clean AI-generated text to ensure authentic Moroccan Darija.
 
-    Args:
-        text: Raw AI output from Groq/Llama
-        situation: "win", "lose", "draw", "roast", "praise", "hype", "general"
-
-    Returns:
-        Clean, natural Darija text
+    KEY FIX v2: Preserves AI sentences. Only removes formal Arabic words.
+    Does NOT replace entire output with random templates.
     """
     if not text or not text.strip():
         return _fallback_template(situation)
 
-    # Step 1: Remove formal Arabic words
+    # Step 1: Remove formal Arabic words (whole word only)
     for word in FORMAL_ARABIC:
-        text = text.replace(word, '')
-        text = text.replace(word + ' ', ' ')
-        text = text.replace(' ' + word, ' ')
+        text = re.sub(r'\b' + re.escape(word) + r'\b', '', text)
 
-    # Step 2: Replace formal phrases with Darija
+    # Step 2: Replace formal French phrases with Darija equivalents
     for formal, darija in REPLACEMENTS.items():
-        text = text.replace(formal, darija)
-        # Try with capital first letter
-        if formal:
+        if formal in text:
+            text = text.replace(formal, darija)
             text = text.replace(formal.capitalize(), darija.capitalize() if darija else '')
 
     # Step 3: Clean up double spaces, empty lines
     text = re.sub(r'\s+', ' ', text).strip()
     text = re.sub(r'\n\s*\n', '\n', text)
 
-    # Step 4: Enforce line limits (max 7 lines)
+    # Step 4: Enforce line limits (max 8 lines)
     lines = [l.strip() for l in text.split('\n') if l.strip()]
-    lines = lines[:7]
+    lines = lines[:8]
 
-    # Step 5: Enforce line length (max 120 chars)
+    # Step 5: Enforce line length (max 130 chars per line)
     result = []
     for line in lines:
-        if len(line) > 120:
-            # Break at last space before 120
-            idx = line.rfind(' ', 0, 120)
+        if len(line) > 130:
+            idx = line.rfind(' ', 0, 130)
             if idx > 0:
                 result.append(line[:idx])
                 remainder = line[idx+1:].strip()
                 if remainder:
-                    result.append(remainder[:120])
+                    result.append(remainder[:130])
             else:
-                result.append(line[:120])
+                result.append(line[:130])
         else:
             result.append(line)
 
-    # Step 6: Ensure energy at end
-    if result and not any(c in result[-1] for c in '🔥💀😂👏!!!???'):
-        result[-1] += random.choice([' 🔥', ' 💀', ' 😂', ' !!!', ' ???'])
+    final = '\n'.join(result[:8])
 
-    final = '\n'.join(result[:7])
-
-    # Step 7: Validate — if still bad, use template
+    # Step 6: Validate — if still bad, use template
     validation = validate_darija(final)
     if not validation["is_natural"]:
+        # Only use fallback if AI output is completely broken
         return _fallback_template(situation)
 
     return final
@@ -396,9 +380,7 @@ def clean_darija(text: str, situation: str = "general") -> str:
 def validate_darija(text: str) -> Dict:
     """
     Validate if text is natural Darija.
-
-    Returns:
-        {"score": 0-100, "is_natural": bool, "issues": [str]}
+    Returns: {"score": 0-100, "is_natural": bool, "issues": [str]}
     """
     score = 100
     issues = []
@@ -408,12 +390,12 @@ def validate_darija(text: str) -> Dict:
     for pattern in FORMAL_ARABIC:
         if pattern in text:
             formal_found.append(pattern)
-            score -= 15
+            score -= 10
 
     if formal_found:
         issues.append(f"Formal Arabic: {', '.join(formal_found[:3])}")
 
-    # Check for natural Darija patterns (GOOD)
+    # Check for natural Darija patterns (GOOD) — relaxed regex
     good_patterns = [
         r'\b[wk]a[yt][a-z]+\b',
         r'\b[37]+[a-z]+\b',
@@ -422,35 +404,39 @@ def validate_darija(text: str) -> Dict:
         r'\bs7bi\b', r'\bsafi\b', r'\b3iyet\b',
         r'\bb7al\b', r'\bmashi\b', r'\bwach\b',
         r'\bfin\b', r'\bt9awed\b', r'\bkan\b',
+        r'\b[rk]be7\b', r'\bkhsar\b', r'\b9awi\b',
+        r'\bd3if\b', r'\bzwin\b', r'\bkhayb\b',
     ]
 
     good_count = 0
     for pattern in good_patterns:
         if re.search(pattern, text, re.IGNORECASE):
             good_count += 1
-            score += 3
 
-    if good_count < 2:
+    # Relaxed: need at least 1 good pattern OR some emoji energy
+    has_emoji = any(c in text for c in '🔥💀😂👏🟢🟡🔴⚽🎯⭐🏆📊🗓️🐦⚔️🎮💥🛡️😈😱🚨📰')
+
+    if good_count < 1 and not has_emoji:
         issues.append("Too few natural Darija patterns")
-        score -= 10
+        score -= 15
 
     # Check length
     lines = [l for l in text.split('\n') if l.strip()]
-    if len(lines) > 7:
-        score -= 10
+    if len(lines) > 8:
+        score -= 5
         issues.append(f"Too many lines ({len(lines)})")
 
     # Check emoji count
     emoji_count = sum(1 for c in text if c in '🔥💀😂👏🟢🟡🔴⚽🎯⭐🏆📊🗓️🐦⚔️🎮💥🛡️😈😱🚨📰')
-    if emoji_count > 4:
-        score -= 5
-        issues.append(f"Too many emojis ({emoji_count})")
+    if emoji_count > 6:
+        score -= 3
+        issues.append(f"Many emojis ({emoji_count})")
 
     score = max(0, min(100, score))
 
     return {
         "score": score,
-        "is_natural": score >= 70 and good_count >= 2,
+        "is_natural": score >= 50,  # Relaxed threshold
         "issues": issues,
         "good_patterns": good_count,
     }
@@ -462,7 +448,7 @@ def _fallback_template(situation: str, **kwargs) -> str:
     if not templates:
         return "walo men walo 💀"
 
-    n = min(5, len(templates))
+    n = min(3, len(templates))
     selected = random.sample(templates, n)
 
     formatted = []
@@ -476,7 +462,7 @@ def _fallback_template(situation: str, **kwargs) -> str:
                 continue
             formatted.append(t)
 
-    return '\n'.join(formatted[:5])
+    return '\n'.join(formatted[:3])
 
 
 def get_templates(situation: str, **kwargs) -> List[str]:
@@ -484,18 +470,12 @@ def get_templates(situation: str, **kwargs) -> List[str]:
     return TEMPLATES.get(situation, TEMPLATES["general"])
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# ASYNC WRAPPER for gemini.py integration
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── ASYNC WRAPPER for gemini.py integration ──────────────────────────────────
 
 async def ask_and_clean(_ask_func, prompt: str, max_tokens: int = 300, situation: str = "general"):
     """
     Wrapper for your existing _ask function.
     Calls AI, then cleans the output.
-
-    Usage in gemini.py:
-        from darija import ask_and_clean
-        result = await ask_and_clean(_ask, prompt, max_tokens=700, situation="win")
     """
     raw = await _ask_func(prompt, max_tokens)
     if not raw:
