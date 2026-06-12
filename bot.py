@@ -1,8 +1,14 @@
-"""Rachad L3ERGONI Bot — Compact v7
+"""Rachad L3ERGONI Bot - Compact v7
 10-12 efficient commands. Auto daily/weekly/monthly leaderboards.
 Only bad words, roasting, trash talk. No cheering, no praise.
 """
-import os, io, asyncio, random, logging, time, re
+import os
+import io
+import asyncio
+import random
+import logging
+import time
+import re
 from datetime import datetime, timedelta
 from typing import Dict, List
 
@@ -38,7 +44,7 @@ _session_active = False
 _last_match_id = None
 _last_activity_ts = 0.0
 
-# ─── HELPERS ───
+# --- HELPERS ---
 
 def _match_channel():
     return bot.get_channel(MATCH_CHANNEL_ID) if MATCH_CHANNEL_ID else None
@@ -110,8 +116,8 @@ def _aggregate_stats(matches: List[Dict]) -> Dict:
     return agg
 
 def _clean_lines(text, max_lines=2):
-    lines = [l.strip() for l in text.split("\n") if l.strip()]
-    return "\n".join(lines[:max_lines])
+    lines = [l.strip() for l in text.split(chr(10)) if l.strip()]
+    return chr(10).join(lines[:max_lines])
 
 async def _get_matches(n: int = 5) -> List[Dict]:
     try:
@@ -128,7 +134,7 @@ async def _get_all_data(n: int = 1) -> Dict:
         logger.error(f"Get all data error: {e}")
         return {}
 
-# ─── AUTO LEADERBOARD TASKS ───
+# --- AUTO LEADERBOARD TASKS ---
 
 @tasks.loop(hours=24)
 async def daily_leaderboard():
@@ -141,12 +147,12 @@ async def daily_leaderboard():
     agg = _aggregate_stats(matches)
     if not agg:
         return
-    lines = ["📊 DAILY LEADERBOARD — Rachad L3ERGONI", ""]
+    lines = ["📊 DAILY LEADERBOARD - Rachad L3ERGONI", ""]
     sorted_players = sorted(agg.values(), key=lambda x: (x["goals"] + x["assists"] * 0.5, x["avg_rating"]), reverse=True)
     for i, p in enumerate(sorted_players[:10], 1):
         medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
-        lines.append(f"{medal} **{p['name']}** — {p['goals']}G {p['assists']}A | ⭐{p['avg_rating']:.1f} | {p['games']}m")
-    await _send(ch, "\n".join(lines), emotion="disappointment")
+        lines.append(f"{medal} **{p['name']}** - {p['goals']}G {p['assists']}A | ⭐{p['avg_rating']:.1f} | {p['games']}m")
+    await _send(ch, chr(10).join(lines), emotion="disappointment")
 
 @daily_leaderboard.before_loop
 async def before_daily():
@@ -168,12 +174,12 @@ async def weekly_leaderboard():
     agg = _aggregate_stats(matches)
     if not agg:
         return
-    lines = ["📊 WEEKLY LEADERBOARD — Rachad L3ERGONI", ""]
+    lines = ["📊 WEEKLY LEADERBOARD - Rachad L3ERGONI", ""]
     sorted_players = sorted(agg.values(), key=lambda x: (x["goals"] + x["assists"] * 0.5, x["avg_rating"]), reverse=True)
     for i, p in enumerate(sorted_players[:10], 1):
         medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
-        lines.append(f"{medal} **{p['name']}** — {p['goals']}G {p['assists']}A | ⭐{p['avg_rating']:.1f} | {p['games']}m")
-    await _send(ch, "\n".join(lines), emotion="disappointment")
+        lines.append(f"{medal} **{p['name']}** - {p['goals']}G {p['assists']}A | ⭐{p['avg_rating']:.1f} | {p['games']}m")
+    await _send(ch, chr(10).join(lines), emotion="disappointment")
 
 @weekly_leaderboard.before_loop
 async def before_weekly():
@@ -197,12 +203,12 @@ async def monthly_leaderboard():
     agg = _aggregate_stats(matches)
     if not agg:
         return
-    lines = ["📊 MONTHLY LEADERBOARD — Rachad L3ERGONI", ""]
+    lines = ["📊 MONTHLY LEADERBOARD - Rachad L3ERGONI", ""]
     sorted_players = sorted(agg.values(), key=lambda x: (x["goals"] + x["assists"] * 0.5, x["avg_rating"]), reverse=True)
     for i, p in enumerate(sorted_players[:10], 1):
         medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
-        lines.append(f"{medal} **{p['name']}** — {p['goals']}G {p['assists']}A | ⭐{p['avg_rating']:.1f} | {p['games']}m")
-    await _send(ch, "\n".join(lines), emotion="disappointment")
+        lines.append(f"{medal} **{p['name']}** - {p['goals']}G {p['assists']}A | ⭐{p['avg_rating']:.1f} | {p['games']}m")
+    await _send(ch, chr(10).join(lines), emotion="disappointment")
 
 @monthly_leaderboard.before_loop
 async def before_monthly():
@@ -216,7 +222,7 @@ async def before_monthly():
             target = target.replace(month=now.month + 1)
     await asyncio.sleep((target - now).total_seconds())
 
-# ─── SESSION POLLING ───
+# --- SESSION POLLING ---
 
 @tasks.loop(minutes=POLL_MINUTES)
 async def poll_matches():
@@ -312,9 +318,6 @@ async def _post_match(ch, m):
         # Individual player stats after match
         if m.get("players"):
             for p in m["players"]:
-                player_data = humanizer.get_player(p["name"])
-                position = player_data.get("position", "MID") if player_data else "MID"
-                img_path = player_data.get("image") if player_data else None
                 stats_text = f"{p['name']}: {p['goals']}G {p['assists']}A | ⭐{p['rating']:.1f} | {p['shots']} shots"
                 await _send(ch, stats_text, emotion="disappointment")
 
@@ -335,9 +338,9 @@ async def _post_match(ch, m):
         logger.error(f"Post error: {e}")
         await ch.send(f"Error: {str(e)[:100]}")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# 10-12 EFFICIENT COMMANDS
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# 12 EFFICIENT COMMANDS
+# =============================================================================
 
 @bot.command(name="roast")
 async def cmd_roast(ctx):
@@ -415,12 +418,12 @@ async def cmd_leaderboard(ctx, period: str = "day"):
         if not agg:
             await _send(ctx.channel, "Ma3endnach stats. Walo.", emotion="disappointment")
             return
-        lines = [f"📊 LEADERBOARD ({period.upper()}) — Rachad L3ERGONI", ""]
+        lines = [f"📊 LEADERBOARD ({period.upper()}) - Rachad L3ERGONI", ""]
         sorted_players = sorted(agg.values(), key=lambda x: (x["goals"] + x["assists"] * 0.5, x["avg_rating"]), reverse=True)
         for i, p in enumerate(sorted_players[:10], 1):
             medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
-            lines.append(f"{medal} **{p['name']}** — {p['goals']}G {p['assists']}A | ⭐{p['avg_rating']:.1f} | {p['games']}m")
-        await ctx.send("\n".join(lines))
+            lines.append(f"{medal} **{p['name']}** - {p['goals']}G {p['assists']}A | ⭐{p['avg_rating']:.1f} | {p['games']}m")
+        await ctx.send(chr(10).join(lines))
 
 @bot.command(name="mvp")
 async def cmd_mvp(ctx):
@@ -438,7 +441,7 @@ async def cmd_mvp(ctx):
         player_data = humanizer.get_player(mvp["name"])
         img_path = player_data.get("image") if player_data else None
         loop = asyncio.get_event_loop()
-        mvp_img = await loop.run_in_executor(None, image_gen.make_motm_card, mvp["name"], mvp["avg_rating"], mvp["goals"], mvp["assists"], "MVP — Last 5 Matches", img_path)
+        mvp_img = await loop.run_in_executor(None, image_gen.make_motm_card, mvp["name"], mvp["avg_rating"], mvp["goals"], mvp["assists"], "MVP - Last 5 Matches", img_path)
         text = f"👑 MVP: {mvp['name']} | {mvp['games']}m | {mvp['goals']}G {mvp['assists']}A | ⭐{mvp['avg_rating']:.1f}"
         await _send(ctx.channel, text, mvp_img, "mvp.png", emotion="laughter")
 
@@ -523,12 +526,12 @@ async def cmd_clubinfo(ctx):
         f"🎮 common-gen5 | proclubstracker.com/club/1427607",
         f"W:{s.get('wins','?')} D:{s.get('ties','?')} L:{s.get('losses','?')} | SR:{s.get('skillRating','?')}",
     ]
-    await ctx.send("\n".join(lines))
+    await ctx.send(chr(10).join(lines))
 
 @bot.command(name="help")
 async def cmd_help(ctx):
     lines = [
-        "⚽ **Rachad L3ERGONI Bot** _(Bad Words Only · Auto Leaderboards · Anime Cards)_",
+        "⚽ **Rachad L3ERGONI Bot** _(Bad Words Only - Auto Leaderboards - Anime Cards)_",
         "",
         "**🎮 SESSION** `!roast` `!stop`",
         "**📋 MATCH** `!lastmatch`",
@@ -538,11 +541,11 @@ async def cmd_help(ctx):
         "**🔮 PREDICT** `!predict <adversaire>`",
         "**ℹ️ INFO** `!clubinfo` `!help`",
         "",
-        "_Auto: matchs kol 5min · Daily LB 20h · Weekly LB dimanche 20h · Monthly LB 1er 20h_",
+        "_Auto: matchs kol 5min - Daily LB 20h - Weekly LB dimanche 20h - Monthly LB 1er 20h_",
     ]
-    await ctx.send("\n".join(lines))
+    await ctx.send(chr(10).join(lines))
 
-# ─── EVENTS ───
+# --- EVENTS ---
 
 @bot.event
 async def on_ready():
@@ -572,14 +575,14 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await _send(ctx.channel, "Ma3ndekch permission!", emotion="disappointment")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await _send(ctx.channel, "Naqes argument — !help bach tchouf.", emotion="thinking")
+        await _send(ctx.channel, "Naqes argument - !help bach tchouf.", emotion="thinking")
     elif isinstance(error, commands.CommandNotFound):
         pass
     else:
         logger.error("Command error [%s]: %s", ctx.command, error, exc_info=True)
         await _send(ctx.channel, f"Error: {str(error)[:100]}", emotion="disappointment")
 
-# ─── HEALTH SERVER ───
+# --- HEALTH SERVER ---
 import aiohttp
 from aiohttp import web
 
@@ -597,7 +600,7 @@ async def start_health_server():
     logger.info(f"Health server bound to port {port}")
     return runner
 
-# ─── START ───
+# --- START ---
 if __name__ == "__main__":
     async def main():
         runner = await start_health_server()
