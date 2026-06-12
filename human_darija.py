@@ -164,17 +164,15 @@ class HumanDarija:
         return text.strip()
 
     def _shorten(self, text):
-        # Remove fluff words
         fluff = [
-            r"\b(very|really|actually|basically|just|so|quite|rather|pretty)\b",
-            r"\b(in my opinion|i think|i believe|to be honest|frankly)\b",
-            r"\b(it seems that|it appears that|you know what)\b",
-            r"\b(let me tell you|as you can see|as we all know)\b",
+            r"(very|really|actually|basically|just|so|quite|rather|pretty)",
+            r"(in my opinion|i think|i believe|to be honest|frankly)",
+            r"(it seems that|it appears that|you know what)",
+            r"(let me tell you|as you can see|as we all know)",
         ]
         for pattern in fluff:
             text = re.sub(pattern, "", text, flags=re.IGNORECASE)
         text = re.sub(r"\s+", " ", text).strip()
-        # Keep max 2 sentences
         sentences = re.split(r"[.!?]+", text)
         sentences = [s.strip() for s in sentences if s.strip()]
         if len(sentences) > 2:
@@ -232,7 +230,7 @@ class HumanDarija:
         if random.random() < 0.05 and "?" in text:
             text = text.replace("?", "??", 1)
         if random.random() < 0.08:
-            text = re.sub(r"\b(the|a|an)\s+", "", text, count=1, flags=re.IGNORECASE)
+            text = re.sub(r"(the|a|an)\s+", "", text, count=1, flags=re.IGNORECASE)
         return text
 
     def get_player(self, name):
