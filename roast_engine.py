@@ -1,7 +1,13 @@
 """
-Roast Engine v2.0 — Position-aware stat roasts with Darija output.
-Inspired by AllCalculatedRoast — adds tiered severity, combo roasts, 
-special events, and praise engine.
+Roast Engine v3.0 — Position-aware stat roasts with Darija output.
+Inspired by AllCalculatedRoast — full implementation with:
+- Position-aware thresholds (attacker/midfielder/defender)
+- Praise engine (shows good stats alongside bad)
+- Silent treatment (boring games)
+- Combo roasts (extreme stats)
+- Tiered severity (nuclear/heavy/mild)
+- Special events (VAR review, breaking news)
+- Lifetime fun roasts
 
 All output is in Moroccan Darija (street football Twitter style).
 """
@@ -36,12 +42,6 @@ def _position_bucket(position: str) -> str:
     if any(k in p for k in _DEFENDER_KEYWORDS):
         return "defender"
     return "unknown"
-
-# ── Player Registry (customize with your squad) ───────────────────────────────
-# Maps in-game name -> {discord_id, club, roasts dict}
-# Add your players here!
-
-PLAYER_REGISTRY: Dict[str, Dict] = {}
 
 # ── Darija Roast Pools (per roast type) ─────────────────────────────────────
 
