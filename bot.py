@@ -1,12 +1,13 @@
 """
 Rachad L3ERGONI Pro Clubs Bot — Complete Working Version v4
-- Uses scraper.py correctly (returns parsed format now)
+- Uses scraper.py (returns parsed format directly)
 - ALL commands from original + AllCalculatedRoast features
 - Position-aware roast engine with Darija output
 - Achievements & Curses system (Crowns + Powers)
 - Silent Treatment for boring games
 - Proper error handling
-- Native Darija output via AI + cleaner
+- Native Darija output via AI + light cleaner
+- Render deployment: aiohttp health server + bot.start()
 """
 import os
 import io
@@ -1054,8 +1055,8 @@ async def on_command_error(ctx, error):
         logger.error("Command error [%s]: %s", ctx.command, error, exc_info=True)
         await ctx.send(f"❌ Error: `{str(error)[:100]}`")
 
-# ─── HEALTH SERVER ───
-import asyncio
+# ─── HEALTH SERVER (for Render deployment) ───
+import aiohttp
 from aiohttp import web
 
 async def health_handler(request):
