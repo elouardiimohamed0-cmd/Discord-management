@@ -1,201 +1,230 @@
 """
-EA Sports Pro Clubs data layer.
-Uses scraper.py to fetch real data (PCT JSON API → Playwright DOM fallback).
-Provides parse_match(), aggregate_stats(), and helper utilities.
+EA FC Pro Clubs Direct API
+Uses official EA endpoints — no web scraping needed
+Based on: https://github.com/carlos-menezes/fc-clubs-api
 """
+import os
+import json
 import asyncio
 import logging
-import datetime
+from typing import List, Dict, Optional
+from dataclasses import dataclass
 
-import scraper as _scraper
+import httpx
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ea_api")
 
-CLUB_ID  = _scraper.CLUB_ID
-PLATFORM = _scraper.PLATFORM
+# EA API Configuration
+CLUB_ID = os.getenv("CLUB_ID", "1427607")
+PLATFORM = os.getenv("PLATFORM", "common-gen5")
 
+# EA API Base URLs
+EA_BASE = "https://proclubs.ea.com/fc/api/fc24/clubs"
+PCT_BASE = "https://proclubstracker.com/api"  # Fallback
 
-# ─── Public fetch functions ───────────────────────────────────────────────────
+class EAClient:
+    """Direct EA API client — no scraping."""
+    
+    def __init__(self, club_id: str = CLUB_ID, platform: str = PLATFORM):
+        self.club_id = club_id
+        self.platform = platform
+        self.client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_connections=20))
+    
+    async def get_matches(self, count: int = 5) -> List[Dict]:
+        """Get last N matches directly from EA."""
+        try:
+            url = f"{EA_BASE}/matchHistory"
+            params = {
+                "platform": self.platform,
+                "clubIds": self.club_id,
+                "matchType": "gameType9",  # Pro Clubs 11v11
+                "count": count
+            }
+            resp = await self.client.get(url, params=params)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data if isinstance(data, list) else data.get("matches", [])
+        except Exception as e:
+            logger.warning(f"EA API failed: {e}, trying fallback...")
+        
+        # Fallback to ProClubsTracker API
+        try:
+            url = f"{PCT_BASE}/matches/{self.club_id}"
+            params = {"platform": self.platform, "limit": count}
+            resp = await self.client.get(url, params=params)
+            if resp.status_code == 200:
+                return resp.json().get("matches", [])
+        except Exception as e:
+            logger.error(f"Fallback also failed: {e}")
+        
+        return []
+    
+    async def get_club_info(self) -> Dict:
+        """Get club info: name, stats, division, skill rating."""
+        try:
+            url = f"{EA_BASE}/club/info"
+            params = {"platform": self.platform, "clubId": self.club_id}
+            resp = await self.client.get(url, params=params)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as e:
+            logger.error(f"Club info error: {e}")
+        
+        # Fallback
+        try:
+            url = f"{PCT_BASE}/club/{self.club_id}"
+            resp = await self.client.get(url, params={"platform": self.platform})
+            if resp.status_code == 200:
+                return resp.json()
+        except:
+            pass
+        
+        return {}
+    
+    async def get_members(self) -> List[Dict]:
+        """Get all club members with career stats."""
+        try:
+            url = f"{EA_BASE}/members/career/stats"
+            params = {"platform": self.platform, "clubId": self.club_id}
+            resp = await self.client.get(url, params=params)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data if isinstance(data, list) else data.get("members", [])
+        except Exception as e:
+            logger.error(f"Members error: {e}")
+        return []
+    
+    async def get_member_stats(self, member_id: str) -> Dict:
+        """Get specific member stats."""
+        try:
+            url = f"{EA_BASE}/members/stats"
+            params = {
+                "platform": self.platform,
+                "clubId": self.club_id,
+                "memberId": member_id
+            }
+            resp = await self.client.get(url, params=params)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as e:
+            logger.error(f"Member stats error: {e}")
+        return {}
+    
+    async def close(self):
+        await self.client.aclose()
 
-async def get_all_data(max_matches: int = 5) -> dict:
-    return await _scraper.fetch_all(max_matches=max_matches)
+# Global client
+_client: Optional[EAClient] = None
 
+def get_client() -> EAClient:
+    global _client
+    if _client is None:
+        _client = EAClient()
+    return _client
 
-async def get_recent_matches(max_count: int = 5) -> list:
-    data = await _scraper.fetch_all(max_matches=max_count)
-    return data.get("matches", [])
+# ─── Data Parsers ───
 
-
-async def get_member_stats() -> list:
-    data = await _scraper.fetch_all(max_matches=1)
-    return data.get("members", [])
-
-
-# ─── Data Parsing ─────────────────────────────────────────────────────────────
-
-def parse_match(match: dict, club_id: str = CLUB_ID) -> dict:
-    """
-    Normalise a raw PCT/EA match object into a clean dict.
-
-    Handles two player data layouts:
-      • EA / PCT API:   match["players"][club_id][player_id]   (nested by club)
-      • Legacy / old:   match["players"][player_id]             (flat)
-
-    Also handles matches already parsed by Playwright DOM (_from_dom=True),
-    which arrive pre-normalised and are returned as-is.
-    """
-    # ── Already normalised (from Playwright DOM extraction) ───────────────────
-    if match.get("_from_dom"):
-        return match
-
-    clubs  = match.get("clubs", {})
-    our_id  = str(club_id)
-    opp_id  = next((k for k in clubs if k != our_id), None)
-    our     = clubs.get(our_id, {})
-    opp     = clubs.get(opp_id, {}) if opp_id else {}
-
-    our_goals = int(our.get("goals", 0) or 0)
-    opp_goals = int(opp.get("goals", 0) or 0)
-    opp_name  = opp.get("details", {}).get("name", "Adversaire")
-    our_name  = our.get("details", {}).get("name", "Rachad L3ERGONI")
-
-    ts = match.get("timestamp", 0)
+def parse_match(raw: Dict) -> Dict:
+    """Parse EA match data into clean format."""
     try:
-        date_str = datetime.datetime.fromtimestamp(int(ts)).strftime("%d/%m/%Y")
-    except Exception:
-        date_str = "—"
-
-    # ── Players ───────────────────────────────────────────────────────────────
-    players_raw = match.get("players", {})
-
-    # Detect layout: nested-by-club vs flat
-    # Nested: {"clubId": {"playerId": {...}}, ...}
-    # Flat:   {"playerId": {...}, ...}
-    our_players_dict: dict = {}
-
-    if isinstance(players_raw, dict):
-        # Check if any top-level key looks like a club ID (all-digit string or int)
-        # and its value is a dict-of-dicts (player map)
-        def _is_club_bucket(v) -> bool:
-            return (
-                isinstance(v, dict)
-                and v                  # non-empty
-                and all(isinstance(inner, dict) for inner in v.values())
-            )
-
-        nested_keys = [k for k, v in players_raw.items() if _is_club_bucket(v)]
-        if nested_keys:
-            # Nested layout — pull our club's players
-            our_players_dict = players_raw.get(our_id, {})
+        # EA format
+        our_id = str(CLUB_ID)
+        clubs = raw.get("clubs", {})
+        
+        # Find our club and opponent
+        our_club = None
+        opp_club = None
+        for cid, club in clubs.items():
+            if str(cid) == our_id:
+                our_club = club
+            else:
+                opp_club = club
+        
+        if not our_club:
+            return {}
+        
+        our_goals = int(our_club.get("goals", 0))
+        opp_goals = int(opp_club.get("goals", 0)) if opp_club else 0
+        
+        # Determine result
+        if our_goals > opp_goals:
+            result = "W"
+        elif our_goals < opp_goals:
+            result = "L"
         else:
-            # Flat layout — all entries are our club's players
-            our_players_dict = players_raw
+            result = "D"
+        
+        # Parse players
+        players = []
+        our_players = raw.get("players", {}).get(str(list(clubs.keys())[0]), [])
+        if not our_players and str(list(clubs.keys())[0]) != our_id:
+            our_players = raw.get("players", {}).get(our_id, [])
+        
+        for p in our_players:
+            players.append({
+                "name": p.get("playername", "Unknown"),
+                "rating": float(p.get("rating", 0)) / 10.0 if float(p.get("rating", 0)) > 10 else float(p.get("rating", 0)),
+                "goals": int(p.get("goals", 0)),
+                "assists": int(p.get("assists", 0)),
+                "shots": int(p.get("shots", 0)),
+                "tackles": int(p.get("tackles", 0)),
+                "passes": int(p.get("passattempts", 0)),
+                "pass_success": int(p.get("passsuccesses", 0)),
+            })
+        
+        # Sort by rating desc
+        players.sort(key=lambda x: x["rating"], reverse=True)
+        
+        return {
+            "match_id": raw.get("matchId", raw.get("timestamp", "")),
+            "our_name": our_club.get("name", "Rachad L3ERGONI"),
+            "opp_name": opp_club.get("name", "Unknown") if opp_club else "Unknown",
+            "our_goals": our_goals,
+            "opp_goals": opp_goals,
+            "result": result,
+            "date": raw.get("timestamp", "Unknown"),
+            "players": players,
+            "possession": our_club.get("possession", 0),
+            "shots": our_club.get("shots", 0),
+            "tackles": our_club.get("tackles", 0),
+            "passes": our_club.get("passes", 0),
+        }
+    except Exception as e:
+        logger.error(f"Parse error: {e}")
+        return {}
 
-    players: list[dict] = []
-    for pid, p in our_players_dict.items():
-        if not isinstance(p, dict):
-            continue
-        name = p.get("playername") or p.get("name", "")
-        if not name:
-            continue
-        players.append({
-            "id":       pid,
-            "name":     name,
-            "rating":   float(p.get("rating", 0) or 0),
-            "goals":    int(p.get("goals", 0) or 0),
-            "assists":  int(p.get("assists", 0) or 0),
-            "shots":    int(p.get("shots", 0) or 0),
-            "tackles":  int(p.get("tackleattempts", 0) or p.get("tackleAttempts", 0) or 0),
-            "passes":   int(p.get("passattempts", 0) or p.get("passAttempts", 0) or 0),
-            "saves":    int(p.get("saves", 0) or 0),
-            "motm":     bool(p.get("mom") or p.get("motm", False)),
-            "position": p.get("pos", "MID"),
-        })
+def get_match_id(raw: Dict) -> str:
+    """Get unique match ID."""
+    return str(raw.get("matchId", raw.get("timestamp", "")))
 
-    players.sort(key=lambda x: x["rating"], reverse=True)
-
-    result = "W" if our_goals > opp_goals else ("D" if our_goals == opp_goals else "L")
-
-    return {
-        "match_id":  match.get("matchId", ""),
-        "timestamp": ts,
-        "date":      date_str,
-        "our_name":  our_name,
-        "opp_name":  opp_name,
-        "our_goals": our_goals,
-        "opp_goals": opp_goals,
-        "result":    result,
-        "players":   players,
-        "raw":       match,
-    }
-
-
-def get_match_id(match: dict) -> str | None:
-    return match.get("matchId") or str(match.get("timestamp") or "") or None
-
-
-# ─── Aggregate helpers ────────────────────────────────────────────────────────
-
-def aggregate_stats(matches: list[dict]) -> dict[str, dict]:
-    """
-    Aggregate per-player stats across multiple parsed matches.
-    Handles both EA-format (player stats in match) and PCT member stats (flat list).
-    """
-    stats: dict[str, dict] = {}
-
+def aggregate_stats(matches: List[Dict]) -> Dict[str, Dict]:
+    """Aggregate player stats across matches."""
+    agg = {}
     for m in matches:
         for p in m.get("players", []):
-            n = p.get("name", "")
-            if not n:
-                continue
-            if n not in stats:
-                stats[n] = {
-                    "name": n,
-                    "goals": 0, "assists": 0, "shots": 0,
-                    "tackles": 0, "saves": 0, "ratings": [], "games": 0,
+            name = p["name"]
+            if name not in agg:
+                agg[name] = {
+                    "name": name,
+                    "games": 0,
+                    "goals": 0,
+                    "assists": 0,
+                    "shots": 0,
+                    "tackles": 0,
+                    "passes": 0,
+                    "ratings": [],
+                    "avg_rating": 0.0,
                 }
-            stats[n]["goals"]   += p.get("goals", 0) or 0
-            stats[n]["assists"] += p.get("assists", 0) or 0
-            stats[n]["shots"]   += p.get("shots", 0) or 0
-            stats[n]["tackles"] += p.get("tackles", 0) or 0
-            stats[n]["saves"]   += p.get("saves", 0) or 0
-            if p.get("rating"):
-                stats[n]["ratings"].append(float(p["rating"]))
-            stats[n]["games"] += 1
-
-    for s in stats.values():
-        s["avg_rating"] = (
-            round(sum(s["ratings"]) / len(s["ratings"]), 2)
-            if s["ratings"] else 0.0
-        )
-
-    return stats
-
-
-def aggregate_from_members(members: list[dict]) -> dict[str, dict]:
-    """
-    Build an aggregate stats dict from PCT member stats objects
-    (used when EA match-level player data is unavailable).
-    member keys: name, proName, goals, assists, gamesPlayed, ratingAve,
-                 tacklesMade, passesMade, cleanSheetsDef, cleanSheetsGK
-    """
-    stats: dict[str, dict] = {}
-    for m in members:
-        if not isinstance(m, dict):
-            continue
-        name = m.get("proName") or m.get("name", "")
-        if not name:
-            continue
-        games = int(m.get("gamesPlayed", 0) or 0)
-        stats[name] = {
-            "name":       name,
-            "goals":      int(m.get("goals", 0) or 0),
-            "assists":    int(m.get("assists", 0) or 0),
-            "shots":      0,
-            "tackles":    int(m.get("tacklesMade", 0) or 0),
-            "saves":      0,
-            "ratings":    [],
-            "games":      games,
-            "avg_rating": float(m.get("ratingAve", 0) or 0),
-        }
-    return stats
+            agg[name]["games"] += 1
+            agg[name]["goals"] += p.get("goals", 0)
+            agg[name]["assists"] += p.get("assists", 0)
+            agg[name]["shots"] += p.get("shots", 0)
+            agg[name]["tackles"] += p.get("tackles", 0)
+            agg[name]["passes"] += p.get("passes", 0)
+            agg[name]["ratings"].append(p.get("rating", 0))
+    
+    for name in agg:
+        ratings = agg[name]["ratings"]
+        agg[name]["avg_rating"] = sum(ratings) / len(ratings) if ratings else 0
+    
+    return agg
