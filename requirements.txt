@@ -3,3 +3,4 @@ openai
 playwright
 pillow
 httpx
+aiohttp
