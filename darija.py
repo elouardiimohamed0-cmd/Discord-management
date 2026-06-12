@@ -1,38 +1,31 @@
 """
-DARIJA CLEANER v2.0 — Post-processes AI output for authentic Moroccan Darija
-Usage: from darija import clean_darija, ask_and_clean
+DARIJA CLEANER v3.0 — Light post-processing for Moroccan Darija AI output
 
-KEY FIX: Now preserves AI-generated sentences, only removes formal Arabic words.
-Does NOT replace entire sentences with random templates.
+KEY PRINCIPLE: Trust the AI. Only clean, don't destroy.
+The AI (Llama 3.1) is trained on Moroccan Arabic and can generate authentic Darija.
+Our job is just to remove occasional formal Arabic words that slip in.
 """
 
 import re
 import random
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-# ── FORBIDDEN FORMAL WORDS (Auto-remove from AI output) ──────────────────────
+# ── LIGHT CLEANING: Only remove these formal Arabic words ─────────────────────
+# These are words that make text sound robotic/MSA instead of street Darija
 
-FORMAL_ARABIC = [
+FORMAL_WORDS = [
+    # MSA connectors that sound stiff in Darija
     'لقد', 'إنه', 'إنها', 'أنه', 'أنها', 'إن', 'أن',
-    'جميل', 'جيد', 'سيئ', 'رائع', 'ممتاز', 'فظيع', 'سيء',
-    'أداء', 'أداؤه', 'أداءه', 'أدائها',
-    'لقد فاز', 'لقد خسر', 'لقد سجل', 'لقد قدم', 'لقد كان', 'لقد لعب',
-    'أعتقد', 'أظن', 'أفكر', 'أحسب',
-    'بشكل', 'بطريقة', 'بأسلوب',
-    'من المهم', 'يجب أن', 'ينبغي', 'لابد', 'من الضروري',
-    'في الواقع', 'حقيقة', 'الحقيقة', 'في الحقيقة',
-    'بخصوص', 'فيما يتعلق', 'بخصوص',
-    'أود أن أشير', 'أود أن', 'أشير إلى',
-    'بناءً على', 'استناداً إلى', 'بناء على',
+    'بناءً على', 'استناداً إلى',
     'من الجدير', 'من المفيد', 'من الأفضل', 'من المستحسن',
     'باختصار', 'في النهاية', 'ختاماً', 'أخيراً', 'في الختام',
-    'لذلك', 'وبالتالي', 'علاوة على', 'إضافة إلى',
+    'لذلك', 'وبالتالي',
     'من ناحية', 'من جهة', 'من ناحية أخرى',
     'على سبيل المثال', 'مثلاً', 'كمثال',
-    'بمعنى', 'أي', 'حيث', 'الذي', 'التي', 'الذين',
-    'وذلك', 'وقد', 'قد', 'كان', 'كانت', 'يكون', 'تكون',
+    'بمعنى', 'حيث', 'الذي', 'التي', 'الذين',
+    'وذلك', 'وقد', 'قد',
     'يمكن', 'يمكننا', 'يمكنني', 'يجب', 'ينبغي',
-    'من الممكن', 'من المفترض', 'من البديهي',
+    'من الضروري', 'من المفيد',
     'لا شك', 'من الواضح', 'من المؤكد', 'بلا شك',
     'تلخيصاً', 'بشكل مختصر', 'مختصراً',
     'بكل بساطة', 'ببساطة', 'بشكل مباشر', 'مباشرة',
@@ -40,34 +33,13 @@ FORMAL_ARABIC = [
     'بكل أمانة', 'بأمانة', 'بكل موضوعية',
     'بكل حيادية', 'بحيادية', 'بكل شفافية',
     'بكل وضوح', 'بوضوح', 'بكل دقة', 'بدقة',
-    'بكل تفصيل', 'بتفصيل', 'بكل تفصيل',
-]
-
-# French formalisms that sound robotic
-FORMAL_FRENCH = [
+    'بكل تفصيل', 'بتفصيل',
+    # French formalisms
     'très bien', 'très mal', 'beaucoup de', 'trop de',
-    'parce que', 'alors', 'donc', 'mais', 'ou',
-    'et', 'avec', 'pour', 'dans', 'sur',
-    'de', 'des', 'le', 'la', 'les',
-    'un', 'une', 'ce', 'cette', 'mon', 'ton', 'son',
-    'notre', 'votre', 'leur', 'je', 'tu', 'il', 'elle',
-    'nous', 'vous', 'ils', 'elles',
-    'suis', 'es', 'est', 'sommes', 'êtes', 'sont',
-    'ai', 'as', 'a', 'avons', 'avez', 'ont',
-    'faire', 'fais', 'fait', 'faisons', 'faites', 'font',
-    'aller', 'vais', 'vas', 'va', 'allons', 'allez', 'vont',
-    'venir', 'viens', 'vient', 'venons', 'venez', 'viennent',
-    'pouvoir', 'peux', 'peut', 'pouvons', 'pouvez', 'peuvent',
-    'vouloir', 'veux', 'veut', 'voulons', 'voulez', 'veulent',
-    'savoir', 'sais', 'sait', 'savons', 'savez', 'savent',
-    'penser', 'pense', 'penses', 'pensons', 'pensez', 'pensent',
-    'dire', 'dis', 'dit', 'disons', 'dites', 'disent',
-    'voir', 'vois', 'voit', 'voyons', 'voyez', 'voient',
-    'falloir', 'faut', 'fallait', 'fallu',
-    'devoir', 'dois', 'doit', 'devons', 'devez', 'doivent',
+    'parce que', 'alors', 'donc',
 ]
 
-# ── DARIJA REPLACEMENTS (Formal -> Natural Darija) ───────────────────────────
+# ── REPLACEMENTS: Formal → Darija (only when exact match) ───────────────────
 
 REPLACEMENTS = {
     'لقد': '',
@@ -211,271 +183,141 @@ REPLACEMENTS = {
     'doivent': 'khass',
 }
 
-# ── AUTHENTIC DARIJA TEMPLATES (Only used when AI completely fails) ──────────
+# ── FALLBACK TEMPLATES (only used when AI returns empty) ─────────────────────
 
 TEMPLATES = {
     "win": [
-        "**{player}** dar match mzyan 🔥",
-        "wach hadchi bssah???",
-        "t9awed 3la had niveau",
-        "kanb9aw nchoufou f film",
-        "mashi normal hadchi",
-        "rbe7 {score}!!!",
-        "juj goals dyalo ma jayinch b7al hdiya",
-        "player kaykhdem, mashi b7al l3ab",
-        "rbe7 3la 7sab",
-        "dominant match, walo men walo",
-        "kay7kmou f terrain",
-        "machi 9bel, machi m3a",
-        "wach ghadi n9oul lik???",
-        "safi, rbe7na, mashi muhim",
+        "🔥 **Rbe7na!** Match mzyan bzf, l'équipe khdemat b7al ma kaynch!",
+        "🏆 Walo men walo! Rbe7na w l3adou ma 9derch y3ml walo!",
+        "💪 Dominant match! Kay7kmou f terrain, kaydirou chi 7wayed!",
     ],
     "lose": [
-        "walo men walo 💀",
-        "fin kan **{player}**?",
-        "kaydour f terrain b7al tourist",
-        "goal? mission impossible 💀",
-        "yji lmatch ykhtarbo",
-        "safi 3iyet",
-        "defense kaytferrej gha 💀",
-        "midfield gha pass pass bla result",
-        "gk kayt7errek b7al robot",
-        "khsar 3la 7sab",
-        "team d3ifa, mashi 9awya",
-        "hadchi ma jayinch",
-        "wach hadchi l3ab wala match?",
-        "3ib w 7chouma",
-        "ma 3endna walo",
-        "khayb, khayb bzf",
-        "safi, 3iyet, mashi bghina",
+        "💀 **Khsarna...** Safi 3iyet, hadchi ma jayinch!",
+        "😭 Walo men walo! L3adou dar fina chi 7aja w 7na naymin!",
+        "🔥 Khsar 3la 7sab, defense kaytferrej gha!",
     ],
     "draw": [
-        "safi 3iyet",
-        "3ib w 7chouma",
-        "walo men walo",
-        "match khayb",
-        "midfield gha pass pass bla result",
-        "t3adl? ma3ndna walo",
-        "safi, 3iyet, mashi bghina",
-        "hadchi ma jayinch",
-        "wach hadchi l3ab wala match?",
+        "🟡 **T3adl...** Safi 3iyet, match khayb bzf!",
+        "😑 Walo men walo, midfield gha pass pass bla result!",
     ],
     "roast": [
-        "fin kan **{player}**? kaydour f terrain b7al tourist 💀",
-        "**{player}** goal? mission impossible walo men walo",
-        "**{player}** t9awed 3la had niveau...",
-        "**{player}** kayji lmatch ykhtarbo",
-        "**{player}** ma3ndou walo f had match",
-        "**{player}** defense kaytferrej gha 💀",
-        "**{player}** kayt7errek b7al robot",
-        "**{player}** ma jayinch f had niveau",
-        "walakin kanbghiwk s7bi 😂",
-        "**{player}** 3iyet walo men walo",
-        "**{player}** khsar lina match b7al hdiya",
+        "🔥 Fin kan had r7al? Kaydour f terrain b7al tourist!",
+        "💀 Goal? Mission impossible walo men walo!",
     ],
     "praise": [
-        "**{player}** dar match mzyan 🔥",
-        "**{player}** player kaykhdem",
-        "**{player}** rating {rating}? wach hadchi bssah!",
-        "juj goals dyalo ma jayinch b7al hdiya",
-        "**{player}** kay7km f terrain",
-        "**{player}** 9awi bzf",
-        "**{player}** mashi 3adi, player 3ez",
-        "**{player}** kayferrej f l3ab",
-        "**{player}** sjel goals b7al hdiya",
-        "**{player}** assist? 7elwa bzf",
+        "🔥 Dar match mzyan! Player kaykhdem bzzaf!",
+        "👏 Rating zwin! Wach hadchi bssah?!",
     ],
     "hype": [
-        "ghadi nrbe7houm!!!",
-        "mashi 3adi had match",
-        "rachad l3ergoni ghadi t7km",
-        "ghadi nkhssrouhoum",
-        "walo men walo ghadi yw9e3",
-        "team 9awya, mashi 3adiya",
-        "ghadi ndouzou 3lihoum",
-        "match ghadi ykoun zwin",
-        "rbe7 wala mout",
-        "ghadi nferrjou f7alna",
+        "🔥 **RACHAD L3ERGONI!** Ghadi nrbe7houm walo men walo!",
+        "💪 Team 9awya! Ghadi nkhssrouhoum inshallah!",
     ],
     "general": [
-        "daba walo",
-        "ghadi nchoufou",
-        "safi, mashi muhim",
-        "wach hadchi bssah?",
-        "fin kan had r7al?",
-        "t9awed 3la had niveau",
-        "kanb9aw nchoufou f film",
-        "mashi normal hadchi",
-        "walo men walo",
-        "s7bi, hadchi kayferrej",
-        "3iyet walo men walo",
-        "daba, ghadi, walo",
-        "b7al hdiya, b7al dik",
-        "safi, 3iyet, mashi bghina",
-        "ma 3endna walo",
-        "khayb, khayb bzf",
-        "zwin, zwin bzf",
-        "mzyan, mzyan bzf",
-        "9awi, 9awi bzf",
-        "d3if, d3if bzf",
+        "🤔 Daba walo, ghadi nchoufou chno ghadi yw9e3!",
+        "⚽ Rachad L3ERGONI f lmatch! Yallah safi!",
     ],
 }
 
-# ── MAIN FUNCTIONS ───────────────────────────────────────────────────────────
 
 def clean_darija(text: str, situation: str = "general") -> str:
     """
-    Clean AI-generated text to ensure authentic Moroccan Darija.
+    Light cleaning of AI-generated Darija.
 
-    KEY FIX v2: Preserves AI sentences. Only removes formal Arabic words.
-    Does NOT replace entire output with random templates.
+    STRATEGY: Trust the AI. Only remove obvious formal Arabic words.
+    Do NOT replace sentences with random templates.
     """
     if not text or not text.strip():
         return _fallback_template(situation)
 
-    # Step 1: Remove formal Arabic words (whole word only)
-    for word in FORMAL_ARABIC:
-        text = re.sub(r'\b' + re.escape(word) + r'\b', '', text)
+    # Step 1: Remove formal Arabic words (whole word only, case-insensitive)
+    for word in FORMAL_WORDS:
+        # Case-insensitive replacement
+        pattern = re.compile(re.escape(word), re.IGNORECASE)
+        text = pattern.sub('', text)
 
-    # Step 2: Replace formal French phrases with Darija equivalents
+    # Step 2: Replace formal French/Arabic phrases with Darija equivalents
     for formal, darija in REPLACEMENTS.items():
         if formal in text:
             text = text.replace(formal, darija)
-            text = text.replace(formal.capitalize(), darija.capitalize() if darija else '')
 
-    # Step 3: Clean up double spaces, empty lines
+    # Step 3: Clean up spacing
     text = re.sub(r'\s+', ' ', text).strip()
     text = re.sub(r'\n\s*\n', '\n', text)
 
-    # Step 4: Enforce line limits (max 8 lines)
+    # Step 4: Limit lines (max 8) and line length (max 140 chars)
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     lines = lines[:8]
 
-    # Step 5: Enforce line length (max 130 chars per line)
     result = []
     for line in lines:
-        if len(line) > 130:
-            idx = line.rfind(' ', 0, 130)
+        if len(line) > 140:
+            # Break at last space before 140
+            idx = line.rfind(' ', 0, 140)
             if idx > 0:
                 result.append(line[:idx])
                 remainder = line[idx+1:].strip()
                 if remainder:
-                    result.append(remainder[:130])
+                    result.append(remainder[:140])
             else:
-                result.append(line[:130])
+                result.append(line[:140])
         else:
             result.append(line)
 
     final = '\n'.join(result[:8])
 
-    # Step 6: Validate — if still bad, use template
-    validation = validate_darija(final)
-    if not validation["is_natural"]:
-        # Only use fallback if AI output is completely broken
+    # Step 5: Validate — if completely broken, use fallback
+    if not _is_valid_darija(final):
         return _fallback_template(situation)
 
     return final
 
 
-def validate_darija(text: str) -> Dict:
-    """
-    Validate if text is natural Darija.
-    Returns: {"score": 0-100, "is_natural": bool, "issues": [str]}
-    """
-    score = 100
-    issues = []
+def _is_valid_darija(text: str) -> bool:
+    """Check if text looks like valid Darija (not random garbage)."""
+    if not text or len(text) < 10:
+        return False
 
-    # Check for formal Arabic (BAD)
-    formal_found = []
-    for pattern in FORMAL_ARABIC:
-        if pattern in text:
-            formal_found.append(pattern)
-            score -= 10
-
-    if formal_found:
-        issues.append(f"Formal Arabic: {', '.join(formal_found[:3])}")
-
-    # Check for natural Darija patterns (GOOD) — relaxed regex
-    good_patterns = [
-        r'\b[wk]a[yt][a-z]+\b',
-        r'\b[37]+[a-z]+\b',
-        r'\b[a-z]+[379]\b',
-        r'\bdaba\b', r'\bghadi\b', r'\bwalo\b',
-        r'\bs7bi\b', r'\bsafi\b', r'\b3iyet\b',
-        r'\bb7al\b', r'\bmashi\b', r'\bwach\b',
-        r'\bfin\b', r'\bt9awed\b', r'\bkan\b',
-        r'\b[rk]be7\b', r'\bkhsar\b', r'\b9awi\b',
-        r'\bd3if\b', r'\bzwin\b', r'\bkhayb\b',
+    # Check for natural Darija patterns
+    darija_markers = [
+        'daba', 'ghadi', 'walo', 's7bi', 'safi', '3iyet', 'b7al', 'mashi', 'wach',
+        'fin', 'kan', 'rbe7', 'khsar', '9awi', 'd3if', 'zwin', 'khayb', 'mzyan',
+        '3la', '7it', 'walakin', 'dakchi', 'nti', '7na', 'ntoma', 'bzf', 'hta',
+        'dyal', 'fih', '3lih', '3end', 'kay', 'kat', 'dar', 'l3eb', 'jou', 'match',
+        'lgoal', 'lkeeper', 'ldefense', 'lmidfield', 'lattack', 'lteam', 'léquipe',
+        'rachad', 'l3ergoni', 'pro clubs', 'fc 26',
     ]
 
-    good_count = 0
-    for pattern in good_patterns:
-        if re.search(pattern, text, re.IGNORECASE):
-            good_count += 1
+    text_lower = text.lower()
+    marker_count = sum(1 for m in darija_markers if m in text_lower)
 
-    # Relaxed: need at least 1 good pattern OR some emoji energy
-    has_emoji = any(c in text for c in '🔥💀😂👏🟢🟡🔴⚽🎯⭐🏆📊🗓️🐦⚔️🎮💥🛡️😈😱🚨📰')
+    # Need at least 2 markers OR some emoji energy
+    has_emoji = any(c in text for c in '🔥💀😂👏🟢🟡🔴⚽🎯⭐🏆📊🗓️⚔️🎮💥🛡️😈😱🚨📰🤔🤷🙏💪🎉😅😆🤣😤')
 
-    if good_count < 1 and not has_emoji:
-        issues.append("Too few natural Darija patterns")
-        score -= 15
-
-    # Check length
-    lines = [l for l in text.split('\n') if l.strip()]
-    if len(lines) > 8:
-        score -= 5
-        issues.append(f"Too many lines ({len(lines)})")
-
-    # Check emoji count
-    emoji_count = sum(1 for c in text if c in '🔥💀😂👏🟢🟡🔴⚽🎯⭐🏆📊🗓️🐦⚔️🎮💥🛡️😈😱🚨📰')
-    if emoji_count > 6:
-        score -= 3
-        issues.append(f"Many emojis ({emoji_count})")
-
-    score = max(0, min(100, score))
-
-    return {
-        "score": score,
-        "is_natural": score >= 50,  # Relaxed threshold
-        "issues": issues,
-        "good_patterns": good_count,
-    }
+    return marker_count >= 2 or has_emoji
 
 
 def _fallback_template(situation: str, **kwargs) -> str:
-    """Generate fallback text from templates when AI fails."""
+    """Generate fallback text when AI completely fails."""
     templates = TEMPLATES.get(situation, TEMPLATES["general"])
     if not templates:
         return "walo men walo 💀"
 
-    n = min(3, len(templates))
-    selected = random.sample(templates, n)
-
-    formatted = []
-    for t in selected:
-        try:
-            formatted.append(t.format(**kwargs))
-        except KeyError:
-            if "{player}" in t and "player" not in kwargs:
-                continue
-            if "{rating}" in t and "rating" not in kwargs:
-                continue
-            formatted.append(t)
-
-    return '\n'.join(formatted[:3])
+    selected = random.choice(templates)
+    try:
+        return selected.format(**kwargs)
+    except KeyError:
+        return selected
 
 
-def get_templates(situation: str, **kwargs) -> List[str]:
-    """Get authentic Darija templates for a situation."""
-    return TEMPLATES.get(situation, TEMPLATES["general"])
-
-
-# ── ASYNC WRAPPER for gemini.py integration ──────────────────────────────────
+# ── ASYNC WRAPPER for gemini.py ───────────────────────────────────────────────
 
 async def ask_and_clean(_ask_func, prompt: str, max_tokens: int = 300, situation: str = "general"):
     """
-    Wrapper for your existing _ask function.
-    Calls AI, then cleans the output.
+    Calls AI, then lightly cleans the output.
+
+    Usage in gemini.py:
+        from darija import ask_and_clean
+        result = await ask_and_clean(_ask, prompt, max_tokens=700, situation="win")
     """
     raw = await _ask_func(prompt, max_tokens)
     if not raw:
