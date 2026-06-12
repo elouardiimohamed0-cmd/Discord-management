@@ -1,6 +1,6 @@
 """
 Gemini AI content generator — Moroccan Darija football social media manager.
-All functions take structured data dicts from ea_api.
+All functions take structured data dicts from scraper.
 Optimized: low max_tokens, reuse data, no redundant calls.
 NOW WITH DARIJA CLEANER — auto-removes formal Arabic, enforces authentic Moroccan style.
 """
@@ -9,27 +9,23 @@ import logging
 import os
 from openai import OpenAI
 
-# ✅ Import Darija cleaner
 from darija import clean_darija, ask_and_clean
 
-# ✅ Logger
 logger = logging.getLogger(__name__)
 
-# ✅ Groq client
 client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
     base_url="https://api.groq.com/openai/v1"
 )
 
 
-# ✅ MAIN AI FUNCTION (UNCHANGED — still calls Groq)
 async def _ask(prompt: str, max_tokens: int = 300):
     try:
         loop = asyncio.get_event_loop()
 
         def call_api():
             return client.chat.completions.create(
-                model="llama-3.1-8b-instant",  # ✅ correct model
+                model="llama-3.1-8b-instant",
                 messages=[
                     {"role": "system", "content": PERSONA},
                     {"role": "user", "content": prompt}
@@ -39,7 +35,6 @@ async def _ask(prompt: str, max_tokens: int = 300):
             )
 
         response = await loop.run_in_executor(None, call_api)
-
         return response.choices[0].message.content.strip()
 
     except Exception as e:
