@@ -1,13 +1,8 @@
 """
-Rachad L3ERGONI Pro Clubs Bot — Complete Working Version v4
-- Uses scraper.py (returns parsed format directly)
-- ALL commands from original + AllCalculatedRoast features
-- Position-aware roast engine with Darija output
-- Achievements & Curses system (Crowns + Powers)
-- Silent Treatment for boring games
-- Proper error handling
-- Native Darija output via AI + light cleaner
-- Render deployment: aiohttp health server + bot.start()
+Rachad L3ERGONI Pro Clubs Bot — Humanized Darija Version v5
+- Uses human_darija.py for authentic Moroccan human speech
+- Realistic typing delays and imperfections
+- All AI output is post-processed to feel human
 """
 import os
 import io
@@ -25,6 +20,7 @@ import image_gen
 import achievements
 import roast_engine
 from state import load_seen, save_seen
+from human_darija import HumanDarija, HumanizedDiscordBot
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("RachadBot")
@@ -43,6 +39,9 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
+# ─── HUMANIZATION LAYER ───
+humanizer = HumanDarija()
+
 seen_matches = set()
 _session_active = False
 _last_match_id = None
@@ -52,11 +51,34 @@ _last_activity_ts = 0.0
 def _match_channel():
     return bot.get_channel(MATCH_CHANNEL_ID) if MATCH_CHANNEL_ID else None
 
-async def _send(ch, text="", image=None, filename="image.png"):
+async def _send(ch, text="", image=None, filename="image.png", emotion='excitement'):
+    """Send with humanization and realistic typing delay."""
     text = (text or "").strip()
     text = text.replace("\\n", "\n")
     if not text and not image:
         return
+
+    # Humanize the text before sending
+    if text:
+        text = humanizer.humanize(text, emotion=emotion, intensity=0.75)
+
+    # Calculate realistic typing delay
+    word_count = len(text.split()) if text else 0
+    if word_count <= 3:
+        typing_time = random.randint(1, 3)
+    elif word_count <= 8:
+        typing_time = random.randint(3, 7)
+    else:
+        typing_time = random.randint(7, 15)
+
+    # Add random "thinking" pause for longer messages
+    if len(text) > 100 and random.random() < 0.3:
+        typing_time += random.randint(2, 5)
+
+    # Simulate typing
+    async with ch.typing():
+        await asyncio.sleep(typing_time)
+
     if image:
         image.seek(0)
         file = discord.File(image, filename=filename)
@@ -114,7 +136,7 @@ async def _get_matches(n: int = 5) -> List[Dict]:
         if not raw_matches:
             logger.warning("No matches returned from scraper")
             return []
-        return raw_matches  # Now scraper returns already-parsed format
+        return raw_matches
     except Exception as e:
         logger.error(f"Get matches error: {e}")
         return []
@@ -227,7 +249,7 @@ async def _post_match(ch, m):
         # 2. AllCalculatedRoast: Silent Treatment for boring games
         if roast_engine.is_boring_game(m.get("players", []), m):
             silent = roast_engine.build_silent_treatment(m)
-            await ch.send(silent)
+            await _send(ch, silent, emotion='disappointment')
             return
 
         # 3. AllCalculatedRoast: Achievements & Curses (Crowns)
@@ -235,7 +257,7 @@ async def _post_match(ch, m):
             chaos_results = achievements.evaluate_players(m["players"])
             chaos_report = achievements.format_chaos_report(chaos_results)
             if chaos_report:
-                await ch.send(chaos_report)
+                await _send(ch, chaos_report, emotion='excitement')
 
         # 4. AllCalculatedRoast: Position-aware Roast Engine
         if m.get("players"):
@@ -245,12 +267,12 @@ async def _post_match(ch, m):
                 m["players"]
             )
             if roast_text:
-                await ch.send(roast_text)
+                await _send(ch, roast_text, emotion='laughter')
 
-        # 5. AI Report (Darija)
+        # 5. AI Report (Darija) — HUMANIZED
         report = await gemini.match_report(m)
         report = _clean_lines(report, 3)
-        await ch.send(report)
+        await _send(ch, report, emotion='excitement' if m["result"] == "W" else 'disappointment')
 
         # 6. MOTM with Photo
         if m.get("players"):
@@ -264,14 +286,14 @@ async def _post_match(ch, m):
                 best["name"], best["rating"], best["goals"], best["assists"],
                 f"vs {m['opp_name']}"
             )
-            await _send(ch, motm_text, motm_img, "motm.png")
+            await _send(ch, motm_text, motm_img, "motm.png", emotion='love')
 
     except Exception as e:
         logger.error(f"Post error: {e}")
         await ch.send(f"⚠️ Error posting match: {str(e)[:100]}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ALL COMMANDS
+# ALL COMMANDS — HUMANIZED
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ─── SESSION ───
@@ -351,7 +373,7 @@ async def cmd_last10(ctx):
         await ctx.send("\n".join(lines[:2000]))
 
         text = await gemini.form_analysis(matches)
-        await _send(ctx.channel, text)
+        await _send(ctx.channel, text, emotion='thinking')
 
 @bot.command(name="results")
 async def cmd_results(ctx):
@@ -376,7 +398,7 @@ async def cmd_quickreport(ctx):
             await ctx.send("❌ Ma3endnach data 😴")
             return
         text = await gemini.quick_report(matches[0])
-        await ctx.send(text)
+        await _send(ctx.channel, text, emotion='excitement' if matches[0]["result"] == "W" else 'disappointment')
 
 @bot.command(name="schedule")
 async def cmd_schedule(ctx):
@@ -388,7 +410,7 @@ async def cmd_schedule(ctx):
             return
         opponents = [m["opp_name"] for m in matches[:3]]
         text = await gemini.match_prediction(", ".join(opponents), matches)
-        await ctx.send(f"🗓️ **Prochains adversaires potentiels:**\n{', '.join(opponents)}\n\n{text}")
+        await _send(ctx.channel, f"🗓️ **Prochains adversaires potentiels:**\n{', '.join(opponents)}\n\n{text}", emotion='thinking')
 
 # ─── PLAYER COMMANDS ───
 
@@ -448,9 +470,10 @@ async def cmd_form(ctx, *, player_name: str = ""):
             return
         if player_name:
             text = await gemini.player_form(player_name, matches)
+            await _send(ctx.channel, text, emotion='thinking')
         else:
             text = await gemini.form_analysis(matches)
-    await _send(ctx.channel, text)
+            await _send(ctx.channel, text, emotion='thinking')
 
 @bot.command(name="topscorer")
 async def cmd_topscorer(ctx):
@@ -459,7 +482,7 @@ async def cmd_topscorer(ctx):
         matches = await _get_matches(5)
         data = await _get_all_data(1)
         text = await gemini.top_scorer_post(matches, data.get("members", []))
-    await _send(ctx.channel, text)
+    await _send(ctx.channel, text, emotion='excitement')
 
 @bot.command(name="topassists")
 async def cmd_topassists(ctx):
@@ -468,7 +491,7 @@ async def cmd_topassists(ctx):
         matches = await _get_matches(5)
         data = await _get_all_data(1)
         text = await gemini.top_assists_post(matches, data.get("members", []))
-    await _send(ctx.channel, text)
+    await _send(ctx.channel, text, emotion='excitement')
 
 @bot.command(name="mvp")
 async def cmd_mvp(ctx):
@@ -497,7 +520,7 @@ async def cmd_mvp(ctx):
             f"🎮 {mvp['games']} matchs | ⚽ {mvp['goals']} buts | 🎯 {mvp['assists']} assists\n"
             f"⭐ Rating: **{mvp['avg_rating']:.2f}/10**"
         )
-        await _send(ctx.channel, text, mvp_img, "mvp.png")
+        await _send(ctx.channel, text, mvp_img, "mvp.png", emotion='love')
 
 @bot.command(name="compare")
 async def cmd_compare(ctx, player1: str = "", *, player2: str = ""):
@@ -513,14 +536,14 @@ async def cmd_compare(ctx, player1: str = "", *, player2: str = ""):
             return
         result = await gemini.compare_players(player1, player2, matches)
         if isinstance(result, str):
-            await ctx.send(result)
+            await _send(ctx.channel, result, emotion='laughter')
             return
         text, s1, s2 = result
         loop = asyncio.get_event_loop()
         card_buf = await loop.run_in_executor(None, lambda: image_gen.make_comparison_card(s1, s2))
-    await _send(ctx.channel, text, card_buf, f"compare_{player1}_{player2}.png")
+    await _send(ctx.channel, text, card_buf, f"compare_{player1}_{player2}.png", emotion='excitement')
 
-# ─── CONTENT COMMANDS ───
+# ─── CONTENT COMMANDS — HUMANIZED ───
 
 @bot.command(name="motm")
 async def cmd_motm(ctx, match_index: int = 1):
@@ -543,7 +566,7 @@ async def cmd_motm(ctx, match_index: int = 1):
                 f"vs {m['opp_name']} ({m['our_goals']}-{m['opp_goals']})"
             )),
         )
-    await _send(ctx.channel, motm_text or "", motm_buf, "motm.png")
+    await _send(ctx.channel, motm_text or "", motm_buf, "motm.png", emotion='love')
 
 @bot.command(name="totw")
 async def cmd_totw(ctx):
@@ -557,14 +580,14 @@ async def cmd_totw(ctx):
         loop = asyncio.get_event_loop()
         totw_text, totw_players = await gemini.team_of_the_week(matches)
         totw_img = await loop.run_in_executor(None, lambda: image_gen.make_totw_card(totw_players))
-    await _send(ctx.channel, totw_text, totw_img, "totw.png")
+    await _send(ctx.channel, totw_text, totw_img, "totw.png", emotion='excitement')
 
 @bot.command(name="hype")
 async def cmd_hype(ctx, *, context: str = ""):
     """Post de motivation. !hype [adversaire]"""
     async with ctx.typing():
         text = await gemini.hype_post(context)
-    await _send(ctx.channel, text)
+    await _send(ctx.channel, text, emotion='excitement')
 
 @bot.command(name="reaction")
 async def cmd_reaction(ctx):
@@ -575,7 +598,7 @@ async def cmd_reaction(ctx):
             await ctx.send("❌ Ma3endnach data 😴")
             return
         text = await gemini.reaction_post(matches[0])
-    await ctx.send(text)
+    await _send(ctx.channel, text, emotion='excitement' if matches[0]["result"] == "W" else 'disappointment')
 
 @bot.command(name="rankings")
 async def cmd_rankings(ctx):
@@ -587,7 +610,7 @@ async def cmd_rankings(ctx):
             return
         data = await _get_all_data(1)
         text = await gemini.top_performers(matches, data.get("members", []))
-    await _send(ctx.channel, text)
+    await _send(ctx.channel, text, emotion='excitement')
 
 @bot.command(name="spotlight")
 async def cmd_spotlight(ctx, *, player_name: str = ""):
@@ -598,9 +621,9 @@ async def cmd_spotlight(ctx, *, player_name: str = ""):
             await ctx.send("❌ Ma3endnach data 😴")
             return
         text = await gemini.player_spotlight(player_name, matches)
-    await _send(ctx.channel, text)
+    await _send(ctx.channel, text, emotion='love')
 
-# ─── FUN COMMANDS ───
+# ─── FUN COMMANDS — HUMANIZED ───
 
 @bot.command(name="roastplayer")
 async def cmd_roast(ctx, *, player_name: str = ""):
@@ -613,7 +636,7 @@ async def cmd_roast(ctx, *, player_name: str = ""):
         matches = await _get_matches(5)
         text = await gemini.roast(player_name, matches)
         text = _clean_lines(text, 4)
-    await _send(ctx.channel, text)
+    await _send(ctx.channel, text, emotion='laughter')
 
 @bot.command(name="cheer")
 async def cmd_cheer(ctx, *, player_name: str = ""):
@@ -624,7 +647,7 @@ async def cmd_cheer(ctx, *, player_name: str = ""):
     async with ctx.typing():
         matches = await _get_matches(5)
         text = await gemini.cheer(player_name, matches)
-    await _send(ctx.channel, text)
+    await _send(ctx.channel, text, emotion='love')
 
 @bot.command(name="banter")
 async def cmd_banter(ctx):
@@ -632,7 +655,7 @@ async def cmd_banter(ctx):
     async with ctx.typing():
         matches = await _get_matches(1)
         text = await gemini.banter(matches)
-    await ctx.send(text[:2000])
+    await _send(ctx.channel, text, emotion='laughter')
 
 @bot.command(name="meme")
 async def cmd_meme(ctx):
@@ -640,7 +663,7 @@ async def cmd_meme(ctx):
     async with ctx.typing():
         matches = await _get_matches(1)
         text = await gemini.meme_post(matches)
-    await ctx.send(text[:2000])
+    await _send(ctx.channel, text, emotion='laughter')
 
 @bot.command(name="drama")
 async def cmd_drama(ctx):
@@ -648,7 +671,7 @@ async def cmd_drama(ctx):
     async with ctx.typing():
         matches = await _get_matches(1)
         text = await gemini.drama_post(matches)
-    await ctx.send(text[:2000])
+    await _send(ctx.channel, text, emotion='disappointment')
 
 # ─── ALLCALCULATEDROAST FEATURES ───
 
@@ -663,7 +686,7 @@ async def cmd_roastreport(ctx):
         m = matches[0]
 
         if roast_engine.is_boring_game(m.get("players", []), m):
-            await ctx.send(roast_engine.build_silent_treatment(m))
+            await _send(ctx.channel, roast_engine.build_silent_treatment(m), emotion='disappointment')
             return
 
         roast_text = roast_engine.build_roast_text(
@@ -672,7 +695,7 @@ async def cmd_roastreport(ctx):
             m.get("players", [])
         )
         if roast_text:
-            await ctx.send(roast_text)
+            await _send(ctx.channel, roast_text, emotion='laughter')
         else:
             await ctx.send("✅ Kolchi mzyan f had match — bla roast! 🔥")
 
@@ -761,9 +784,9 @@ async def cmd_funroast(ctx, *, player_name: str = ""):
             "rating_total": s["avg_rating"] * s["games"],
         }
         roast = roast_engine.get_fun_roast(s["name"], stats)
-        await ctx.send(roast)
+        await _send(ctx.channel, roast, emotion='laughter')
 
-# ─── NEWS COMMANDS ───
+# ─── NEWS COMMANDS — HUMANIZED ───
 
 @bot.command(name="transfer", aliases=["rumour", "rumours"])
 async def cmd_transfer(ctx):
@@ -772,7 +795,7 @@ async def cmd_transfer(ctx):
         matches = await _get_matches(5)
         data = await _get_all_data(1)
         text = await gemini.transfer_rumor(data.get("members", []), matches)
-    await _send(ctx.channel, text)
+    await _send(ctx.channel, text, emotion='excitement')
 
 @bot.command(name="breaking")
 async def cmd_breaking(ctx):
@@ -781,9 +804,9 @@ async def cmd_breaking(ctx):
         matches = await _get_matches(1)
         data = await _get_all_data(1)
         text = await gemini.breaking_news(matches, data.get("members", []))
-    await _send(ctx.channel, text)
+    await _send(ctx.channel, text, emotion='disappointment')
 
-# ─── ANALYTICS COMMANDS ───
+# ─── ANALYTICS COMMANDS — HUMANIZED ───
 
 @bot.command(name="stats")
 async def cmd_stats(ctx):
@@ -826,7 +849,7 @@ async def cmd_insights(ctx):
             await ctx.send("❌ Ma3endnach data 😴")
             return
         text = await gemini.insights(matches)
-    await _send(ctx.channel, text)
+    await _send(ctx.channel, text, emotion='thinking')
 
 @bot.command(name="trends")
 async def cmd_trends(ctx):
@@ -837,7 +860,7 @@ async def cmd_trends(ctx):
             await ctx.send("❌ Ma3endnach data 😴")
             return
         text = await gemini.trends(matches)
-    await _send(ctx.channel, text)
+    await _send(ctx.channel, text, emotion='thinking')
 
 @bot.command(name="stat")
 async def cmd_stat(ctx):
@@ -848,7 +871,7 @@ async def cmd_stat(ctx):
             await ctx.send("❌ Ma3endnach data 😴")
             return
         text = await gemini.stat_of_day(matches)
-    await _send(ctx.channel, text)
+    await _send(ctx.channel, text, emotion='excitement')
 
 @bot.command(name="predict")
 async def cmd_predict(ctx, *, opponent: str = "Prochain adversaire"):
@@ -856,7 +879,7 @@ async def cmd_predict(ctx, *, opponent: str = "Prochain adversaire"):
     async with ctx.typing():
         matches = await _get_matches(5)
         text = await gemini.match_prediction(opponent, matches)
-    await _send(ctx.channel, text)
+    await _send(ctx.channel, text, emotion='thinking')
 
 @bot.command(name="clubinfo")
 async def cmd_clubinfo(ctx):
@@ -922,7 +945,7 @@ async def cmd_ping(ctx):
 @bot.command(name="help", aliases=["pchelp", "commands"])
 async def cmd_help(ctx):
     lines = [
-        "⚽ **Rachad L3ERGONI Bot** _(Gemini AI · PCT API · Pillow Images · AllCalculatedRoast)_",
+        "⚽ **Rachad L3ERGONI Bot** _(Humanized Darija · PCT API · Pillow Images · AllCalculatedRoast)_",
         "══════════════════════════════════════════",
         "",
         "**🎮 SESSION**",
@@ -961,7 +984,7 @@ async def cmd_help(ctx):
         "**⚙️ ADMIN** _(manage_channels)_",
         "`!setchannel match` · `!setchannel general` · `!weekly` · `!refreshdata`",
         "",
-        "_Auto: matchs kol 5min 🔔 · Session: 45min timeout · Darija 100%_",
+        "_Auto: matchs kol 5min 🔔 · Session: 45min timeout · Humanized Darija 100%_",
     ]
     await ctx.send("\n".join(lines))
 
@@ -989,11 +1012,11 @@ async def _post_five_summary(channel, matches: list, members: list):
     )
     totw_img = await loop.run_in_executor(None, lambda: image_gen.make_totw_card(totw_players))
 
-    await _send(channel, summary_text, summary_img, "last5.png")
+    await _send(channel, summary_text, summary_img, "last5.png", emotion='excitement')
     await asyncio.sleep(1)
-    await _send(channel, performers_text)
+    await _send(channel, performers_text, emotion='excitement')
     await asyncio.sleep(1)
-    await _send(channel, totw_text, totw_img, "totw.png")
+    await _send(channel, totw_text, totw_img, "totw.png", emotion='excitement')
 
     # AllCalculatedRoast: Crown/Curse leaderboard
     all_crowns = {}
@@ -1031,6 +1054,7 @@ async def on_ready():
     seen_matches = load_seen()
     logger.info(f"✅ Bot ready: {bot.user}")
     logger.info(f"   Session poll: every {POLL_MINUTES}min | Timeout: {TIMEOUT_MINUTES}min")
+    logger.info(f"   Humanization: ENABLED — Darija street style with typing delays")
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="your matches 👀"))
 
 @bot.event
@@ -1077,9 +1101,7 @@ async def start_health_server():
 # ─── START ───
 if __name__ == "__main__":
     async def main():
-        # Start health server first (Render needs the port bound)
         runner = await start_health_server()
-        # Start Discord bot in the same event loop
         await bot.start(TOKEN)
 
     try:
