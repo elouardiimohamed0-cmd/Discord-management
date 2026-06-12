@@ -1,407 +1,437 @@
 """
-HUMAN DARIJA ENGINE v2.0 — Makes your Discord bot talk like a real Moroccan
-Post-processing layer that transforms robotic AI output into authentic human speech.
-
-Drop-in replacement: Just wrap your existing AI output with HumanDarija.humanize()
+Rachad L3ERGONI — Humanized Darija Engine v2 (Pro Social Media Style)
+- Short phrases (max 2 sentences)
+- Clean Darija with strategic French/English code-switching
+- Real squad integration (no imagined players)
+- Typing imperfections: light, natural
+- Emotion-driven templates
 """
-
 import random
 import re
-import asyncio
-from typing import Optional
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SQUAD CONFIG — UPDATE THIS WITH YOUR REAL PLAYERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+SQUAD = {
+    # Example structure — replace with your real squad from proclubstracker
+    # "hamza": {
+    #     "name": "Hamza",
+    #     "position": "ST",
+    #     "number": 9,
+    #     "nickname": "L9ahba",
+    #     "nationality": "MA",
+    #     "style": "finisher"
+    # },
+}
+
+# If you have a JSON file with squad data, load it:
+import json
+import os
+SQUAD_FILE = os.path.join(os.path.dirname(__file__), "squad.json")
+if os.path.exists(SQUAD_FILE):
+    with open(SQUAD_FILE, "r", encoding="utf-8") as f:
+        SQUAD = json.load(f)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SHORT PHRASE BANKS — Moroccan Social Media Manager Style
+# ═══════════════════════════════════════════════════════════════════════════════
+
+FILLERS = {
+    "end": ["safi", "walo", "noss noss", "kif kif", "merra merra"],
+    "doubt": ["z3ma", "wallah", "lla", "ya3ni"],
+    "reaction": ["oh", "ah", "yallah", "ewa", "wakha"],
+    "agreement": ["dima dima", "wakha hakkak", "mzyan", "sahbi"],
+}
+
+FRENCH_PHRASES = [
+    "c'est fini", "c'est pas sérieux", "la vie", "bon courage",
+    "c'est la guerre", "trop fort", "incroyable", "dommage",
+    "c'est clair", "pas mal", "bref", "voilà", "allez",
+    "c'est bon", "c'est tout", "fin", "point final"
+]
+
+ENGLISH_PHRASES = [
+    "let's go", "no way", "game over", "clutch", "goat",
+    "vibes", "this is football", "unstoppable", "locked in",
+    "clean", "cold", "fire", "next level", "easy", "facts"
+]
+
+# Emotion templates — MAX 2 sentences, punchy
+TEMPLATES = {
+    "excitement": [
+        "WALLAH! {content} Let's go! 🔥",
+        "{content}. Dima dima! 💪",
+        "{content}. C'est trop fort! ⚡",
+        "Oh lala! {content} Safi!",
+        "{content}. Locked in! 🔒",
+        "{content}. Fire! 🔥",
+    ],
+    "disappointment": [
+        "{content}. C'est fini. 😤",
+        "{content}. Walo. Noss noss.",
+        "Lla... {content}. Bon courage.",
+        "{content}. Dommage. Safi.",
+        "{content}. La vie.",
+        "{content}. C'est pas sérieux.",
+    ],
+    "thinking": [
+        "{content}. Z3ma... 🤔",
+        "{content}. Kif kif, wakha.",
+        "Hmm... {content}. La vie.",
+        "{content}. Noss noss.",
+        "{content}. Ya3ni...",
+        "{content}. Bref.",
+    ],
+    "laughter": [
+        "{content}. Hahaha walo! 😂",
+        "Oh lala! {content}. C'est pas sérieux!",
+        "{content}. Wallah 3ib! 😭",
+        "{content}. Hada chi haja! 🤣",
+        "{content}. No way! 😂",
+        "{content}. C'est clair! 😭",
+    ],
+    "love": [
+        "{content}. Dima dima! ❤️",
+        "WALLAH! {content}. Trop fort! 💚",
+        "{content}. C'est incroyable! ✨",
+        "{content}. Had l3eb! 🙌",
+        "{content}. Goat! 🐐",
+        "{content}. Clean! ✨",
+    ],
+}
+
+# Context-specific short phrases
+ROAST_TEMPLATES = [
+    "{player}, {stat}. B7al chi taxi khawi.",
+    "Ya {nickname}, c'est pas sérieous. Safi.",
+    "{player} f lbox: mafhemtech wach bghit ydefend wla ybki.",
+    "{player}, {position} dial chi m3a9ed. Dommage.",
+    "{player}. {stat}. Walo.",
+    "{player} kyl3b b raso, w raso f chi blasa khra.",
+    "{player}: {stat}. C'est fini.",
+    "{player}. {stat}. Z3ma...",
+]
+
+HYPE_TEMPLATES = [
+    "{team}. Dima dima. Let's go! 🔥",
+    "WALLAH! {team} f lmatch. C'est la guerre! ⚔️",
+    "{team} locked in. No way back. 💪",
+    "Oh lala! {team} vibes. Unstoppable! ⚡",
+    "{team}. Fire. Clean. 🔥",
+    "{team}. Goat mode. 🐐",
+]
+
+BANTER_TEMPLATES = [
+    "Adversaire? {content}. Walo.",
+    "{content}. C'est pas sérieux. 😂",
+    "{content}. Hahaha dommage!",
+    "{content}. La vie, sahbi.",
+    "{content}. Easy.",
+]
+
+DRAMA_TEMPLATES = [
+    "{content}. C'est fini. 😤",
+    "{content}. Wallah 3ib!",
+    "{content}. Lla!",
+    "{content}. C'est pas sérieux.",
+    "{content}. Dommage. Bref.",
+]
 
 
 class HumanDarija:
-    """
-    Transforms robotic Darija into authentic Moroccan human speech.
-    This is a POST-PROCESSING layer — wrap your existing AI output with this.
-    """
+    """Humanize bot output to short, punchy Moroccan social media style."""
 
-    def __init__(self):
-        # Authentic Moroccan fillers (from real WhatsApp/Twitter analysis)
-        self.fillers = [
-            "safi", "ah", "wa", "yallah", "ewa", "oh", "lla", 
-            "ayeh", "wayeh", "hmm", "hh", "hahaha", "oh wow", "ya salam",
-            "bessa7", "sara7a", "f lwa9i3", "3la 7sab", "wakha hakkak",
-            "ghir", "tani", "daba", "men ba3d", "merra merra", "z3ma",
-            "wallah", "ya3ni", "b7al", "f7al", "3lach", "walo",
-            "safi 3iyet", "daba walo", "ghadi nchoufou", "kif kif",
-            "noss noss", "dima dima", "walo men walo", "ma3ndch shi",
-            "sir t9awed", "diri 3qlek", "t7ashsham", "kaykhdem",
-            "mashi 3adi", "9awi bzf", "khayb bzf", "mzyan bzf",
-            "zwin bzf", "d3if bzf", "3ib w 7chouma", "ma3endna walo",
-        ]
+    def __init__(self, squad=None):
+        self.squad = squad or SQUAD
+        self._roast_cache = {}
+        self._hype_cache = {}
 
-        # Natural sentence starters
-        self.starters = [
-            "", "", "", "ana", "rah", "wach", "3lach", "kan", "ghadi", 
-            "koun", "khlini", "sir", "nta", "nti", "hadi", "hadchi", "dakchi",
-            "b7al", "f7al", "3la", "men", "w", "o", "walakin", "ila",
-            "safi", "wakha", "yallah", "ewa", "daba", "tani", "men ba3d",
-        ]
-
-        # English words Moroccans naturally drop in chat
-        self.english_drops = [
-            "ok", "okay", "sorry", "please", "thanks", "hello", "bye",
-            "good", "bad", "nice", "cool", "happy", "sad", "love", "hate",
-            "problem", "message", "phone", "email", "facebook", "google",
-            "youtube", "wifi", "internet", "computer", "pizza", "taxi",
-            "hotel", "restaurant", "weekend", "meeting", "project",
-            "party", "birthday", "manager", "password", "online", "offline",
-            "game", "play", "win", "loss", "draw", "team", "player",
-            "goal", "shot", "pass", "defense", "attack", "midfield",
-            "rating", "stats", "match", "MVP", "OP", "GG", "WP", "AFK",
-        ]
-
-        # French words (very common in Moroccan football chat)
-        self.french_drops = [
-            "merci", "pardon", "excuse", "bon", "mauvais", "tres",
-            "beaucoup", "un peu", "oui", "non", "avec", "sans", "pour",
-            "et", "ou", "mais", "si", "alors", "donc", "parce", "quoi",
-            "qui", "quand", "comment", "pourquoi", "combien",
-            "cafe", "telephone", "portable", "ordinateur", "internet",
-            "probleme", "question", "reponse", "idee", "travail", "maison",
-            "voiture", "argent", "temps", "jour", "nuit", "soir", "matin",
-            "niveau", "performance", "resultat", "tirs", "faute",
-            "formation", "tactique", "defense", "attaque", "milieu",
-            "equipe", "joueur", "match", "buteur", "gardien", "arbitre",
-            "carton", "hors-jeu", "corner", "penalty", "remplacement",
-        ]
-
-        # Emoji patterns by emotion
-        self.emoji_patterns = {
-            'excitement': ['🔥', '💪', '⚽', '🏆', '⭐', '🌟', '👏', '🎉'],
-            'disappointment': ['💀', '😭', '😤', '🤦', '😑', '🤷', '🙄'],
-            'laughter': ['😂', '🤣', '💀', '☠️', '😆', '😅'],
-            'thinking': ['🤔', '🤨', '🧐', '😏', '🤷'],
-            'love': ['❤️', '💖', '💕', '🫶', '💯'],
-            'anger': ['😡', '🤬', '💢', '👿', '😤'],
-        }
-
-    def add_fillers(self, text: str, intensity: float = 0.4) -> str:
-        """Add natural Moroccan fillers before/after sentences."""
-        if random.random() > intensity or not text:
+    def humanize(self, text, emotion="thinking", intensity=0.6):
+        """Main entry: convert any text to short, pro Darija style."""
+        if not text or intensity <= 0:
             return text
 
-        filler = random.choice(self.fillers)
-        position = random.choice(['before', 'after', 'both', 'mid'])
+        # Step 1: Brutal shortening — max 2 sentences, cut fluff
+        text = self._shorten(text)
 
-        if position == 'before':
-            return f"{filler}, {text}"
-        elif position == 'after':
-            return f"{text}, {filler}"
-        elif position == 'both':
-            return f"{filler}, {text}, {filler}"
-        else:  # mid
-            sentences = text.split('. ')
-            if len(sentences) > 1:
-                mid = len(sentences) // 2
-                sentences[mid] = f"{filler}, {sentences[mid]}"
-                return '. '.join(sentences)
-            return f"{filler}, {text}"
+        # Step 2: Apply emotion template
+        text = self._apply_emotion(text, emotion)
 
-    def add_typing_imperfections(self, text: str) -> str:
-        """Add human typing quirks."""
-        if not text:
+        # Step 3: Strategic code-switching (French/English where it hits)
+        text = self._code_switch(text, intensity)
+
+        # Step 4: ONE filler max, at the end, context-aware
+        text = self._add_filler(text, intensity)
+
+        # Step 5: Very light imperfections (lowercase starts, occasional repeat)
+        text = self._add_imperfections(text, intensity)
+
+        return text.strip()
+
+    def _shorten(self, text):
+        """Cut to max 2 sentences. Remove fluff words."""
+        # Remove filler words that make text long
+        fluff = [
+            r"(very|really|actually|basically|just|so|quite|rather|pretty)",
+            r"(in my opinion|i think|i believe|to be honest|frankly)",
+            r"(it seems that|it appears that|you know what)",
+            r"(let me tell you|as you can see|as we all know)",
+        ]
+        for pattern in fluff:
+            text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+
+        # Clean up extra spaces
+        text = re.sub(r"\s+", " ", text).strip()
+
+        # Split sentences, keep max 2
+        sentences = re.split(r"[.!?]+", text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        if len(sentences) > 2:
+            sentences = sentences[:2]
+
+        # Rejoin with periods
+        result = ". ".join(sentences)
+        if result and not result.endswith((".", "!", "?")):
+            result += "."
+        return result
+
+    def _apply_emotion(self, text, emotion):
+        """Wrap in short emotion template."""
+        templates = TEMPLATES.get(emotion, TEMPLATES["thinking"])
+        template = random.choice(templates)
+        return template.format(content=text)
+
+    def _code_switch(self, text, intensity):
+        """Insert French or English phrase where it adds impact."""
+        if random.random() > intensity * 0.35:
             return text
 
-        # 15% chance lowercase start
-        if random.random() < 0.15:
+        phrases = FRENCH_PHRASES + ENGLISH_PHRASES
+        phrase = random.choice(phrases)
+
+        # 60% at end (punchline), 40% in middle (emphasis)
+        if random.random() < 0.6:
+            # At end — replace last period or append
+            if text.endswith((".", "!", "?")):
+                return f"{text[:-1]} {phrase}."
+            return f"{text} {phrase}."
+        else:
+            # In middle — insert after first clause
+            words = text.split()
+            if len(words) > 4:
+                mid = len(words) // 2
+                words.insert(mid, phrase)
+                return " ".join(words)
+            return f"{text} {phrase}."
+
+    def _add_filler(self, text, intensity):
+        """Add ONE filler at the end, contextually chosen."""
+        if random.random() > intensity * 0.25:
+            return text
+
+        # Choose filler based on text tone
+        lowered = text.lower()
+        if any(w in lowered for w in ["win", "goal", "victory", "3-0", "3-1", "let's go", "fire"]):
+            filler = random.choice(FILLERS["agreement"])
+        elif any(w in lowered for w in ["?", "z3ma", "hmm", "thinking"]):
+            filler = random.choice(FILLERS["doubt"])
+        elif any(w in lowered for w in ["oh", "ah", "wallah", "lala"]):
+            filler = random.choice(FILLERS["reaction"])
+        else:
+            filler = random.choice(FILLERS["end"])
+
+        # Append naturally
+        if text.endswith((".", "!", "?")):
+            return f"{text[:-1]} {filler}."
+        return f"{text} {filler}."
+
+    def _add_imperfections(self, text, intensity):
+        """Very light typos — natural, not chaotic."""
+        if random.random() > intensity * 0.15:
+            return text
+
+        # 25% chance lowercase start (casual)
+        if random.random() < 0.25 and text[0].isupper():
             text = text[0].lower() + text[1:]
 
-        # 8% chance repeat letters
-        words = text.split()
-        result = []
-        for word in words:
-            if random.random() < 0.08 and len(word) > 3:
-                if word[-1] in 'aeiou3o7':
-                    word = word + word[-1] * random.randint(1, 2)
-            result.append(word)
-        text = ' '.join(result)
+        # Occasional repeated punctuation for emphasis
+        if random.random() < 0.1 and "!" in text:
+            text = text.replace("!", "!!", 1)
+        if random.random() < 0.05 and "?" in text:
+            text = text.replace("?", "??", 1)
 
-        # 10% multiple punctuation
-        if random.random() < 0.10:
-            if '!' in text:
-                text = text.replace('!', '!!' if random.random() > 0.5 else '!!!')
-            if '?' in text:
-                text = text.replace('?', '??' if random.random() > 0.5 else '???')
-
-        # 5% ellipsis
-        if random.random() < 0.05 and '.' in text:
-            text = text.replace('.', '...', 1)
-
-        # 12% drop space after comma
-        if random.random() < 0.12:
-            text = text.replace(', ', ',', 1)
-
-        return text
-
-    def code_switch(self, text: str, probability: float = 0.20) -> str:
-        """Naturally mix English/French words."""
-        words = text.split()
-        result = []
-
-        for i, word in enumerate(words):
-            if random.random() < probability and len(word) > 3:
-                if random.random() < 0.6:
-                    drop = random.choice(self.english_drops)
-                else:
-                    drop = random.choice(self.french_drops)
-
-                if 0 < i < len(words) - 1 and word.isalpha():
-                    result.append(drop)
-                    continue
-            result.append(word)
-
-        return ' '.join(result)
-
-    def add_mid_sentence_correction(self, text: str) -> str:
-        """Add authentic mid-sentence correction."""
+        # Very rare: dropped article (Moroccan style)
         if random.random() < 0.08:
-            corrections = [
-                "* correction ", "* walo ", "* ma3ndch ", "* z3ma ",
-                "* b7al ", "* ya3ni ", "* wallah ",
-            ]
-            sentences = text.split('. ')
-            if len(sentences) > 1:
-                idx = random.randint(0, len(sentences) - 2)
-                sentences[idx] += random.choice(corrections) + sentences[idx + 1]
-                sentences.pop(idx + 1)
-                return '. '.join(sentences)
-        return text
-
-    def add_reaction_emoji(self, text: str, emotion: str = 'excitement') -> str:
-        """Add contextual emoji."""
-        emojis = self.emoji_patterns.get(emotion, self.emoji_patterns['excitement'])
-
-        if random.random() < 0.70:
-            emoji = random.choice(emojis)
-            position = random.choice(['end', 'mid', 'start'])
-
-            if position == 'end':
-                text = f"{text} {emoji}"
-            elif position == 'start':
-                text = f"{emoji} {text}"
-            else:
-                words = text.split()
-                if len(words) > 3:
-                    mid = len(words) // 2
-                    words.insert(mid, emoji)
-                    text = ' '.join(words)
+            text = re.sub(r"(the|a|an)\s+", "", text, count=1, flags=re.IGNORECASE)
 
         return text
 
-    def abbreviate_common(self, text: str) -> str:
-        """Use Moroccan chat abbreviations."""
-        abbreviations = {
-            r'wakha': ['wakha', 'wkh', 'wakha'],
-            r'safi': ['safi', 'sf', 'safi'],
-            r'ma3ndch': ['ma3ndch', 'm3ndch', 'ma3ndch'],
-            r'walo': ['walo', 'wl', 'walo'],
-            r'ghadi': ['ghadi', 'ghd', 'ghadi'],
-            r'daba': ['daba', 'db', 'daba'],
-            r'nta': ['nta', 'nt', 'nta'],
-            r'nti': ['nti', 'nt', 'nti'],
-            r'7na': ['7na', '7n', '7na'],
-            r'ntoma': ['ntoma', 'ntm', 'ntoma'],
-        }
+    # ═════════════════════════════════════════════════════════════════════════
+    # SQUAD-AWARE CONTENT GENERATORS
+    # ═════════════════════════════════════════════════════════════════════════
 
-        for pattern, replacements in abbreviations.items():
-            if random.random() < 0.15:
-                text = re.sub(pattern, random.choice(replacements), text, count=1)
+    def get_player(self, name):
+        """Get player from squad by name (fuzzy match)."""
+        name_lower = name.lower().strip()
+        # Exact match
+        if name_lower in self.squad:
+            return self.squad[name_lower]
+        # Partial match
+        for key, player in self.squad.items():
+            if name_lower in key or key in name_lower:
+                return player
+            if name_lower in player.get("name", "").lower():
+                return player
+        return None
 
-        return text
+    def get_roast(self, player_name, stat_line="", context=None):
+        """Generate short, contextual roast for real player."""
+        player = self.get_player(player_name)
+        if not player:
+            return f"{player_name}? Ma3rfoch. Wach 3andna f squad?"
 
-    def add_street_slang(self, text: str) -> str:
-        """Add authentic Moroccan street football slang."""
-        slang_phrases = [
-            "wakha hakkak", "z3ma", "ya3ni", "wallah", "b7al hdiya",
-            "dima dima", "noss noss", "kif kif", "merra merra",
-            "safi 3iyet", "walo men walo", "ma3ndch shi", "sir t9awed",
-            "diri 3qlek", "t7ashsham", "kaykhdem", "mashi 3adi",
-            "9awi bzf", "khayb bzf", "mzyan bzf", "zwin bzf",
-            "d3if bzf", "3ib w 7chouma", "ma3endna walo",
+        p_name = player.get("name", player_name)
+        nickname = player.get("nickname", p_name)
+        position = player.get("position", "MID")
+
+        # Build contextual stat line if not provided
+        if not stat_line and context:
+            stat_line = self._build_stat_line(context)
+
+        template = random.choice(ROAST_TEMPLATES)
+        return template.format(
+            player=p_name,
+            nickname=nickname,
+            position=position,
+            stat=stat_line or "walo"
+        )
+
+    def get_hype(self, team_name="L3ERGONI"):
+        """Short hype line."""
+        template = random.choice(HYPE_TEMPLATES)
+        return template.format(team=team_name)
+
+    def get_banter(self, content=""):
+        """Short banter line."""
+        template = random.choice(BANTER_TEMPLATES)
+        return template.format(content=content or "walo")
+
+    def get_drama(self, content=""):
+        """Short drama line."""
+        template = random.choice(DRAMA_TEMPLATES)
+        return template.format(content=content or "walo")
+
+    def get_stats_summary(self, player_name, stats_dict):
+        """One-line stat summary."""
+        if not stats_dict:
+            return f"{player_name}? Walo f stats. Z3ma."
+
+        # Pick best/worst stat for punchline
+        best = max(stats_dict.items(), key=lambda x: x[1])
+        worst = min(stats_dict.items(), key=lambda x: x[1])
+
+        if best[1] >= 8:
+            return f"{player_name}: {best[0]} = {best[1]}. Trop fort! 📊"
+        elif worst[1] <= 3:
+            return f"{player_name}: {worst[0]} = {worst[1]}. C'est pas sérieux. 📉"
+        else:
+            return f"{player_name}: {best[0]} = {best[1]}. Kif kif. 📊"
+
+    def get_match_result(self, our_goals, opp_goals, opp_name, result):
+        """Short match result announcement."""
+        if result == "W":
+            return f"{our_goals}-{opp_goals} vs {opp_name}. WALLAH! Let's go! 🔥"
+        elif result == "D":
+            return f"{our_goals}-{opp_goals} vs {opp_name}. Noss noss. Kif kif."
+        else:
+            return f"{our_goals}-{opp_goals} vs {opp_name}. Dommage. C'est fini. 😤"
+
+    def get_motm(self, player_name, rating, goals, assists):
+        """Short MOTM announcement."""
+        player = self.get_player(player_name)
+        nickname = player.get("nickname", player_name) if player else player_name
+
+        lines = [
+            f"MOTM: {nickname}. ⭐ {rating}/10",
+            f"{goals}G {assists}A. Trop fort! 🌟",
+            f"{player_name}. {goals} buts, {assists} assists. Clean! ✨",
         ]
+        return random.choice(lines)
 
-        if random.random() < 0.25:
-            slang = random.choice(slang_phrases)
-            position = random.choice(['start', 'end', 'mid'])
+    def _build_stat_line(self, context):
+        """Build short stat line from context dict."""
+        if not context:
+            return "walo"
+        parts = []
+        if "goals" in context:
+            parts.append(f"{context['goals']}G")
+        if "assists" in context:
+            parts.append(f"{context['assists']}A")
+        if "rating" in context:
+            parts.append(f"⭐{context['rating']}")
+        return " ".join(parts) if parts else "walo"
 
-            if position == 'start':
-                text = f"{slang}, {text}"
-            elif position == 'end':
-                text = f"{text}, {slang}"
-            else:
-                words = text.split()
-                if len(words) > 4:
-                    mid = len(words) // 2
-                    words.insert(mid, slang)
-                    text = ' '.join(words)
-
-        return text
-
-    def humanize(self, text: str, emotion: str = 'excitement', 
-                 intensity: float = 0.7) -> str:
-        """
-        Transform robotic text into authentic Moroccan human speech.
-
-        Args:
-            text: The AI-generated Darija text
-            emotion: 'excitement', 'disappointment', 'laughter', 'thinking', 'love', 'anger'
-            intensity: 0.0-1.0 how human to make it
-
-        Returns:
-            Humanized text string
-        """
-        if not text or len(text) < 5:
-            return text
-
-        text = self.add_fillers(text, intensity=0.4 * intensity)
-        text = self.add_typing_imperfections(text)
-        text = self.code_switch(text, probability=0.15 * intensity)
-        text = self.add_mid_sentence_correction(text)
-        text = self.add_reaction_emoji(text, emotion=emotion)
-        text = self.abbreviate_common(text)
-        text = self.add_street_slang(text)
-        text = ' '.join(text.split())  # cleanup
-
-        return text
-
-    def humanize_match_report(self, text: str, result: str = 'W') -> str:
-        """Humanize match report based on result."""
-        emotion_map = {'W': 'excitement', 'L': 'disappointment', 'D': 'thinking'}
-        emotion = emotion_map.get(result, 'excitement')
-        return self.humanize(text, emotion=emotion, intensity=0.8)
-
-    def humanize_roast(self, text: str) -> str:
-        """Humanize roast text (more aggressive, more laughter)."""
-        return self.humanize(text, emotion='laughter', intensity=0.9)
-
-    def humanize_hype(self, text: str) -> str:
-        """Humanize hype text (maximum energy)."""
-        return self.humanize(text, emotion='excitement', intensity=0.95)
-
-    def humanize_banter(self, text: str) -> str:
-        """Humanize banter (toxic but funny)."""
-        return self.humanize(text, emotion='laughter', intensity=0.85)
-
-    def humanize_praise(self, text: str) -> str:
-        """Humanize praise (genuine but not robotic)."""
-        return self.humanize(text, emotion='love', intensity=0.6)
-
-
-# ============================================================
-# DISCORD BOT INTEGRATION — HumanizedDiscordBot
-# ============================================================
 
 class HumanizedDiscordBot:
-    """
-    Wrapper that adds humanization + realistic typing delays to your bot.
-    """
+    """Wrapper for Discord bot with humanized send."""
 
-    def __init__(self, bot_instance):
+    def __init__(self, bot_instance, intensity=0.6):
         self.bot = bot_instance
         self.humanizer = HumanDarija()
-        self.user_contexts = {}
+        self.intensity = intensity
 
-    async def send_humanized(self, channel, text: str, emotion: str = 'excitement',
-                            image=None, filename: str = "image.png",
-                            typing_time: Optional[int] = None):
-        """
-        Send a humanized message with realistic typing delay.
+    async def send(self, channel, text="", image=None, filename="image.png", emotion="thinking"):
+        """Send with humanization and realistic typing delay."""
+        text = (text or "").strip()
+        if not text and not image:
+            return
 
-        Usage: Replace `await ctx.send(text)` with:
-            await bot_wrapper.send_humanized(ctx.channel, text, emotion='excitement')
-        """
-        if typing_time is None:
-            word_count = len(text.split())
-            if word_count <= 3:
-                typing_time = random.randint(1, 3)
-            elif word_count <= 8:
-                typing_time = random.randint(3, 7)
-            else:
-                typing_time = random.randint(7, 15)
+        # Humanize
+        if text:
+            text = self.humanizer.humanize(text, emotion=emotion, intensity=self.intensity)
 
-        if len(text) > 100 and random.random() < 0.3:
-            typing_time += random.randint(2, 5)
+        # Calculate typing delay — SHORTER for pro style
+        word_count = len(text.split()) if text else 0
+        if word_count <= 5:
+            typing_time = random.randint(1, 2)
+        elif word_count <= 12:
+            typing_time = random.randint(2, 4)
+        else:
+            typing_time = random.randint(4, 7)
 
+        # Brief "thinking" pause for longer messages
+        if len(text) > 80 and random.random() < 0.2:
+            typing_time += random.randint(1, 2)
+
+        # Simulate typing
         async with channel.typing():
             await asyncio.sleep(typing_time)
 
-        humanized = self.humanizer.humanize(text, emotion=emotion)
-
+        # Send
         if image:
             image.seek(0)
-            import discord
             file = discord.File(image, filename=filename)
-            await channel.send(humanized[:1900] or None, file=file)
+            await channel.send(text[:1900] or None, file=file)
         else:
-            while humanized:
-                chunk, humanized = humanized[:2000], humanized[2000:]
-                await channel.send(chunk)
+            if len(text) <= 2000:
+                await channel.send(text)
+            else:
+                # Split at sentence boundaries
+                sentences = re.split(r"([.!?]+)", text)
+                chunks = []
+                current = ""
+                for s in sentences:
+                    if len(current) + len(s) < 1900:
+                        current += s
+                    else:
+                        if current:
+                            chunks.append(current.strip())
+                        current = s
+                if current:
+                    chunks.append(current.strip())
 
-    async def on_message_humanized(self, message):
-        """Handle incoming message with humanized response."""
-        if message.author == self.bot.user:
-            return
-
-        intent = self._detect_intent(message.content)
-        emotion = self._detect_emotion(message.content)
-        response = self._generate_response(intent, emotion)
-        await self.send_humanized(message.channel, response, emotion=emotion)
-
-    def _detect_intent(self, message: str) -> str:
-        msg = message.lower()
-        if any(w in msg for w in ['salam', 'ahlan', 'sba7', 'msa', 'hello', 'hi']):
-            return 'greeting'
-        elif any(w in msg for w in ['chokran', 'shokran', 'merci', 'thanks']):
-            return 'thanks'
-        elif any(w in msg for w in ['bye', 'bslama', 'thella', 'au revoir']):
-            return 'farewell'
-        elif '?' in msg or msg.startswith(('wach', '3lach', 'fin', 'ch7al', 'imta')):
-            return 'question'
-        else:
-            return 'statement'
-
-    def _detect_emotion(self, message: str) -> str:
-        msg = message.lower()
-        if any(w in msg for w in ['fr7an', 'zwin', 'mezian', 'good', 'happy', 'great']):
-            return 'excitement'
-        elif any(w in msg for w in ['khayb', 'mkta2eb', '3yit', 'bad', 'sad']):
-            return 'disappointment'
-        elif any(w in msg for w in ['haha', 'lol', 'mdr', '😂']):
-            return 'laughter'
-        else:
-            return 'excitement'
-
-    def _generate_response(self, intent: str, emotion: str) -> str:
-        responses = {
-            'greeting': [
-                "Salam! Kidayr?",
-                "Ahlan! Wach kat3awd?",
-                "Sba7 nnour! Kif rask?",
-                "Wach nta bikhir?",
-            ],
-            'thanks': [
-                "Walo! 3la rwah!",
-                "Machi mochkil! Hania!",
-                "Safi! Ghir 3la khater!",
-            ],
-            'farewell': [
-                "Bslama! Nchoufouk men ba3d!",
-                "Thella! Yallah!",
-                "Safi! Bslama 3likom!",
-            ],
-            'question': [
-                "Ma3rftch! Khlini nfekker!",
-                "Wakha! Nchouf!",
-                "Safi! Ghadi n9oul lik!",
-            ],
-            'statement': [
-                "Safi fhemt!",
-                "Wakha nchouf!",
-                "KanDen hadchi!",
-                "Ma3rftch!",
-            ],
-        }
-        return random.choice(responses.get(intent, responses['statement']))
+                for i, chunk in enumerate(chunks):
+                    await channel.send(chunk)
+                    if i < len(chunks) - 1:
+                        await asyncio.sleep(random.randint(1, 2))
