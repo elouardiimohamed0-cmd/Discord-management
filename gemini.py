@@ -1,6 +1,14 @@
 """
 Gemini AI content generator — Moroccan Darija football social media manager.
-Uses Groq API (Llama 3.1) with optimized prompts for authentic Darija output.
+Uses Groq API (Llama 3.1) with DODa-standard Darija prompts.
+
+DODa (Darija Open Dataset) transliteration standard:
+  3 = ع (ayn)    7 = ح (ha)     9 = ق (qaf)
+  8 = ه (ha)     5 = خ (kha)    ch = ش (shin)
+  gh = غ (ghayn)  kh = خ (kha)
+
+Key fix: System prompt now includes DODa-standard examples.
+No post-processing needed — AI generates clean Darija directly.
 """
 import asyncio
 import logging
@@ -25,7 +33,7 @@ async def _ask(prompt: str, max_tokens: int = 300):
             return client.chat.completions.create(
                 model="llama-3.1-8b-instant",
                 messages=[
-                    {"role": "system", "content": DARIJA_PERSONA},
+                    {"role": "system", "content": DODA_PERSONA},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.85,
@@ -40,11 +48,17 @@ async def _ask(prompt: str, max_tokens: int = 300):
         return None
 
 
-# ── SYSTEM PROMPT: Moroccan Darija Persona ───────────────────────────────────
+# ── DODa-STANDARD SYSTEM PROMPT — Moroccan Darija Persona ─────────────────────
 
-DARIJA_PERSONA = """
+DODA_PERSONA = """
 You are a Moroccan football social media manager for "Rachad L3ERGONI" Pro Clubs FC 26 team.
-You write EXCLUSIVELY in Moroccan Darija (street Arabic) — NOT Modern Standard Arabic.
+You write EXCLUSIVELY in Moroccan Darija using DODa (Darija Open Dataset) transliteration standard.
+
+══ DODA TRANSLITERATION RULES ══
+Use these standard mappings:
+  3 = ع (ayn)     7 = ح (ha)      9 = ق (qaf)
+  8 = ه (ha)      5 = خ (kha)     ch = ش (shin)
+  gh = غ (ghayn)  kh = خ (kha)    ou = و (waw)
 
 ══ HOW TO WRITE DARIJA ══
 - Write like a Moroccan talks on WhatsApp/Twitter about football
@@ -58,18 +72,21 @@ You write EXCLUSIVELY in Moroccan Darija (street Arabic) — NOT Modern Standard
 - Emojis max 3-4 per post: 💀😂🔥😭👏
 - Discord bold: **name** for important stats
 
-══ EXAMPLES OF GOOD DARIJA ══
-Win: "🔥 Rbe7na! L'équipe darat match mzyan bzf, l3adou ma 9derch y3ml walo! **Rachad** 9awi bzf!"
-Loss: "💀 Khsarna ya s7abi... Safi 3iyet mn had l7al. Defense kaytferrej gha, walo men walo!"
-Draw: "🟡 T3adl... Match khayb, midfield gha pass pass bla result. Safi 3iyet!"
-Roast: "🔥 Fin kan **Hamza**? Kaydour f terrain b7al tourist! Goal = mission impossible 💀"
-Hype: "💪 Ghadi nrbe7houm! Rachad L3ERGONI 9awya, mashi 3adiya! Yallah!"
+══ DODa-STANDARD EXAMPLES (copy this style exactly) ══
 
-══ RULES ══
+Win: "🔥 Rbe7na ya s7abi! L'équipe darat match mzyan bzf, l3adou ma 9derch y3ml walo! **Rachad** 9awi bzf!"
+Loss: "💀 Khsarna ya s7abi... Safi 3iyet mn had l7al. Defense kaytferrej gha, walo men walo! 3ib w 7chouma!"
+Draw: "🟡 T3adl... Safi 3iyet, match khayb bzf! Midfield gha pass pass bla result. Walo men walo!"
+Roast: "🔥 Fin kan **Hamza**? Kaydour f terrain b7al tourist! Goal = mission impossible walo men walo! 💀"
+Praise: "🔥 **Karim** dar match mzyan! Player kaykhdem, mashi b7al l3ab! Rating zwin bzf! 👏"
+Hype: "🔥 **RACHAD L3ERGONI!** Ghadi nrbe7houm walo men walo! 7na 7na walo ghayrina! 💪"
+
+══ IMPORTANT RULES ══
 - NO intro like "Voici" or "Je vais" — start directly with content
-- NO formal Arabic words like "لقد", "إنه", "جميل", "أداء"
+- NO formal Arabic words like "لقد", "إنه", "جميل", "أداء" — use Darija: "kan", "rbe7", "zwin", "mzyan"
 - Max 800 chars for long posts, 200 for short tweets
 - Be confident — you're the team SM manager, not an assistant
+- Use DODa standard: 3 for ع, 7 for ح, 9 for ق, ch for ش, gh for غ
 """
 
 
@@ -89,13 +106,13 @@ Match: {emoji} **{m['our_name']}** {m['our_goals']} — {m['opp_goals']} **{m['o
 Joueurs:
 {p_lines}
 
-Write a match report in Moroccan Darija:
+Write a match report in Moroccan Darija (DODa standard):
 1. One shocking opening line based on result (win=hype, loss=drama, draw="safi 3iyet")
 2. 2-3 sentences match summary in Moroccan commentator style
 3. MOTM praise — who was amazing
 4. If someone rated < 6.5, funny criticism: "fin kan had r7al?"
 5. Closing: epic if win, dramatic if loss
-Max 800 chars. Bold Discord. Darija street style.
+Max 800 chars. Bold Discord. Darija street style. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=700, situation=situation)
     if not result:
@@ -114,10 +131,10 @@ async def quick_report(m: dict) -> str:
     motm_info = f"MOTM: {best['name']} ({best['rating']:.1f}/10)" if best else ""
 
     prompt = f"""
-Quick match reaction in Moroccan Darija (2 sentences MAX):
+Quick match reaction in Moroccan Darija DODa standard (2 sentences MAX):
 {emoji} {m['our_name']} {m['our_goals']}-{m['opp_goals']} {m['opp_name']} ({m['result']})
 {motm_info}
-Punchline direct — how a Moroccan tweets football. Max 180 chars.
+Punchline direct — how a Moroccan tweets football. Max 180 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=150, situation="general")
     fallback = f"{emoji} **{m['our_goals']}-{m['opp_goals']}** vs {m['opp_name']} — {motm_info}"
@@ -132,10 +149,10 @@ async def motm_post(m: dict) -> str | None:
     best = m["players"][0]
 
     prompt = f"""
-MOTM post in Moroccan Darija (max 200 chars, tweet style):
+MOTM post in Moroccan Darija DODa standard (max 200 chars, tweet style):
 **{best['name']}** | {best['rating']:.1f}/10 | {best['goals']}G {best['assists']}A
 Match: {m['our_goals']}-{m['opp_goals']} vs {m['opp_name']}
-Start with 🌟 MOTM: — natural hype, not robotic.
+Start with 🌟 MOTM: — natural hype, not robotic. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=180, situation="praise")
     return result or f"🌟 **MOTM: {best['name']}** — {best['rating']:.1f}/10 ({best['goals']}G {best['assists']}A) 🔥"
@@ -148,7 +165,7 @@ async def funny_reactions(m: dict) -> list[str]:
     outcome = "WIN" if m["result"] == "W" else ("DRAW" if m["result"] == "D" else "LOSS")
 
     prompt = f"""
-3 tweets in Moroccan Darija about this match:
+3 tweets in Moroccan Darija DODa standard about this match:
 {m['our_name']} {m['our_goals']}-{m['opp_goals']} {m['opp_name']} ({outcome})
 Joueurs: {p_highlights or 'bla stats'}
 
@@ -161,7 +178,7 @@ Energy:
 - TWEET1: pride/hype if win, drama if loss
 - TWEET2: trash talk opponent or self-roast
 - TWEET3: funny/absurd reaction or "fin kan X?"
-Darija street, natural French mix.
+Darija street, natural French mix. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=350, situation="general")
     tweets = []
@@ -180,9 +197,9 @@ async def reaction_post(m: dict) -> str:
     outcome = "WIN" if m["result"] == "W" else ("DRAW" if m["result"] == "D" else "LOSS")
 
     prompt = f"""
-WhatsApp/Twitter reaction in Moroccan Darija:
+WhatsApp/Twitter reaction in Moroccan Darija DODa standard:
 {emoji} {m['our_goals']}-{m['opp_goals']} vs {m['opp_name']} ({outcome})
-Max 150 chars, punch direct — win=hype, loss="t7ashsham", draw="safi 3iyet".
+Max 150 chars, punch direct — win=hype, loss="t7ashsham", draw="safi 3iyet". Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=120, situation="general")
     return result or f"{emoji} {m['our_goals']}-{m['opp_goals']} vs {m['opp_name']} 🔥"
@@ -204,7 +221,7 @@ async def five_match_summary(matches: list[dict]) -> str:
     )
 
     prompt = f"""
-5-match summary in Moroccan Darija:
+5-match summary in Moroccan Darija DODa standard:
 
 {results_block}
 W{wins} D{draws} L{losses} | {gf} buts pour / {ga} contre | Forme: {form}
@@ -215,7 +232,7 @@ Include:
 3. Honest verdict "wakha golha": good or bad?
 4. Best match + worst match with comment
 5. Closing motivating or critical based on results
-Max 800 chars.
+Max 800 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=650, situation="general")
     if result:
@@ -246,7 +263,7 @@ async def top_performers(matches: list[dict], members: list = None) -> str:
     rating_lines = "\n".join(f"- {p['name']}: {p['avg_rating']:.2f}/10" for p in top_rated)
 
     prompt = f"""
-Rankings in Moroccan Darija (last 5 matches):
+Rankings in Moroccan Darija DODa standard (last 5 matches):
 
 🥇 Scorers:
 {scorer_lines}
@@ -259,7 +276,7 @@ Rankings in Moroccan Darija (last 5 matches):
 
 SM post in Darija — medals 🥇🥈🥉, Discord bold, funny/toxic comment per player.
 If someone did nothing → "fin kan had r7al?" energy.
-Max 650 chars.
+Max 650 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=550, situation="praise")
     return result or f"🏅 **Top Performers**\n{scorer_lines}"
@@ -279,7 +296,7 @@ async def team_of_the_week(matches: list[dict]) -> tuple[str, list[tuple[str, fl
     )
 
     prompt = f"""
-Team of the Week in Moroccan Darija:
+Team of the Week in Moroccan Darija DODa standard:
 
 Top players:
 {player_lines}
@@ -289,7 +306,7 @@ Write:
 2. 11 players with positions (GK/DEF/MID/ATT) — bold Discord
 3. Comment on top 3 (good or bad? say it!)
 4. Closing hype for the team
-Discord bold, max 750 chars.
+Discord bold, max 750 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=650, situation="praise")
     text = result or "🏆 **TEAM OF THE WEEK**\n" + "\n".join(f"⭐ **{n}** — {r:.2f}/10" for n, r in player_tuples)
@@ -313,7 +330,7 @@ async def roast(player_name: str, matches: list[dict], members: list = None) -> 
         stats_block = f"'{player_name}' — machi f l'équipe daba ou gha ma3rftoch 👀"
 
     prompt = f"""
-BRUTAL but funny roast in Moroccan Darija Twitter style:
+BRUTAL but funny roast in Moroccan Darija DODa standard Twitter style:
 Player: {player_name}
 Stats: {stats_block}
 
@@ -323,7 +340,7 @@ Rules:
 - Punchline: "kaydribble o kaydribble walakin l-goal = mission impossible, walo men wlo 😂"
 - If rating < 6 → "sir t3llm lkora qbel matji" energy
 - End with one funny reconciliation line ("walakin 7na kanhibok s7abi 😂")
-- Max 280 chars, immediate punch
+- Max 280 chars, immediate punch. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=250, situation="roast")
     return f"🔥 **ROAST: {player_name}**\n\n{result or f'{player_name} khaf mn lroast hahaha 😅'}"
@@ -343,9 +360,9 @@ async def cheer(player_name: str, matches: list[dict]) -> str:
         stats_block = "joueur dial l'équipe 💪"
 
     prompt = f"""
-Appreciation post in Moroccan Darija for {player_name}:
+Appreciation post in Moroccan Darija DODa standard for {player_name}:
 Stats: {stats_block}
-Style: hyped fan, exaggerated praise like talking to friends, funny but sincere. Max 200 chars.
+Style: hyped fan, exaggerated praise like talking to friends, funny but sincere. Max 200 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=180, situation="praise")
     return f"👏 **{player_name}**\n\n{result or f'Rah {player_name} kaydiri 7wayed! 💪🔥'}"
@@ -360,9 +377,9 @@ async def banter(matches: list[dict] = None) -> str:
         context = f"Last match: {last['our_goals']}-{last['opp_goals']} vs {last['opp_name']} ({last['result']})"
 
     prompt = f"""
-Trash talk post in Moroccan Darija football Twitter:
+Trash talk post in Moroccan Darija DODa standard football Twitter:
 {context}
-Style: provocation, slightly toxic — "Ma3ndhomch shi y3mlo kontra 7na" energy. Max 220 chars.
+Style: provocation, slightly toxic — "Ma3ndhomch shi y3mlo kontra 7na" energy. Max 220 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=200, situation="general")
     return result or "😈 Rachad L3ERGONI — kol chi ghadi ye3raf men hna! 🔥"
@@ -377,9 +394,9 @@ async def meme_post(matches: list[dict] = None) -> str:
         last_result = f"Last: {m['our_goals']}-{m['opp_goals']} vs {m['opp_name']} ({m['result']})"
 
     prompt = f"""
-Meme football post in Moroccan Darija for Rachad L3ERGONI.
+Meme football post in Moroccan Darija DODa standard for Rachad L3ERGONI.
 {last_result}
-Style: Moroccan meme format ("Rachad L3ERGONI f attack: ✅ f defense: ✅ f..." or "had l-équipe waqila..." or "ana o s7abi wqt..."), situational football humor. Max 200 chars.
+Style: Moroccan meme format ("Rachad L3ERGONI f attack: ✅ f defense: ✅ f..." or "had l-équipe waqila..." or "ana o s7abi wqt..."), situational football humor. Max 200 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=180, situation="general")
     return f"😂 {result or 'Rachad L3ERGONI quand yji lmatch final: 💪🔥'}"
@@ -395,8 +412,8 @@ async def drama_post(matches: list[dict] = None) -> str:
         context = "saison en cours"
 
     prompt = f"""
-Drama/controversy post in Moroccan Darija about: {context}
-Style: exaggerated, theatrical, like Moroccan Twitter on a big scandal — "ma9dl t9addar walo", "kif kik f kol match", "والله ما صدقت" energy. Max 220 chars.
+Drama/controversy post in Moroccan Darija DODa standard about: {context}
+Style: exaggerated, theatrical, like Moroccan Twitter on a big scandal — "ma9dl t9addar walo", "kif kik f kol match", "والله ما صدقت" energy. Max 220 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=190, situation="general")
     return f"😱 {result or 'DRAMA f Rachad L3ERGONI! Chi 7aja waqe3at! 😱'}"
@@ -406,10 +423,10 @@ Style: exaggerated, theatrical, like Moroccan Twitter on a big scandal — "ma9d
 
 async def hype_post(context: str = "") -> str:
     prompt = f"""
-Hype/motivation post in Moroccan Darija for Rachad L3ERGONI.
+Hype/motivation post in Moroccan Darija DODa standard for Rachad L3ERGONI.
 {f'Context: {context}' if context else 'Pre-match motivation.'}
 Style: war cry, ultra confident, rally the team — "7na 7na walo ghayrina" energy.
-Max 220 chars, punch direct.
+Max 220 chars, punch direct. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=200, situation="hype")
     return result or "🔥 RACHAD L3ERGONI — MA3NDHOMCH SHI Y3MLO KONTRA! LET'S GO! 💪⚽"
@@ -424,7 +441,7 @@ async def match_prediction(opponent: str, recent_matches: list[dict]) -> str:
     form = "".join(m["result"] for m in recent_matches[:5])
 
     prompt = f"""
-Prediction in Moroccan Darija: Rachad L3ERGONI vs {opponent}
+Prediction in Moroccan Darija DODa standard: Rachad L3ERGONI vs {opponent}
 Form: {form} | W{wins} L{losses} | {gf} buts scored
 
 Include:
@@ -432,7 +449,7 @@ Include:
 2. Funny tactical analysis in Darija (1-2 sentences)
 3. Key player for the match
 4. Confident verdict — "ghadi n9lb fihom" or "mochkil 3lihom"
-Max 280 chars.
+Max 280 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=250, situation="general")
     return f"🎯 **PREDICTION: vs {opponent}**\n\n{result or 'Le7ya khaf ye-predict 😅'}"
@@ -451,10 +468,10 @@ async def transfer_rumor(members: list = None, matches: list[dict] = None) -> st
     players_str = ", ".join(players) if players else "nos stars"
 
     prompt = f"""
-FAKE transfer rumor (entertainment) in Moroccan Darija:
+FAKE transfer rumor (entertainment) in Moroccan Darija DODa standard:
 Players: {players_str}
 Style: 🚨 EXCLU, dramatic Moroccan journalist, completely invented but credible.
-"Sma3t mn masdar mowataq" energy. Max 220 chars.
+"Sma3t mn masdar mowataq" energy. Max 220 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=200, situation="general")
     return f"🚨 **TRANSFER NEWS**\n\n{result or '🚨 EXCLU: Rachad L3ERGONI f discussions ma3 club kayn! 👀'}"
@@ -467,10 +484,10 @@ async def breaking_news(matches: list[dict] = None, members: list = None) -> str
         context = f"Last result: {m['our_goals']}-{m['opp_goals']} vs {m['opp_name']}"
 
     prompt = f"""
-"Breaking News" style in Moroccan Darija about Rachad L3ERGONI:
+"Breaking News" style in Moroccan Darija DODa standard about Rachad L3ERGONI:
 {context}
 Style: dramatic Moroccan journalist, BREAKING urgent, "wakha golha" energy.
-Can be result, performance, or invented funny rumor. Max 220 chars.
+Can be result, performance, or invented funny rumor. Max 220 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=200, situation="general")
     return f"📰 **BREAKING**\n\n{result or '📰 BREAKING: Rachad L3ERGONI kadir 7wayed f l-saison! 🔥'}"
@@ -492,7 +509,7 @@ async def form_analysis(matches: list[dict]) -> str:
     )
 
     prompt = f"""
-Form analysis in Moroccan Darija ({len(matches)} matches):
+Form analysis in Moroccan Darija DODa standard ({len(matches)} matches):
 
 {results_block}
 W{wins} D{draws} L{losses} | +{gf} -{ga} | Form: {form}
@@ -501,7 +518,7 @@ W{wins} D{draws} L{losses} | +{gf} -{ga} | Form: {form}
 2. Offense + defense in Darija, honest
 3. Trend for next match
 4. Funny tactical advice or criticism
-Max 450 chars.
+Max 450 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=380, situation="general")
     return f"📈 **ANALYSE DE FORME**\n\n{result or f'W{wins} D{draws} L{losses} — Form: {form}'}"
@@ -521,14 +538,14 @@ async def player_form(player_name: str, matches: list[dict]) -> str:
     ratings_str = " → ".join(f"{r:.1f}" for r in s.get("ratings", []))
 
     prompt = f"""
-Individual form analysis in Moroccan Darija for {player_name}:
+Individual form analysis in Moroccan Darija DODa standard for {player_name}:
 {s['games']} matches | {s['goals']}G {s['assists']}A | Rating: {s['avg_rating']:.2f}/10
 Ratings: {ratings_str or 'N/A'}
 
 1. Verdict: "f7al" / "3adl" / "khas y7ssen" with honest comment
 2. Strength + weakness in Darija
 3. Funny WhatsApp reaction from friends
-Max 300 chars.
+Max 300 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=260, situation="general")
     fallback = f"{s['goals']}G {s['assists']}A {s['avg_rating']:.2f}/10 avg"
@@ -546,14 +563,14 @@ async def insights(matches: list[dict]) -> str:
     biggest_loss = min(matches, key=lambda m: m["our_goals"] - m["opp_goals"], default=None)
 
     prompt = f"""
-Insights in Moroccan Darija (last {len(matches)} matches):
+Insights in Moroccan Darija DODa standard (last {len(matches)} matches):
 W{wins} L{losses} | {gf} buts pour / {ga} contre
 Biggest win: {biggest_win['our_goals'] if biggest_win else '?'}-{biggest_win['opp_goals'] if biggest_win else '?'} vs {biggest_win['opp_name'] if biggest_win else '?'}
 Biggest loss: {biggest_loss['our_goals'] if biggest_loss else '?'}-{biggest_loss['opp_goals'] if biggest_loss else '?'} vs {biggest_loss['opp_name'] if biggest_loss else '?'}
 
 3-4 interesting insights on game patterns, data analyst + funny Darija style.
 "Wakha golha" energy — honest but not too harsh.
-Max 450 chars.
+Max 450 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=380, situation="general")
     return f"🔍 **INSIGHTS**\n\n{result or f'W{wins} L{losses} | {gf} pour / {ga} contre'}"
@@ -571,14 +588,14 @@ async def trends(matches: list[dict]) -> str:
     top_scorer   = max(agg.values(), key=lambda x: x["goals"], default=None) if agg else None
 
     prompt = f"""
-Trends in Moroccan Darija for Rachad L3ERGONI:
+Trends in Moroccan Darija DODa standard for Rachad L3ERGONI:
 Results: {results_str}
 Goals scored: {gf_per_match}
 Goals conceded: {ga_per_match}
 Top scorer: {top_scorer['name'] if top_scorer else '?'} ({top_scorer['goals'] if top_scorer else 0} goals)
 
 Trends (scoring, conceding, momentum) — analyst style in Darija, honest but not a sermon.
-Max 400 chars.
+Max 400 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=350, situation="general")
     return f"📉📈 **TRENDS**\n\n{result or f'Résultats: {results_str}'}"
@@ -598,12 +615,12 @@ async def stat_of_day(matches: list[dict]) -> str:
     wins = sum(1 for m in matches if m["result"] == "W")
 
     prompt = f"""
-"Stat of the Day" in Moroccan Darija:
+"Stat of the Day" in Moroccan Darija DODa standard:
 Top scorer: {top_scorer['name'] if top_scorer else '?'} ({top_scorer['goals'] if top_scorer else 0} goals)
 Best rated: {top_rated['name'] if top_rated else '?'} ({top_rated['avg_rating']:.2f}/10 avg)
 Total goals: {total_goals} f {len(matches)} matches | Wins: {wins}
 
-Pick the most impressive stat, present it SM infographic style in Darija. Max 180 chars.
+Pick the most impressive stat, present it SM infographic style in Darija. Max 180 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=160, situation="general")
     return f"📊 **STAT DU JOUR**\n\n{result or f'⚽ {total_goals} buts f {len(matches)} matchs — {wins} victoires'}"
@@ -623,10 +640,10 @@ async def player_spotlight(player_name: str, matches: list[dict]) -> str:
 
     s = agg[player_key]
     prompt = f"""
-Player spotlight in Moroccan Darija: **{s['name']}**
+Player spotlight in Moroccan Darija DODa standard: **{s['name']}**
 {s['games']} matches | {s['goals']}G {s['assists']}A | {s['avg_rating']:.2f}/10 avg
 
-SM player profile: sincere compliments + small funny jabs in Darija. Max 250 chars.
+SM player profile: sincere compliments + small funny jabs in Darija. Max 250 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=220, situation="praise")
     fallback = f"{s['goals']}G {s['assists']}A {s['avg_rating']:.2f}/10 avg"
@@ -653,10 +670,10 @@ async def top_scorer_post(matches: list[dict], members: list = None) -> str:
     )
 
     prompt = f"""
-Top scorers post in Moroccan Darija:
+Top scorers post in Moroccan Darija DODa standard:
 {scorer_lines}
 
-SM ranking post in Darija, funny comment for #1, shout-out or jab for others. Max 400 chars.
+SM ranking post in Darija, funny comment for #1, shout-out or jab for others. Max 400 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=350, situation="praise")
     return f"⚽ **TOP SCORERS**\n\n{result or scorer_lines}"
@@ -682,10 +699,10 @@ async def top_assists_post(matches: list[dict], members: list = None) -> str:
     )
 
     prompt = f"""
-Top assisters post in Moroccan Darija:
+Top assisters post in Moroccan Darija DODa standard:
 {assist_lines}
 
-SM ranking post in Darija, comment on the team's passer. Max 350 chars.
+SM ranking post in Darija, comment on the team's passer. Max 350 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=300, situation="general")
     return f"🎯 **TOP ASSISTS**\n\n{result or assist_lines}"
@@ -701,10 +718,10 @@ async def mvp_post(matches: list[dict]) -> str:
 
     mvp = max(agg.values(), key=lambda x: x["avg_rating"] + x["goals"] * 0.5 + x["assists"] * 0.3)
     prompt = f"""
-MVP post in Moroccan Darija for: **{mvp['name']}**
+MVP post in Moroccan Darija DODa standard for: **{mvp['name']}**
 {mvp['goals']}G {mvp['assists']}A | {mvp['avg_rating']:.2f}/10 avg | {mvp['games']} matchs
 
-Style: maximum hype coronation, "had r7al kaykhdem bzzaf" energy. Max 250 chars.
+Style: maximum hype coronation, "had r7al kaykhdem bzzaf" energy. Max 250 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=220, situation="praise")
     fallback = f"{mvp['goals']}G {mvp['assists']}A — {mvp['avg_rating']:.2f}/10 💪"
@@ -730,14 +747,14 @@ async def compare_players(p1_name: str, p2_name: str, matches: list[dict]):
         return f"❌ Ma3endnach stats dial **{p2_name}**.", None, None
 
     prompt = f"""
-Head-to-head in Moroccan Darija Twitter style:
+Head-to-head in Moroccan Darija DODa standard Twitter style:
 **{s1['name']}**: {s1['goals']}G {s1['assists']}A | {s1['avg_rating']:.2f}/10 | {s1['games']} matchs
 **{s2['name']}**: {s2['goals']}G {s2['assists']}A | {s2['avg_rating']:.2f}/10 | {s2['games']} matchs
 
 1. Epic battle title in Darija
 2. Stats side-by-side (Discord table ✅❌)
 3. Final funny/toxic verdict — say it confidently, not "both are good"
-Max 400 chars.
+Max 400 chars. Use DODa: 3,7,9,ch,gh.
 """
     result = await ask_and_clean(_ask, prompt, max_tokens=380, situation="general")
     if not result:
