@@ -1,15 +1,12 @@
 """
 Rachad L3ERGONI — Perfect Pro Clubs Bot
-Features from AllCalculatedRoast + Direct EA API + Clean Darija
-- Auto-detect matches every 30 min
-- MVP photos with stats
-- Simple commands
-- No spam
+Combines: Your Darija + AllCalculatedRoast features + Direct EA API
 """
 import os
 import io
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 
 import discord
@@ -18,6 +15,7 @@ from discord.ext import commands, tasks
 import ea_api
 import gemini
 import image_gen
+import achievements
 from state import load_seen, save_seen
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -28,15 +26,20 @@ if not TOKEN:
     raise ValueError("DISCORD_TOKEN not set!")
 
 # ─── CONFIG ───
-CHECK_INTERVAL = 30  # minutes
 MATCH_CHANNEL_ID = int(os.environ.get("MATCH_CHANNEL_ID", 0)) or None
+POLL_MINUTES = 5      # Check every 5 min when session active
+TIMEOUT_MINUTES = 45  # Auto-stop after 45 min idle
 
 # ─── BOT ───
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
+# ─── STATE ───
 seen_matches = set()
+_session_active = False
+_last_match_id = None
+_last_activity_ts = 0.0
 client = ea_api.get_client()
 
 # ─── HELPERS ───
@@ -57,88 +60,156 @@ async def _send(ch, text="", image=None, filename="image.png"):
             await ch.send(chunk)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# AUTO MATCH DETECTION (Every 30 min)
+# SESSION POLLING (Like AllCalculatedRoast !roast command)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@tasks.loop(minutes=CHECK_INTERVAL)
-async def check_matches():
-    """Auto-detect new matches. Only post if NEW match found."""
-    global seen_matches
+@tasks.loop(minutes=POLL_MINUTES)
+async def poll_matches():
+    """Poll EA every 5 min during active session. Auto-stop after 45 min idle."""
+    global _session_active, _last_activity_ts, _last_match_id
+    
+    if not _session_active:
+        return
+    
+    # Check timeout
+    idle_min = (time.monotonic() - _last_activity_ts) / 60
+    if idle_min >= TIMEOUT_MINUTES:
+        await _stop_session("timeout")
+        return
+    
+    # Fetch from EA
+    try:
+        raw = await client.get_matches(1)
+        if not raw:
+            return
+        
+        mid = ea_api.get_match_id(raw[0])
+        if mid == _last_match_id:
+            return  # No new match
+        
+        # NEW MATCH!
+        _last_match_id = mid
+        _last_activity_ts = time.monotonic()
+        logger.info(f"🆕 New match: {mid}")
+        
+        m = ea_api.parse_match(raw[0])
+        await _post_match(_match_channel(), m)
+        
+    except Exception as e:
+        logger.error(f"Poll error: {e}")
+
+@poll_matches.before_loop
+async def before_poll():
+    await bot.wait_until_ready()
+
+async def _start_session(channel):
+    """Start session monitoring."""
+    global _session_active, _last_activity_ts, _last_match_id
+    
+    if _session_active:
+        await channel.send("⏳ Session déjà active!")
+        return
+    
+    # Get baseline
+    try:
+        raw = await client.get_matches(1)
+        _last_match_id = ea_api.get_match_id(raw[0]) if raw else None
+    except:
+        _last_match_id = None
+    
+    _session_active = True
+    _last_activity_ts = time.monotonic()
+    
+    if not poll_matches.is_running():
+        poll_matches.start()
+    
+    await channel.send(
+        "🎮 **Session démarrée!**\\n"
+        f"• Check every {POLL_MINUTES} min\\n"
+        f"• Auto-stop après {TIMEOUT_MINUTES} min d'inactivité\\n"
+        f"• Type `!stop` pour arrêter manuellement"
+    )
+
+async def _stop_session(reason="manual"):
+    """Stop session."""
+    global _session_active
+    _session_active = False
+    if poll_matches.is_running():
+        poll_matches.stop()
+    
     ch = _match_channel()
     if not ch:
         return
     
-    try:
-        raw_matches = await client.get_matches(5)
-        if not raw_matches:
-            return
-        
-        new_matches = []
-        for r in raw_matches:
-            mid = ea_api.get_match_id(r)
-            if mid and mid not in seen_matches:
-                new_matches.append(r)
-                seen_matches.add(mid)
-        
-        if new_matches:
-            save_seen(seen_matches)
-            logger.info(f"🆕 {len(new_matches)} new match(es)")
-            
-            # Post ONLY the most recent new match
-            m = ea_api.parse_match(new_matches[0])
-            await _post_match(ch, m)
-            
-    except Exception as e:
-        logger.error(f"Check error: {e}")
+    if reason == "timeout":
+        await ch.send(
+            "⏹️ **Session terminée**\\n"
+            f"Pas de nouveau match depuis {TIMEOUT_MINUTES} min.\\n"
+            "Type `!roast` quand tu rejoues!"
+        )
+    else:
+        await ch.send("⏹️ **Session arrêtée**")
 
 async def _post_match(ch, m):
-    """Post match: report + MOTM photo. Clean and simple."""
+    """Post match with achievements and MOTM photo."""
     try:
-        # 1. Match Report (short, clean)
+        # 1. Match Header
+        emoji = "🟢" if m["result"] == "W" else "🟡" if m["result"] == "D" else "🔴"
+        header = f"{emoji} **{m['our_goals']}-{m['opp_goals']}** vs **{m['opp_name']}**"
+        await ch.send(header)
+        
+        # 2. Player Badges (Achievements/Curses)
+        if m.get("players"):
+            badge_lines = []
+            for p in m["players"]:
+                badges = achievements.evaluate_player(p)
+                badge_str = achievements.format_badges(badges)
+                if badge_str:
+                    badge_lines.append(f"**{p['name']}** {badge_str}")
+            
+            if badge_lines:
+                await ch.send("🏅 **Badges:**\\n" + "\\n".join(badge_lines[:5]))
+        
+        # 3. Short AI Report (max 3 lines)
         report = await gemini.match_report(m)
-        report = _clean_length(report, max_lines=5)
+        report = _clean_lines(report, 3)
+        await ch.send(report)
         
-        # 2. Match Poster
-        loop = asyncio.get_event_loop()
-        poster = await loop.run_in_executor(
-            None,
-            image_gen.make_match_poster,
-            m["our_name"], m["opp_name"],
-            m["our_goals"], m["opp_goals"], m["date"]
-        )
-        
-        await _send(ch, report, poster, f"match_{m['our_goals']}_{m['opp_goals']}.png")
-        await asyncio.sleep(2)
-        
-        # 3. MOTM with Photo (always)
+        # 4. MOTM Photo
         if m.get("players"):
             best = m["players"][0]
-            motm_text = (
-                f"🌟 **MOTM: {best['name']}**\\n"
-                f"⭐ {best['rating']:.1f}/10 | ⚽ {best['goals']}G | 🎯 {best['assists']}A"
-            )
+            motm_text = f"🌟 **MOTM: {best['name']}** ⭐ {best['rating']:.1f}/10"
             
+            loop = asyncio.get_event_loop()
             motm_img = await loop.run_in_executor(
                 None,
                 image_gen.make_motm_card,
                 best["name"], best["rating"], best["goals"], best["assists"],
                 f"vs {m['opp_name']}"
             )
-            
             await _send(ch, motm_text, motm_img, "motm.png")
             
     except Exception as e:
         logger.error(f"Post error: {e}")
-        await ch.send(f"⚠️ Match {m['our_goals']}-{m['opp_goals']} vs {m['opp_name']}")
 
-def _clean_length(text, max_lines=5):
-    """Keep text short and clean."""
+def _clean_lines(text, max_lines=3):
+    """Keep only first N lines."""
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     return '\n'.join(lines[:max_lines])
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# COMMANDS (Simple & Clear)
+# COMMANDS
 # ═══════════════════════════════════════════════════════════════════════════════
+
+@bot.command(name="roast")
+async def cmd_roast_session(ctx):
+    """Start session monitoring (like AllCalculatedRoast)."""
+    await _start_session(ctx.channel)
+
+@bot.command(name="stop")
+async def cmd_stop(ctx):
+    """Stop session monitoring."""
+    await _stop_session("manual")
 
 @bot.command(name="lastmatch")
 async def cmd_lastmatch(ctx):
@@ -146,16 +217,16 @@ async def cmd_lastmatch(ctx):
     async with ctx.typing():
         raw = await client.get_matches(1)
         if not raw:
-            await ctx.send("❌ Ma3endnach match daba 😴")
+            await ctx.send("❌ Ma3endnach match 😴")
             return
         m = ea_api.parse_match(raw[0])
         await _post_match(ctx.channel, m)
 
 @bot.command(name="match")
 async def cmd_match(ctx, num: int = 1):
-    """Specific match (1=last, 2=before, etc.)."""
+    """Specific match (1=last, 2=before...)."""
     if num < 1 or num > 10:
-        await ctx.send("❌ Ghir bin 1 w 10 😅")
+        await ctx.send("❌ Ghir bin 1 w 10")
         return
     async with ctx.typing():
         raw = await client.get_matches(10)
@@ -167,11 +238,11 @@ async def cmd_match(ctx, num: int = 1):
 
 @bot.command(name="results")
 async def cmd_results(ctx):
-    """Quick table: last 10 results."""
+    """Quick results table."""
     async with ctx.typing():
         raw = await client.get_matches(10)
         if not raw:
-            await ctx.send("❌ Ma3endnach data 😴")
+            await ctx.send("❌ Ma3endnach data")
             return
         lines = ["📋 **RESULTATS**", ""]
         for i, r in enumerate(raw, 1):
@@ -182,7 +253,7 @@ async def cmd_results(ctx):
 
 @bot.command(name="player")
 async def cmd_player(ctx, *, name: str = ""):
-    """Player stats from last 5 matches. Usage: !player Hamza"""
+    """Player stats. Usage: !player Hamza"""
     if not name:
         await ctx.send("❌ Kteb ism: `!player Hamza`")
         return
@@ -192,7 +263,7 @@ async def cmd_player(ctx, *, name: str = ""):
         agg = ea_api.aggregate_stats(matches)
         key = next((k for k in agg if name.lower() in k.lower()), None)
         if not key:
-            await ctx.send(f"❌ **{name}** — ma3endnach stats 😴")
+            await ctx.send(f"❌ **{name}** — ma3endnach stats")
             return
         s = agg[key]
         lines = [
@@ -207,9 +278,10 @@ async def cmd_player(ctx, *, name: str = ""):
 async def cmd_players(ctx):
     """Full squad list."""
     async with ctx.typing():
-        members = await client.get_members()
+        info = await client.get_club_info()
+        members = info.get("members", [])
         if not members:
-            await ctx.send("❌ Ma3endnach data 😴")
+            await ctx.send("❌ Ma3endnach data")
             return
         lines = ["👥 **SQUAD**", ""]
         for m in sorted(members, key=lambda x: float(x.get("ratingAve", 0) or 0), reverse=True)[:15]:
@@ -224,20 +296,19 @@ async def cmd_players(ctx):
 
 @bot.command(name="mvp")
 async def cmd_mvp(ctx):
-    """MVP photo + stats (last 5 matches)."""
+    """MVP photo + stats (last 5)."""
     async with ctx.typing():
         raw = await client.get_matches(5)
         matches = [ea_api.parse_match(r) for r in raw]
         if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
+            await ctx.send("❌ Ma3endnach data")
             return
         agg = ea_api.aggregate_stats(matches)
         if not agg:
-            await ctx.send("❌ Ma3endnach stats 😴")
+            await ctx.send("❌ Ma3endnach stats")
             return
         mvp = max(agg.values(), key=lambda x: x["avg_rating"] + x["goals"] * 0.5 + x["assists"] * 0.3)
         
-        # Generate MVP photo
         loop = asyncio.get_event_loop()
         mvp_img = await loop.run_in_executor(
             None,
@@ -253,17 +324,17 @@ async def cmd_mvp(ctx):
         )
         await _send(ctx.channel, text, mvp_img, "mvp.png")
 
-@bot.command(name="roast")
-async def cmd_roast(ctx, *, name: str = ""):
-    """Roast a player. Usage: !roast Hamza 🔥"""
+@bot.command(name="roastplayer")
+async def cmd_roast_player(ctx, *, name: str = ""):
+    """Roast a player with stats. Usage: !roastplayer Hamza 🔥"""
     if not name:
-        await ctx.send("❌ Kteb ism: `!roast Hamza`")
+        await ctx.send("❌ Kteb ism: `!roastplayer Hamza`")
         return
     async with ctx.typing():
         raw = await client.get_matches(5)
         matches = [ea_api.parse_match(r) for r in raw]
         text = await gemini.roast(name, matches)
-        text = _clean_length(text, max_lines=4)
+        text = _clean_lines(text, 4)
         await ctx.send(text[:2000])
 
 @bot.command(name="stats")
@@ -284,92 +355,32 @@ async def cmd_stats(ctx):
             f"⚽ Goals: **{s.get('goals', '?')}** / **{s.get('goalsAgainst', '?')}**",
             f"🎯 Skill Rating: **{s.get('skillRating', '?')}**",
             f"🏅 Best Division: **Div {s.get('bestDivision', '?')}**",
-            f"🔗 proclubstracker.com/club/{ea_api.CLUB_ID}?platform={ea_api.PLATFORM}",
-        ]
-        await ctx.send("\n".join(lines))
-
-@bot.command(name="compare")
-async def cmd_compare(ctx, p1: str = "", *, p2: str = ""):
-    """Compare 2 players. Usage: !compare Hamza Karim"""
-    if not p1 or not p2:
-        await ctx.send("❌ Usage: `!compare Hamza Karim`")
-        return
-    async with ctx.typing():
-        raw = await client.get_matches(5)
-        matches = [ea_api.parse_match(r) for r in raw]
-        agg = ea_api.aggregate_stats(matches)
-        s1 = next((agg[k] for k in agg if p1.lower() in k.lower()), None)
-        s2 = next((agg[k] for k in agg if p2.lower() in k.lower()), None)
-        if not s1 or not s2:
-            await ctx.send("❌ Ma3endnach stats dial wa7ed menhoum 😴")
-            return
-        
-        # Generate comparison image
-        loop = asyncio.get_event_loop()
-        compare_img = await loop.run_in_executor(
-            None,
-            image_gen.make_comparison_card,
-            s1, s2
-        )
-        
-        winner = s1["name"] if s1["avg_rating"] >= s2["avg_rating"] else s2["name"]
-        text = (
-            f"⚔️ **{s1['name']}** vs **{s2['name']}**\\n"
-            f"⚽ Goals: {s1['goals']} vs {s2['goals']}\\n"
-            f"🎯 Assists: {s1['assists']} vs {s2['assists']}\\n"
-            f"⭐ Rating: {s1['avg_rating']:.2f} vs {s2['avg_rating']:.2f}\\n"
-            f"🏆 **{winner}** wins!"
-        )
-        await _send(ctx.channel, text, compare_img, f"compare_{p1}_{p2}.png")
-
-@bot.command(name="form")
-async def cmd_form(ctx):
-    """Team form (last 5 matches)."""
-    async with ctx.typing():
-        raw = await client.get_matches(5)
-        matches = [ea_api.parse_match(r) for r in raw]
-        if not matches:
-            await ctx.send("❌ Ma3endnach data 😴")
-            return
-        results = "".join(m["result"] for m in matches)
-        wins = sum(1 for m in matches if m["result"] == "W")
-        losses = sum(1 for m in matches if m["result"] == "L")
-        gf = sum(m["our_goals"] for m in matches)
-        ga = sum(m["opp_goals"] for m in matches)
-        
-        lines = [
-            f"📈 **FORM — Last 5**",
-            f"**{results}** | W{wins} L{losses}",
-            f"⚽ {gf} pour / {ga} contre",
         ]
         await ctx.send("\n".join(lines))
 
 @bot.command(name="help")
 async def cmd_help(ctx):
-    """Show all commands."""
     lines = [
         "⚽ **Rachad L3ERGONI Bot**",
         "═══════════════════════════════════",
+        "",
+        "**🎮 SESSION**",
+        "`!roast` — Start session monitoring (checks every 5 min)",
+        "`!stop` — Stop session monitoring",
         "",
         "**📋 MATCHES**",
         "`!lastmatch` — Last match + MOTM photo",
         "`!match 2` — Specific match (1=last, 2=before...)",
         "`!results` — Results table (last 10)",
-        "`!form` — Team form (last 5)",
         "",
         "**👥 PLAYERS**",
         "`!player Hamza` — Player stats (last 5)",
         "`!players` — Full squad list",
         "`!mvp` — MVP photo + stats",
-        "`!roast Hamza` — Roast player 🔥",
-        "`!compare Hamza Karim` — Compare 2 players",
+        "`!roastplayer Hamza` — Roast player 🔥",
         "",
         "**📊 CLUB**",
         "`!stats` — Season stats",
-        "",
-        "**🤖 AUTO**",
-        "Bot checks every 30 min for new matches",
-        "Auto-posts report + MOTM photo when found",
         "",
         "_Simple. Clean. No spam._",
     ]
@@ -386,7 +397,7 @@ async def on_ready():
     global seen_matches
     seen_matches = load_seen()
     logger.info(f"✅ Bot ready: {bot.user}")
-    check_matches.start()
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="your matches 👀"))
 
 @bot.event
 async def on_message(message):
