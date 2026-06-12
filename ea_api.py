@@ -1,17 +1,9 @@
 """
-EA API — Uses scraper.py as primary source (already returns parsed format).
-This module provides aggregate_stats and helper functions for gemini.py.
+EA API — Stats aggregation module.
+Provides aggregate_stats() for gemini.py and bot.py.
 """
-import os
-import logging
-from typing import List, Dict, Optional
+from typing import List, Dict
 
-logger = logging.getLogger("ea_api")
-
-CLUB_ID = os.getenv("CLUB_ID", "1427607")
-PLATFORM = os.getenv("PLATFORM", "common-gen5")
-
-# ─── PARSERS ─────────────────────────────────────────────────────────────────
 
 def aggregate_stats(matches: List[Dict]) -> Dict[str, Dict]:
     """Aggregate player stats across matches."""
