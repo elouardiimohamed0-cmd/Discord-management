@@ -1,6 +1,6 @@
 """
-Rachad L3ERGONI Bot - Main Discord Bot v4
-EA FC26 API (fc-clubs-api approach) | Real Photos | Native Darija | 95% Roast
+Rachad L3ERGONI Bot - Main Discord Bot v6
+ProClubsTracker.com FULL Scraper | Real Photos | Native Darija | 95% Roast
 """
 
 import os
@@ -26,14 +26,14 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 MATCH_CHANNEL_ID = int(os.getenv("MATCH_CHANNEL_ID", "0"))
 LEADERBOARD_CHANNEL_ID = int(os.getenv("LEADERBOARD_CHANNEL_ID", "0"))
 GENERAL_CHANNEL_ID = int(os.getenv("GENERAL_CHANNEL_ID", "0"))
-CLUB_ID = os.getenv("CLUB_ID", "1427607")  # Numeric club ID for EA API
-PLATFORM = os.getenv("PLATFORM", "common-gen5")  # common-gen5 (PS5/Xbox/PC) or common-gen4 (PS4/Xbox One)
+CLUB_NAME = os.getenv("CLUB_NAME", "Rachad L3ERGONI")  # Club NAME for proclubstracker.com
+PLATFORM = os.getenv("PLATFORM", "ps5")  # ps5, ps4, xbox, switch
 PORT = int(os.getenv("PORT", "10000"))
 
 darija = get_engine("squad.json")
 stats_engine = get_stats_engine("match_data.json")
 image_gen = get_image_generator("assets")
-scraper = get_scraper(CLUB_ID, PLATFORM)
+scraper = get_scraper(CLUB_NAME, PLATFORM)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -48,6 +48,7 @@ class L3ERGONIBot(commands.Bot):
         self.scraper = scraper
         self.squad = self._load_squad()
         self.session_active = False
+        self.last_scraped_data = {}  # Store last scrape for meme/roast generation
 
     def _load_squad(self) -> dict:
         try:
@@ -64,7 +65,8 @@ class L3ERGONIBot(commands.Bot):
     async def on_ready(self):
         print(f"Rachad L3ERGONI Bot logged in as {self.user}")
         print(f"Connected to {len(self.guilds)} guilds")
-        print(f"Club ID: {CLUB_ID} | Platform: {PLATFORM}")
+        print(f"Club: {CLUB_NAME} | Platform: {PLATFORM}")
+        print(f"Scraper: ProClubsTracker.com with Playwright")
         await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Rachad L3ERGONI | !help"))
 
     @tasks.loop(hours=24)
@@ -91,7 +93,7 @@ class L3ERGONIBot(commands.Bot):
                 if channel:
                     await self._post_match_result(channel)
             else:
-                added = await self.scraper.sync_recent_matches(self.stats, count=3)
+                added = await self.scraper.sync_to_stats_engine(self.stats, count=3)
                 if added > 0:
                     channel = self.get_channel(MATCH_CHANNEL_ID)
                     if channel:
@@ -469,9 +471,9 @@ async def personality_cmd(ctx, mode: str):
 
 @bot.command(name="sync")
 async def sync_cmd(ctx):
-    await ctx.send("z3ma... syncing from EA FC26 API...")
+    await ctx.send("z3ma... syncing from ProClubsTracker.com...")
     try:
-        added = await bot.scraper.sync_recent_matches(bot.stats, count=10)
+        added = await bot.scraper.sync_to_stats_engine(bot.stats, count=10)
         if added > 0:
             await ctx.send(f"Synced {added} new matches. z3ma... data? walo. safi.")
         else:
@@ -481,45 +483,88 @@ async def sync_cmd(ctx):
 
 @bot.command(name="force_sync")
 async def force_sync_cmd(ctx):
-    """Force sync all matches regardless of duplicates"""
-    await ctx.send("🔥 Force syncing ALL matches from EA API...")
+    """Force full scrape from proclubstracker.com"""
+    await ctx.send("🔥 Drilling ProClubsTracker.com for ALL data...")
     try:
-        raw_matches = await bot.scraper.get_all_matches(count=20)
+        all_data = await bot.scraper.scrape_all()
+        if not all_data:
+            await ctx.send("z3ma... scrape failed? walo. chi m3a9ed. safi.")
+            return
+
+        # Store for later use
+        bot.last_scraped_data = all_data
+
+        matches = all_data.get("matches", [])
+        players = all_data.get("players", [])
+        roasts = all_data.get("roasts_memes", [])
+
+        # Force add all matches
         added = 0
-        for raw in raw_matches:
-            parsed = bot.scraper._parse_match(raw)
+        for match in matches:
+            parsed = bot.scraper._convert_match(match, players)
             if parsed:
                 bot.stats.add_match(parsed)
                 added += 1
-        await ctx.send(f"🔥 Force synced {added} matches! z3ma... data? walo. safi.")
+
+        # Save raw data for inspection
+        with open("proclubstracker_raw.json", "w", encoding="utf-8") as f:
+            json.dump(all_data, f, indent=2, ensure_ascii=False)
+
+        msg = f"🔥 Force synced {added} matches from ProClubsTracker.com!"
+        if roasts:
+            msg += f"\n📢 Found {len(roasts)} roasts/memes!"
+        msg += "\nz3ma... data? walo. safi."
+
+        await ctx.send(msg)
     except Exception as e:
         await ctx.send(f"z3ma... force sync? walo. Error: {e}")
 
-@bot.command(name="test_api")
-async def test_api_cmd(ctx):
-    """Test EA API connectivity"""
-    await ctx.send("Testing EA API...")
+@bot.command(name="raw_data")
+async def raw_data_cmd(ctx):
+    """Show raw scraped data summary"""
+    if not bot.last_scraped_data:
+        await ctx.send("z3ma... raw data? walo. Run !force_sync first. safi.")
+        return
+
+    data = bot.last_scraped_data
+    embed = discord.Embed(title="ProClubsTracker Raw Data", color=0xFF6B35)
+    embed.add_field(name="Overview", value=f"{len(data.get('overview', {}))} stats", inline=True)
+    embed.add_field(name="Players", value=f"{len(data.get('players', []))} players", inline=True)
+    embed.add_field(name="Matches", value=f"{len(data.get('matches', []))} matches", inline=True)
+    embed.add_field(name="Form", value=f"{len(data.get('form', {}).get('recent_form', []))} entries", inline=True)
+    embed.add_field(name="Chemistry", value=f"{len(data.get('chemistry', {}).get('combos', []))} combos", inline=True)
+    embed.add_field(name="H2H", value=f"{len(data.get('head_to_head', {}).get('comparisons', []))} comparisons", inline=True)
+    embed.add_field(name="Roasts", value=f"{len(data.get('roasts_memes', []))} roasts", inline=True)
+    await ctx.send(embed=embed)
+
+@bot.command(name="test_scraper")
+async def test_scraper_cmd(ctx):
+    """Test the scraper and show which tabs work"""
+    await ctx.send("Testing ProClubsTracker scraper...")
     try:
-        info = await bot.scraper.get_club_info()
-        stats = await bot.scraper.get_overall_stats()
-        members = await bot.scraper.get_member_stats()
-        matches = await bot.scraper.get_all_matches(count=1)
+        all_data = await bot.scraper.scrape_all()
+        if not all_data:
+            await ctx.send("❌ Scraper failed completely")
+            return
 
         status = []
-        status.append(f"Club Info: {'✅' if info else '❌'}")
-        status.append(f"Overall Stats: {'✅' if stats else '❌'}")
-        status.append(f"Member Stats: {'✅' if members else '❌'} ({len(members) if members else 0} members)")
-        status.append(f"Match History: {'✅' if matches else '❌'} ({len(matches)} matches)")
+        status.append(f"✅ Overview: {len(all_data.get('overview', {}))} stats")
+        status.append(f"✅ Players: {len(all_data.get('players', []))} players")
+        status.append(f"✅ Matches: {len(all_data.get('matches', []))} matches")
+        status.append(f"✅ Form: {len(all_data.get('form', {}).get('recent_form', []))} entries")
+        status.append(f"✅ Chemistry: {len(all_data.get('chemistry', {}).get('combos', []))} combos")
+        status.append(f"✅ H2H: {len(all_data.get('head_to_head', {}).get('comparisons', []))} comparisons")
+        status.append(f"✅ Roasts: {len(all_data.get('roasts_memes', []))} roasts")
 
         await ctx.send("\n".join(status))
     except Exception as e:
-        await ctx.send(f"API test failed: {e}")
+        await ctx.send(f"❌ Scraper test failed: {e}")
 
 @bot.command(name="help")
 async def help_cmd(ctx):
     embed = discord.Embed(
         title="Rachad L3ERGONI Bot - Commands",
-        description="95% roast mode | Native Darija | Live EA FC Stats | Real Photos | Pro Visuals",
+        description="95% roast mode | Native Darija | ProClubsTracker.com Scraper | Real Photos | Pro Visuals",
         color=0xFF6B35
     )
 
@@ -546,16 +591,17 @@ async def help_cmd(ctx):
         ("!ghost_detector", "Detect inactive players"),
         ("!pass_the_ball <name>", "Call out ball hog"),
         ("!personality <mode>", "Switch personality (casablanca/analyst/toxic/coach/commentator/cafeteria)"),
-        ("!sync", "Sync from EA FC26 API (skips duplicates)"),
-        ("!force_sync", "Force full sync from EA API"),
-        ("!test_api", "Test EA API connectivity"),
+        ("!sync", "Sync from ProClubsTracker.com (skips duplicates)"),
+        ("!force_sync", "🔥 Drill ALL data from ProClubsTracker.com"),
+        ("!raw_data", "Show summary of last scraped data"),
+        ("!test_scraper", "Test scraper and show tab status"),
         ("!help", "This message")
     ]
 
     for cmd, desc in commands_list:
         embed.add_field(name=cmd, value=desc, inline=False)
 
-    embed.set_footer(text="Rachad L3ERGONI Pro Clubs | EA FC26 API | Made with 🔥 for the squad")
+    embed.set_footer(text="Rachad L3ERGONI Pro Clubs | ProClubsTracker.com Scraper | Made with 🔥 for the squad")
     await ctx.send(embed=embed)
 
 # Slash commands
