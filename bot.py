@@ -1,614 +1,786 @@
-"""Rachad L3ERGONI Bot - Compact v7
-10-12 efficient commands. Auto daily/weekly/monthly leaderboards.
-Only bad words, roasting, trash talk. No cheering, no praise.
 """
+Rachad L3ERGONI Bot - Main Discord Bot
+Premium Moroccan Pro Clubs Discord Bot
+Native Darija | Real Stats | Pro Visuals | 95% Roast Mode
+"""
+
 import os
 import io
 import asyncio
-import random
-import logging
-import time
-import re
+import json
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Optional
+from pathlib import Path
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
+from dotenv import load_dotenv
 
-import scraper as _scraper
-import gemini
-import achievements
-import roast_engine
-from state import load_seen, save_seen
-from human_darija import HumanDarija
-import anime_image_gen as image_gen
+from darija_engine import get_engine, DarijaEngine, PERSONALITIES
+from stats_engine import get_stats_engine, StatsEngine, PlayerMatchStats, MatchResult
+from image_gen import get_image_generator, ImageGenerator
+from scraper import get_scraper, ProClubsScraper
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger("RachadBot")
+# Load environment variables
+load_dotenv()
 
-TOKEN = os.getenv("DISCORD_TOKEN")
-if not TOKEN:
-    raise ValueError("DISCORD_TOKEN not set!")
+# Bot configuration
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+MATCH_CHANNEL_ID = int(os.getenv("MATCH_CHANNEL_ID", "0"))
+LEADERBOARD_CHANNEL_ID = int(os.getenv("LEADERBOARD_CHANNEL_ID", "0"))
+GENERAL_CHANNEL_ID = int(os.getenv("GENERAL_CHANNEL_ID", "0"))
+CLUB_ID = os.getenv("CLUB_ID", "")
+PLATFORM = os.getenv("PLATFORM", "ps5")
+PORT = int(os.getenv("PORT", "10000"))
 
-MATCH_CHANNEL_ID = int(os.environ.get("MATCH_CHANNEL_ID", 0)) or None
-POLL_MINUTES = 5
-TIMEOUT_MINUTES = 45
+# Initialize components
+darija = get_engine("squad.json")
+stats_engine = get_stats_engine("match_data.json")
+image_gen = get_image_generator("assets")
+scraper = get_scraper(CLUB_ID, PLATFORM)
 
+# Bot intents
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+intents.members = True
 
-humanizer = HumanDarija()
-seen_matches = set()
-_session_active = False
-_last_match_id = None
-_last_activity_ts = 0.0
+# Bot instance
+class L3ERGONIBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+        self.darija = darija
+        self.stats = stats_engine
+        self.images = image_gen
+        self.scraper = scraper
+        self.squad = self._load_squad()
+        self.session_active = False
+        self.session_task = None
 
-# --- HELPERS ---
+    def _load_squad(self) -> dict:
+        try:
+            with open("squad.json", "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return {}
 
-def _match_channel():
-    return bot.get_channel(MATCH_CHANNEL_ID) if MATCH_CHANNEL_ID else None
+    async def setup_hook(self):
+        """Setup hook - start background tasks"""
+        self.auto_leaderboard.start()
+        self.auto_match_check.start()
+        await self.tree.sync()
 
-async def _send(ch, text="", image=None, filename="image.png", emotion="disappointment"):
-    text = (text or "").strip()
-    if not text and not image:
-        return
-    if text:
-        text = humanizer.humanize(text, emotion=emotion, intensity=0.7)
-    wc = len(text.split()) if text else 0
-    if wc <= 5:
-        tt = random.randint(1, 2)
-    elif wc <= 12:
-        tt = random.randint(2, 4)
-    else:
-        tt = random.randint(4, 7)
-    if len(text) > 80 and random.random() < 0.2:
-        tt += random.randint(1, 2)
-    async with ch.typing():
-        await asyncio.sleep(tt)
-    if image:
-        image.seek(0)
-        file = discord.File(image, filename=filename)
-        await ch.send(text[:1900] or None, file=file)
-    else:
-        if len(text) <= 2000:
-            await ch.send(text)
-        else:
-            parts = []
-            cur = ""
-            for s in re.split(r"([.!?]+)", text):
-                if len(cur) + len(s) < 1900:
-                    cur += s
-                else:
-                    if cur:
-                        parts.append(cur.strip())
-                    cur = s
-            if cur:
-                parts.append(cur.strip())
-            for i, p in enumerate(parts):
-                await ch.send(p)
-                if i < len(parts) - 1:
-                    await asyncio.sleep(random.randint(1, 2))
-
-def _result_icon(r: str) -> str:
-    return "🟢" if r == "W" else ("🟡" if r == "D" else "🔴")
-
-def _aggregate_stats(matches: List[Dict]) -> Dict:
-    agg = {}
-    for m in matches:
-        for p in m.get("players", []) or []:
-            name = p.get("name", "Unknown")
-            if name not in agg:
-                agg[name] = {"name": name, "games": 0, "goals": 0, "assists": 0, "shots": 0, "tackles": 0, "tackles_attempted": 0, "interceptions": 0, "passes_attempted": 0, "passes_completed": 0, "ratings": [], "avg_rating": 0.0}
-            agg[name]["games"] += 1
-            agg[name]["goals"] += p.get("goals", 0)
-            agg[name]["assists"] += p.get("assists", 0)
-            agg[name]["shots"] += p.get("shots", 0)
-            agg[name]["tackles"] += p.get("tackles", 0)
-            agg[name]["tackles_attempted"] += p.get("tackles_attempted", 0)
-            agg[name]["interceptions"] += p.get("interceptions", 0)
-            agg[name]["passes_attempted"] += p.get("passes_attempted", 0)
-            agg[name]["passes_completed"] += p.get("passes_completed", 0)
-            agg[name]["ratings"].append(p.get("rating", 0))
-    for name in agg:
-        r = agg[name]["ratings"]
-        agg[name]["avg_rating"] = sum(r) / len(r) if r else 0
-    return agg
-
-def _clean_lines(text, max_lines=2):
-    lines = [l.strip() for l in text.split(chr(10)) if l.strip()]
-    return chr(10).join(lines[:max_lines])
-
-async def _get_matches(n: int = 5) -> List[Dict]:
-    try:
-        data = await _scraper.fetch_all(max_matches=n, force=False)
-        return data.get("matches", [])
-    except Exception as e:
-        logger.error(f"Get matches error: {e}")
-        return []
-
-async def _get_all_data(n: int = 1) -> Dict:
-    try:
-        return await _scraper.fetch_all(max_matches=n, force=False)
-    except Exception as e:
-        logger.error(f"Get all data error: {e}")
-        return {}
-
-# --- AUTO LEADERBOARD TASKS ---
-
-@tasks.loop(hours=24)
-async def daily_leaderboard():
-    ch = _match_channel()
-    if not ch:
-        return
-    matches = await _get_matches(5)
-    if not matches:
-        return
-    agg = _aggregate_stats(matches)
-    if not agg:
-        return
-    lines = ["📊 DAILY LEADERBOARD - Rachad L3ERGONI", ""]
-    sorted_players = sorted(agg.values(), key=lambda x: (x["goals"] + x["assists"] * 0.5, x["avg_rating"]), reverse=True)
-    for i, p in enumerate(sorted_players[:10], 1):
-        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
-        lines.append(f"{medal} **{p['name']}** - {p['goals']}G {p['assists']}A | ⭐{p['avg_rating']:.1f} | {p['games']}m")
-    await _send(ch, chr(10).join(lines), emotion="disappointment")
-
-@daily_leaderboard.before_loop
-async def before_daily():
-    await bot.wait_until_ready()
-    now = datetime.now()
-    target = now.replace(hour=20, minute=0, second=0, microsecond=0)
-    if target < now:
-        target += timedelta(days=1)
-    await asyncio.sleep((target - now).total_seconds())
-
-@tasks.loop(hours=168)
-async def weekly_leaderboard():
-    ch = _match_channel()
-    if not ch:
-        return
-    matches = await _get_matches(20)
-    if not matches:
-        return
-    agg = _aggregate_stats(matches)
-    if not agg:
-        return
-    lines = ["📊 WEEKLY LEADERBOARD - Rachad L3ERGONI", ""]
-    sorted_players = sorted(agg.values(), key=lambda x: (x["goals"] + x["assists"] * 0.5, x["avg_rating"]), reverse=True)
-    for i, p in enumerate(sorted_players[:10], 1):
-        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
-        lines.append(f"{medal} **{p['name']}** - {p['goals']}G {p['assists']}A | ⭐{p['avg_rating']:.1f} | {p['games']}m")
-    await _send(ch, chr(10).join(lines), emotion="disappointment")
-
-@weekly_leaderboard.before_loop
-async def before_weekly():
-    await bot.wait_until_ready()
-    now = datetime.now()
-    target = now.replace(hour=20, minute=0, second=0, microsecond=0)
-    days_until_sunday = (6 - now.weekday()) % 7
-    if days_until_sunday == 0 and target < now:
-        days_until_sunday = 7
-    target += timedelta(days=days_until_sunday)
-    await asyncio.sleep((target - now).total_seconds())
-
-@tasks.loop(hours=720)
-async def monthly_leaderboard():
-    ch = _match_channel()
-    if not ch:
-        return
-    matches = await _get_matches(50)
-    if not matches:
-        return
-    agg = _aggregate_stats(matches)
-    if not agg:
-        return
-    lines = ["📊 MONTHLY LEADERBOARD - Rachad L3ERGONI", ""]
-    sorted_players = sorted(agg.values(), key=lambda x: (x["goals"] + x["assists"] * 0.5, x["avg_rating"]), reverse=True)
-    for i, p in enumerate(sorted_players[:10], 1):
-        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
-        lines.append(f"{medal} **{p['name']}** - {p['goals']}G {p['assists']}A | ⭐{p['avg_rating']:.1f} | {p['games']}m")
-    await _send(ch, chr(10).join(lines), emotion="disappointment")
-
-@monthly_leaderboard.before_loop
-async def before_monthly():
-    await bot.wait_until_ready()
-    now = datetime.now()
-    target = now.replace(day=1, hour=20, minute=0, second=0, microsecond=0)
-    if target < now:
-        if now.month == 12:
-            target = target.replace(year=now.year + 1, month=1)
-        else:
-            target = target.replace(month=now.month + 1)
-    await asyncio.sleep((target - now).total_seconds())
-
-# --- SESSION POLLING ---
-
-@tasks.loop(minutes=POLL_MINUTES)
-async def poll_matches():
-    global _session_active, _last_activity_ts, _last_match_id
-    if not _session_active:
-        return
-    idle_min = (time.monotonic() - _last_activity_ts) / 60
-    if idle_min >= TIMEOUT_MINUTES:
-        await _stop_session("timeout")
-        return
-    try:
-        data = await _scraper.fetch_all(max_matches=1, force=True)
-        raw_matches = data.get("matches", [])
-        if not raw_matches:
-            return
-        raw = raw_matches[0]
-        mid = str(raw.get("match_id", ""))
-        if mid == _last_match_id or not mid:
-            return
-        _last_match_id = mid
-        _last_activity_ts = time.monotonic()
-        logger.info(f"New match: {mid}")
-        await _post_match(_match_channel(), raw)
-    except Exception as e:
-        logger.error(f"Poll error: {e}")
-
-@poll_matches.before_loop
-async def before_poll():
-    await bot.wait_until_ready()
-
-async def _start_session(channel):
-    global _session_active, _last_activity_ts, _last_match_id
-    if _session_active:
-        await _send(channel, "Session deja active!", emotion="disappointment")
-        return
-    try:
-        data = await _scraper.fetch_all(max_matches=1, force=False)
-        raw_matches = data.get("matches", [])
-        if raw_matches:
-            _last_match_id = str(raw_matches[0].get("match_id", ""))
-    except:
-        _last_match_id = None
-    _session_active = True
-    _last_activity_ts = time.monotonic()
-    if not poll_matches.is_running():
-        poll_matches.start()
-    await _send(channel, f"Session demarree! Check kol {POLL_MINUTES}min. Auto-stop apres {TIMEOUT_MINUTES}min. !stop bach t7bss.", emotion="disappointment")
-
-async def _stop_session(reason="manual"):
-    global _session_active
-    _session_active = False
-    if poll_matches.is_running():
-        poll_matches.stop()
-    ch = _match_channel()
-    if not ch:
-        return
-    if reason == "timeout":
-        await _send(ch, f"Session terminee. {TIMEOUT_MINUTES}min bla match. !roast quand tu rejoues!", emotion="disappointment")
-    else:
-        await _send(ch, "Session arretee. Safi.", emotion="thinking")
-
-async def _post_match(ch, m):
-    try:
-        emoji = _result_icon(m["result"])
-        header = f"{emoji} **{m['our_goals']}-{m['opp_goals']}** vs **{m['opp_name']}**"
-        await ch.send(header)
-
-        if roast_engine.is_boring_game(m.get("players", []), m):
-            silent = roast_engine.build_silent_treatment(m)
-            await _send(ch, silent, emotion="disappointment")
-            return
-
-        if m.get("players"):
-            chaos_results = achievements.evaluate_players(m["players"])
-            chaos_report = achievements.format_chaos_report(chaos_results)
-            if chaos_report:
-                chaos_report = _clean_lines(chaos_report, 2)
-                await _send(ch, chaos_report, emotion="laughter")
-
-            roast_text = roast_engine.build_roast_text(
-                roast_engine.get_roast_victims(m["players"]),
-                m, m["players"]
+    async def on_ready(self):
+        """Bot ready event"""
+        print(f"Rachad L3ERGONI Bot logged in as {self.user}")
+        print(f"Connected to {len(self.guilds)} guilds")
+        await self.change_presence(
+            activity=discord.Activity(
+                type=discord.ActivityType.watching,
+                name="Rachad L3ERGONI | !help"
             )
-            if roast_text:
-                roast_text = _clean_lines(roast_text, 2)
-                await _send(ch, roast_text, emotion="laughter")
+        )
 
-        report = await gemini.match_report(m)
-        report = _clean_lines(report, 2)
-        emotion = "disappointment" if m["result"] == "L" else "laughter"
-        await _send(ch, report, emotion=emotion)
+    @tasks.loop(hours=24)
+    async def auto_leaderboard(self):
+        """Auto post daily leaderboard at 20:00"""
+        now = datetime.now()
+        if now.hour == 20 and now.minute < 5:
+            channel = self.get_channel(LEADERBOARD_CHANNEL_ID)
+            if channel:
+                await self._post_leaderboard(channel, "daily", 5)
 
-        # Individual player stats after match
-        if m.get("players"):
-            for p in m["players"]:
-                stats_text = f"{p['name']}: {p['goals']}G {p['assists']}A | ⭐{p['rating']:.1f} | {p['shots']} shots"
-                await _send(ch, stats_text, emotion="disappointment")
+    @auto_leaderboard.before_loop
+    async def before_auto_leaderboard(self):
+        await self.wait_until_ready()
 
-        # MOTM with anime card
-        if m.get("players"):
-            best = m["players"][0]
-            motm_text = humanizer.get_motm(best["name"], best["rating"], best["goals"], best["assists"])
-            player_data = humanizer.get_player(best["name"])
-            img_path = player_data.get("image") if player_data else None
-            loop = asyncio.get_event_loop()
-            motm_img = await loop.run_in_executor(
-                None, image_gen.make_motm_card,
-                best["name"], best["rating"], best["goals"], best["assists"],
-                f"vs {m['opp_name']}", img_path
+    @tasks.loop(minutes=5)
+    async def auto_match_check(self):
+        """Check for new matches every 5 minutes"""
+        if self.session_active:
+            try:
+                added = await self.scraper.sync_recent_matches(self.stats, count=3)
+                if added > 0:
+                    channel = self.get_channel(MATCH_CHANNEL_ID)
+                    if channel:
+                        await self._post_match_result(channel)
+            except Exception as e:
+                print(f"Auto match check error: {e}")
+
+    @auto_match_check.before_loop
+    async def before_auto_match_check(self):
+        await self.wait_until_ready()
+
+    async def _post_match_result(self, channel: discord.TextChannel):
+        """Post match result with roast and card"""
+        match = self.stats.get_last_match()
+        if not match:
+            return
+
+        # Roast the result
+        roast = self.darija.roast_match_result(match.team_goals, match.opponent_goals, match.opponent)
+
+        # Generate match report card
+        match_dict = match.to_dict()
+        card = self.images.generate_match_report_card(match_dict)
+        card_bytes = self.images.to_bytes(card)
+
+        # Build embed
+        embed = discord.Embed(
+            title=f"Match Result: {match.team_goals}-{match.opponent_goals} vs {match.opponent}",
+            description=roast,
+            color=0x00FF00 if match.result == "win" else 0xFF0000 if match.result == "loss" else 0xFFD700
+        )
+
+        # Add player stats
+        for name, ps in list(match.player_stats.items())[:6]:
+            player_info = self.squad.get(name.lower(), {})
+            nickname = player_info.get("nickname", name)
+            motm_emoji = "👑 " if ps.motm else ""
+            embed.add_field(
+                name=f"{motm_emoji}{nickname}",
+                value=f"{ps.goals}G {ps.assists}A | ⭐{ps.rating:.1f} | {ps.shots} shots",
+                inline=True
             )
-            await _send(ch, motm_text, motm_img, "motm.png", emotion="laughter")
-    except Exception as e:
-        logger.error(f"Post error: {e}")
-        await ch.send(f"Error: {str(e)[:100]}")
 
-# =============================================================================
-# 12 EFFICIENT COMMANDS
-# =============================================================================
+        # MOTM roast
+        motm_name = next((name for name, ps in match.player_stats.items() if ps.motm), "")
+        if motm_name:
+            player_info = self.squad.get(motm_name.lower(), {})
+            nickname = player_info.get("nickname", motm_name)
+            motm_roast = self.darija.roast_motm(nickname, match.player_stats[motm_name].rating)
+            embed.add_field(name="MOTM", value=motm_roast, inline=False)
+
+        file = discord.File(io.BytesIO(card_bytes), filename="match_report.png")
+        embed.set_image(url="attachment://match_report.png")
+
+        await channel.send(embed=embed, file=file)
+
+    async def _post_leaderboard(self, channel: discord.TextChannel, period: str, matches: int):
+        """Post leaderboard card"""
+        leaderboard = self.stats.get_leaderboard(matches, "impact_score")
+
+        if not leaderboard:
+            await channel.send("z3ma... leaderboard? walo. chi m3a9ed. safi.")
+            return
+
+        # Generate leaderboard card
+        card = self.images.generate_leaderboard_card(leaderboard, period)
+        card_bytes = self.images.to_bytes(card)
+
+        # Roast entries
+        roasts = self.darija.roast_leaderboard(leaderboard)
+        roast_text = "\n".join(roasts[:3])
+
+        embed = discord.Embed(
+            title=f"Leaderboard - {period.upper()}",
+            description=roast_text,
+            color=0xFFD700
+        )
+
+        file = discord.File(io.BytesIO(card_bytes), filename="leaderboard.png")
+        embed.set_image(url="attachment://leaderboard.png")
+
+        await channel.send(embed=embed, file=file)
+
+
+# Create bot instance
+bot = L3ERGONIBot()
+
+# ==========================================
+# COMMANDS
+# ==========================================
 
 @bot.command(name="roast")
-async def cmd_roast(ctx):
-    """Start session monitoring."""
-    await _start_session(ctx.channel)
+async def roast_cmd(ctx: commands.Context):
+    """Start session monitoring (checks every 5min)"""
+    bot.session_active = True
+    roast = bot.darija.banter()
+    await ctx.send(f"Session started! {roast}\nMonitoring matches every 5 minutes...")
 
 @bot.command(name="stop")
-async def cmd_stop(ctx):
-    """Stop session monitoring."""
-    await _stop_session("manual")
+async def stop_cmd(ctx: commands.Context):
+    """Stop session monitoring"""
+    bot.session_active = False
+    await ctx.send("Session stopped. walo. safi.")
 
-@bot.command(name="lastmatch", aliases=["last", "match"])
-async def cmd_lastmatch(ctx):
-    """Last match + all player stats + MOTM anime card."""
-    async with ctx.typing():
-        matches = await _get_matches(1)
-        if not matches:
-            await _send(ctx.channel, "Ma3endnach match daba. Walo.", emotion="disappointment")
-            return
-        await _post_match(ctx.channel, matches[0])
+@bot.command(name="lastmatch")
+async def lastmatch_cmd(ctx: commands.Context):
+    """Show last match with all player stats + MOTM card"""
+    match = bot.stats.get_last_match()
+    if not match:
+        await ctx.send("z3ma... last match? walo. chi m3a9ed. safi.")
+        return
+
+    await bot._post_match_result(ctx.channel)
 
 @bot.command(name="stats")
-async def cmd_stats(ctx, *, player_name: str = ""):
-    """Player stats + anime card. !stats Hamza"""
-    if not player_name:
-        await _send(ctx.channel, "Usage: !stats NomJoueur", emotion="thinking")
+async def stats_cmd(ctx: commands.Context, *, player_name: str):
+    """Show player stats + anime card"""
+    player_key = player_name.lower().strip()
+    player_info = bot.squad.get(player_key, {})
+
+    if not player_info:
+        await ctx.send(f"z3ma... {player_name}? walo. chi m3a9ed. safi.")
         return
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await _send(ctx.channel, "Ma3endnach data. Walo.", emotion="disappointment")
-            return
-        agg = _aggregate_stats(matches)
-        key = next((k for k in agg if player_name.lower() in k.lower()), None)
-        if not key:
-            await _send(ctx.channel, f"{player_name}? Ma3endnach stats. !leaderboard bach tchouf.", emotion="thinking")
-            return
-        s = agg[key]
-        player_data = humanizer.get_player(player_name)
-        position = player_data.get("position", "MID") if player_data else "MID"
-        img_path = player_data.get("image") if player_data else None
-        stats_dict = {"goals": s["goals"], "assists": s["assists"], "rating": s["avg_rating"], "shots": s["shots"], "tackles": s["tackles"], "passes_completed": s["passes_completed"]}
-        loop = asyncio.get_event_loop()
-        card_buf = await loop.run_in_executor(None, image_gen.make_player_stats_card, s["name"], stats_dict, position, img_path)
-        text = f"{s['name']}: {s['games']}m | {s['goals']}G {s['assists']}A | ⭐{s['avg_rating']:.1f}"
-        await _send(ctx.channel, text, card_buf, f"{s['name']}_stats.png", emotion="disappointment")
+
+    name = player_info.get("name", player_name)
+    stats = bot.stats.get_player_stats(name, 5)
+
+    if not stats:
+        await ctx.send(f"z3ma... stats dial {name}? walo. chi m3a9ed. safi.")
+        return
+
+    # Generate player card
+    card = bot.images.generate_player_card(name, stats, player_info)
+    card_bytes = bot.images.to_bytes(card)
+
+    # Generate roasts
+    roasts = bot.darija.roast_player(name, stats, 5)
+    roast_text = "\n".join(roasts)
+
+    embed = discord.Embed(
+        title=f"{player_info.get('nickname', name)} - Stats Card",
+        description=roast_text,
+        color=0xFF6B35
+    )
+
+    file = discord.File(io.BytesIO(card_bytes), filename="player_card.png")
+    embed.set_image(url="attachment://player_card.png")
+
+    await ctx.send(embed=embed, file=file)
 
 @bot.command(name="roastplayer")
-async def cmd_roastplayer(ctx, *, player_name: str = ""):
-    """Roast a player. !roastplayer Hamza"""
-    if not player_name:
-        await _send(ctx.channel, "Kteb ism: !roastplayer Nom", emotion="thinking")
-        return
-    player_data = humanizer.get_player(player_name)
-    if player_data:
-        roast = humanizer.get_roast(player_name)
-        await _send(ctx.channel, roast, emotion="laughter")
-        return
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        text = await gemini.roast(player_name, matches)
-        text = _clean_lines(text, 2)
-    await _send(ctx.channel, text, emotion="laughter")
+async def roastplayer_cmd(ctx: commands.Context, *, player_name: str):
+    """Roast a specific player with data"""
+    player_key = player_name.lower().strip()
+    player_info = bot.squad.get(player_key, {})
 
-@bot.command(name="leaderboard", aliases=["lb", "rank"])
-async def cmd_leaderboard(ctx, period: str = "day"):
-    """Leaderboard: !leaderboard day/week/month/all"""
-    async with ctx.typing():
-        n = {"day": 5, "week": 20, "month": 50, "all": 100}.get(period.lower(), 5)
-        matches = await _get_matches(n)
-        if not matches:
-            await _send(ctx.channel, "Ma3endnach data. Walo.", emotion="disappointment")
-            return
-        agg = _aggregate_stats(matches)
-        if not agg:
-            await _send(ctx.channel, "Ma3endnach stats. Walo.", emotion="disappointment")
-            return
-        lines = [f"📊 LEADERBOARD ({period.upper()}) - Rachad L3ERGONI", ""]
-        sorted_players = sorted(agg.values(), key=lambda x: (x["goals"] + x["assists"] * 0.5, x["avg_rating"]), reverse=True)
-        for i, p in enumerate(sorted_players[:10], 1):
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
-            lines.append(f"{medal} **{p['name']}** - {p['goals']}G {p['assists']}A | ⭐{p['avg_rating']:.1f} | {p['games']}m")
-        await ctx.send(chr(10).join(lines))
+    if not player_info:
+        await ctx.send(f"z3ma... {player_name}? walo. chi m3a9ed. safi.")
+        return
+
+    name = player_info.get("name", player_name)
+    stats = bot.stats.get_player_stats(name, 5)
+
+    if not stats:
+        await ctx.send(f"z3ma... roast dial {name}? walo. chi m3a9ed. safi.")
+        return
+
+    roasts = bot.darija.roast_player(name, stats, 5)
+    for roast in roasts:
+        await ctx.send(roast)
 
 @bot.command(name="mvp")
-async def cmd_mvp(ctx):
-    """MVP of last 5 matches + anime card."""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await _send(ctx.channel, "Ma3endnach data. Walo.", emotion="disappointment")
-            return
-        agg = _aggregate_stats(matches)
-        if not agg:
-            await _send(ctx.channel, "Ma3endnach stats. Walo.", emotion="disappointment")
-            return
-        mvp = max(agg.values(), key=lambda x: x["avg_rating"] + x["goals"] * 0.5 + x["assists"] * 0.3)
-        player_data = humanizer.get_player(mvp["name"])
-        img_path = player_data.get("image") if player_data else None
-        loop = asyncio.get_event_loop()
-        mvp_img = await loop.run_in_executor(None, image_gen.make_motm_card, mvp["name"], mvp["avg_rating"], mvp["goals"], mvp["assists"], "MVP - Last 5 Matches", img_path)
-        text = f"👑 MVP: {mvp['name']} | {mvp['games']}m | {mvp['goals']}G {mvp['assists']}A | ⭐{mvp['avg_rating']:.1f}"
-        await _send(ctx.channel, text, mvp_img, "mvp.png", emotion="laughter")
+async def mvp_cmd(ctx: commands.Context):
+    """MVP of last 5 matches + card"""
+    mvp_name, mvp_stats = bot.stats.get_mvp(5)
+
+    if not mvp_name:
+        await ctx.send("z3ma... mvp? walo. chi m3a9ed. safi.")
+        return
+
+    player_info = bot.squad.get(mvp_name.lower(), {})
+    nickname = player_info.get("nickname", mvp_name)
+
+    # Generate MOTM card
+    card = bot.images.generate_motm_card(mvp_name, mvp_stats, player_info)
+    card_bytes = bot.images.to_bytes(card)
+
+    roast = bot.darija.roast_motm(nickname, mvp_stats.get("rating", 6.0))
+
+    embed = discord.Embed(
+        title=f"MVP - Last 5 Matches",
+        description=roast,
+        color=0xFFD700
+    )
+
+    file = discord.File(io.BytesIO(card_bytes), filename="mvp_card.png")
+    embed.set_image(url="attachment://mvp_card.png")
+
+    await ctx.send(embed=embed, file=file)
 
 @bot.command(name="compare")
-async def cmd_compare(ctx, p1: str = "", *, p2: str = ""):
-    """Compare 2 players. !compare Hamza Karim"""
-    if not p1 or not p2:
-        await _send(ctx.channel, "Usage: !compare J1 J2", emotion="thinking")
+async def compare_cmd(ctx: commands.Context, p1: str, p2: str):
+    """1v1 comparison + card"""
+    p1_key = p1.lower().strip()
+    p2_key = p2.lower().strip()
+
+    p1_info = bot.squad.get(p1_key, {})
+    p2_info = bot.squad.get(p2_key, {})
+
+    if not p1_info or not p2_info:
+        await ctx.send("z3ma... players? walo. chi m3a9ed. safi.")
         return
-    await _send(ctx.channel, f"{p1} vs {p2}...", emotion="thinking")
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        if not matches:
-            await _send(ctx.channel, "Ma3endnach data. Walo.", emotion="disappointment")
-            return
-        result = await gemini.compare_players(p1, p2, matches)
-        if isinstance(result, str):
-            text = _clean_lines(result, 2)
-            await _send(ctx.channel, text, emotion="laughter")
-            return
-        text, s1, s2 = result
-        text = _clean_lines(text, 2)
-        loop = asyncio.get_event_loop()
-        card_buf = await loop.run_in_executor(None, image_gen.make_comparison_card, s1, s2)
-    await _send(ctx.channel, text, card_buf, f"compare_{p1}_{p2}.png", emotion="laughter")
+
+    p1_name = p1_info.get("name", p1)
+    p2_name = p2_info.get("name", p2)
+
+    p1_stats = bot.stats.get_player_stats(p1_name, 10)
+    p2_stats = bot.stats.get_player_stats(p2_name, 10)
+
+    if not p1_stats or not p2_stats:
+        await ctx.send("z3ma... stats? walo. chi m3a9ed. safi.")
+        return
+
+    # Generate comparison card
+    card = bot.images.generate_comparison_card(p1_name, p1_stats, p1_info, p2_name, p2_stats, p2_info)
+    card_bytes = bot.images.to_bytes(card)
+
+    roast = bot.darija.compare_players(p1_name, p1_stats, p2_name, p2_stats)
+
+    embed = discord.Embed(
+        title=f"{p1_info.get('nickname', p1_name)} VS {p2_info.get('nickname', p2_name)}",
+        description=roast,
+        color=0xFF6B35
+    )
+
+    file = discord.File(io.BytesIO(card_bytes), filename="comparison.png")
+    embed.set_image(url="attachment://comparison.png")
+
+    await ctx.send(embed=embed, file=file)
+
+@bot.command(name="leaderboard")
+async def leaderboard_cmd(ctx: commands.Context, period: str = "week"):
+    """Full leaderboard with card"""
+    period_map = {"day": 5, "week": 20, "month": 50, "all": 999}
+    matches = period_map.get(period.lower(), 20)
+
+    await bot._post_leaderboard(ctx.channel, period, matches)
 
 @bot.command(name="banter")
-async def cmd_banter(ctx):
-    """Football banter trash talk."""
-    async with ctx.typing():
-        matches = await _get_matches(1)
-        text = await gemini.banter(matches)
-        text = _clean_lines(text, 2)
-    await _send(ctx.channel, text, emotion="laughter")
+async def banter_cmd(ctx: commands.Context):
+    """Random football trash talk"""
+    await ctx.send(bot.darija.banter())
 
 @bot.command(name="drama")
-async def cmd_drama(ctx):
-    """Drama / polemique."""
-    async with ctx.typing():
-        matches = await _get_matches(1)
-        text = await gemini.drama_post(matches)
-        text = _clean_lines(text, 2)
-    await _send(ctx.channel, text, emotion="disappointment")
+async def drama_cmd(ctx: commands.Context):
+    """Drama/polemique"""
+    await ctx.send(bot.darija.drama())
 
 @bot.command(name="meme")
-async def cmd_meme(ctx):
-    """Meme football b Darija."""
-    async with ctx.typing():
-        matches = await _get_matches(1)
-        text = await gemini.meme_post(matches)
-        text = _clean_lines(text, 2)
-    await _send(ctx.channel, text, emotion="laughter")
+async def meme_cmd(ctx: commands.Context):
+    """Meme b Darija"""
+    await ctx.send(bot.darija.meme())
 
 @bot.command(name="transfer")
-async def cmd_transfer(ctx):
-    """Transfer rumor (humour)."""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        data = await _get_all_data(1)
-        text = await gemini.transfer_rumor(data.get("members", []), matches)
-        text = _clean_lines(text, 2)
-    await _send(ctx.channel, text, emotion="laughter")
+async def transfer_cmd(ctx: commands.Context):
+    """Transfer rumor (humour)"""
+    await ctx.send(bot.darija.transfer())
 
 @bot.command(name="predict")
-async def cmd_predict(ctx, *, opponent: str = "Prochain adversaire"):
-    """Prediction next match. !predict NomAdversaire"""
-    async with ctx.typing():
-        matches = await _get_matches(5)
-        text = await gemini.match_prediction(opponent, matches)
-        text = _clean_lines(text, 2)
-    await _send(ctx.channel, text, emotion="thinking")
+async def predict_cmd(ctx: commands.Context, *, opponent: str):
+    """Match prediction with roast"""
+    import random
+    predictions = ["win", "loss", "draw"]
+    pred = random.choice(predictions)
+    roast = bot.darija.predict(pred)
+
+    embed = discord.Embed(
+        title=f"Prediction: vs {opponent}",
+        description=roast,
+        color=0xFF6B35
+    )
+    await ctx.send(embed=embed)
 
 @bot.command(name="clubinfo")
-async def cmd_clubinfo(ctx):
-    """Club info."""
-    async with ctx.typing():
-        data = await _get_all_data(1)
-    info = data.get("club_info") or {}
-    s = data.get("club_stats") or {}
-    lines = [
-        f"🏟️ **{info.get('name','Rachad L3ERGONI')}**",
-        f"🎮 common-gen5 | proclubstracker.com/club/1427607",
-        f"W:{s.get('wins','?')} D:{s.get('ties','?')} L:{s.get('losses','?')} | SR:{s.get('skillRating','?')}",
-    ]
-    await ctx.send(chr(10).join(lines))
+async def clubinfo_cmd(ctx: commands.Context):
+    """Club info with stats"""
+    team_stats = bot.stats.get_team_stats(20)
+
+    if not team_stats:
+        await ctx.send("z3ma... club info? walo. chi m3a9ed. safi.")
+        return
+
+    embed = discord.Embed(
+        title="Rachad L3ERGONI - Club Info",
+        description="z3ma... club? walo. chi m3a9ed l3ba.",
+        color=0xFF6B35
+    )
+
+    embed.add_field(name="Matches", value=team_stats["matches"], inline=True)
+    embed.add_field(name="Wins", value=team_stats["wins"], inline=True)
+    embed.add_field(name="Losses", value=team_stats["losses"], inline=True)
+    embed.add_field(name="Win Rate", value=f"{team_stats['win_rate']}%", inline=True)
+    embed.add_field(name="Goals Scored", value=team_stats["goals_scored"], inline=True)
+    embed.add_field(name="Goals Conceded", value=team_stats["goals_conceded"], inline=True)
+    embed.add_field(name="Current Streak", value=team_stats["current_streak"], inline=True)
+    embed.add_field(name="Best Streak", value=f"{team_stats['best_streak']} wins", inline=True)
+
+    await ctx.send(embed=embed)
+
+@bot.command(name="worst")
+async def worst_cmd(ctx: commands.Context):
+    """Worst player of the week"""
+    worst_name, worst_stats = bot.stats.get_worst_player(7)
+
+    if not worst_name:
+        await ctx.send("z3ma... worst player? walo. chi m3a9ed. safi.")
+        return
+
+    player_info = bot.squad.get(worst_name.lower(), {})
+    nickname = player_info.get("nickname", worst_name)
+
+    roast = bot.darija._format_roast(
+        "{name}. worst of the week. z3ma... player? walo. delete game.",
+        name=nickname
+    )
+
+    embed = discord.Embed(
+        title="Worst Player of the Week 🗑️",
+        description=roast,
+        color=0xFF0000
+    )
+
+    embed.add_field(name="Rating", value=f"{worst_stats.get('rating', 0):.1f}", inline=True)
+    embed.add_field(name="Error Score", value=f"{worst_stats.get('error_score', 0)}", inline=True)
+    embed.add_field(name="Possession Losses", value=worst_stats.get("possession_losses", 0), inline=True)
+
+    await ctx.send(embed=embed)
+
+@bot.command(name="who_sold")
+async def who_sold_cmd(ctx: commands.Context):
+    """Who sold the match"""
+    worst_name, worst_stats = bot.stats.get_worst_player(1)
+
+    if not worst_name:
+        await ctx.send("z3ma... who sold? walo. chi m3a9ed. safi.")
+        return
+
+    player_info = bot.squad.get(worst_name.lower(), {})
+    nickname = player_info.get("nickname", worst_name)
+
+    roast = bot.darija._format_roast(
+        "{name}. sold the match. z3ma... player? walo. delete game. trash. garbage.",
+        name=nickname
+    )
+
+    await ctx.send(roast)
+
+@bot.command(name="carry_detector")
+async def carry_detector_cmd(ctx: commands.Context):
+    """Detect who is carrying the team"""
+    mvp_name, mvp_stats = bot.stats.get_mvp(10)
+
+    if not mvp_name:
+        await ctx.send("z3ma... carry? walo. chi m3a9ed. safi.")
+        return
+
+    player_info = bot.squad.get(mvp_name.lower(), {})
+    nickname = player_info.get("nickname", mvp_name)
+
+    roast = bot.darija._format_roast(
+        "{name}. carrying the team. z3ma... rest of the team? walo. chi m3a9ed l3ba.",
+        name=nickname
+    )
+
+    embed = discord.Embed(
+        title="Carry Detector 🏋️",
+        description=roast,
+        color=0xFFD700
+    )
+
+    embed.add_field(name="Impact Score", value=f"{mvp_stats.get('impact_score', 0):.1f}", inline=True)
+    embed.add_field(name="Goals", value=mvp_stats.get("goals", 0), inline=True)
+    embed.add_field(name="Assists", value=mvp_stats.get("assists", 0), inline=True)
+
+    await ctx.send(embed=embed)
+
+@bot.command(name="fraud_check")
+async def fraud_check_cmd(ctx: commands.Context, *, player_name: str):
+    """Check if a player is a fraud"""
+    player_key = player_name.lower().strip()
+    player_info = bot.squad.get(player_key, {})
+
+    if not player_info:
+        await ctx.send(f"z3ma... {player_name}? walo. chi m3a9ed. safi.")
+        return
+
+    name = player_info.get("name", player_name)
+    stats = bot.stats.get_player_stats(name, 10)
+
+    if not stats:
+        await ctx.send(f"z3ma... fraud check dial {name}? walo. chi m3a9ed. safi.")
+        return
+
+    # Fraud detection logic
+    fraud_score = 0
+    fraud_reasons = []
+
+    if stats.get("goals", 0) == 0 and stats.get("assists", 0) == 0:
+        fraud_score += 50
+        fraud_reasons.append("0 goals, 0 assists")
+
+    if stats.get("rating", 10) < 6.0:
+        fraud_score += 30
+        fraud_reasons.append(f"Rating {stats['rating']:.1f}")
+
+    if stats.get("possession_losses", 0) > 15:
+        fraud_score += 20
+        fraud_reasons.append(f"{stats['possession_losses']} possession losses")
+
+    is_fraud = fraud_score >= 50
+
+    nickname = player_info.get("nickname", name)
+
+    if is_fraud:
+        roast = bot.darija._format_roast(
+            "{name}. FRAUD DETECTED. z3ma... player? walo. delete game. trash. garbage. 🗑️",
+            name=nickname
+        )
+    else:
+        roast = bot.darija._format_roast(
+            "{name}. z3ma... fraud? walo. chi m3a9ed. safi.",
+            name=nickname
+        )
+
+    embed = discord.Embed(
+        title=f"Fraud Check - {nickname}",
+        description=roast,
+        color=0xFF0000 if is_fraud else 0x00FF00
+    )
+
+    embed.add_field(name="Fraud Score", value=f"{fraud_score}/100", inline=True)
+    embed.add_field(name="Reasons", value="\n".join(fraud_reasons) if fraud_reasons else "None", inline=True)
+
+    await ctx.send(embed=embed)
+
+@bot.command(name="ballon_dor")
+async def ballon_dor_cmd(ctx: commands.Context):
+    """Ballon d'Or of the squad"""
+    leaderboard = bot.stats.get_leaderboard(50, "impact_score")
+
+    if not leaderboard:
+        await ctx.send("z3ma... ballon d'or? walo. chi m3a9ed. safi.")
+        return
+
+    winner_name, winner_stats = leaderboard[0]
+    player_info = bot.squad.get(winner_name.lower(), {})
+    nickname = player_info.get("nickname", winner_name)
+
+    roast = bot.darija._format_roast(
+        "{name}. ballon d'or. z3ma... best? walo. chi m3a9ed l3ba. clown team.",
+        name=nickname
+    )
+
+    embed = discord.Embed(
+        title="Ballon d'Or 🏆",
+        description=roast,
+        color=0xFFD700
+    )
+
+    embed.add_field(name="Winner", value=nickname, inline=True)
+    embed.add_field(name="Impact Score", value=f"{winner_stats.get('impact_score', 0):.1f}", inline=True)
+    embed.add_field(name="Goals", value=winner_stats.get("goals", 0), inline=True)
+    embed.add_field(name="Assists", value=winner_stats.get("assists", 0), inline=True)
+    embed.add_field(name="Rating", value=f"{winner_stats.get('rating', 0):.1f}", inline=True)
+
+    await ctx.send(embed=embed)
+
+@bot.command(name="ghost_detector")
+async def ghost_detector_cmd(ctx: commands.Context):
+    """Detect ghost players (low activity)"""
+    ghosts = []
+    for name in bot.squad:
+        stats = bot.stats.get_player_stats(bot.squad[name]["name"], 10)
+        if not stats or stats.get("matches", 0) < 3:
+            ghosts.append(name)
+
+    if not ghosts:
+        await ctx.send("z3ma... ghosts? walo. kolchi kayl3b. safi.")
+        return
+
+    ghost_names = [bot.squad[g].get("nickname", g) for g in ghosts]
+    roast = bot.darija._format_roast(
+        "{ghosts}. ghosts detected. z3ma... players? walo. delete game.",
+        ghosts=", ".join(ghost_names)
+    )
+
+    embed = discord.Embed(
+        title="Ghost Detector 👻",
+        description=roast,
+        color=0x808080
+    )
+
+    for ghost in ghosts:
+        stats = bot.stats.get_player_stats(bot.squad[ghost]["name"], 10)
+        matches = stats.get("matches", 0) if stats else 0
+        embed.add_field(
+            name=bot.squad[ghost].get("nickname", ghost),
+            value=f"{matches} matches played",
+            inline=True
+        )
+
+    await ctx.send(embed=embed)
+
+@bot.command(name="pass_the_ball")
+async def pass_the_ball_cmd(ctx: commands.Context, *, player_name: str):
+    """Call out a ball hog"""
+    player_key = player_name.lower().strip()
+    player_info = bot.squad.get(player_key, {})
+
+    if not player_info:
+        await ctx.send(f"z3ma... {player_name}? walo. chi m3a9ed. safi.")
+        return
+
+    name = player_info.get("name", player_name)
+    stats = bot.stats.get_player_stats(name, 5)
+
+    if not stats:
+        await ctx.send(f"z3ma... stats dial {name}? walo. chi m3a9ed. safi.")
+        return
+
+    dribbles = stats.get("dribbles_attempted", 0)
+    passes = stats.get("passes_attempted", 0)
+
+    if dribbles > passes * 0.5:
+        roast = bot.darija._format_roast(
+            "{name}. pass the ball! z3ma... dribbler? walo. chi m3a9ed l3ba. team sport.",
+            name=player_info.get("nickname", name)
+        )
+    else:
+        roast = bot.darija._format_roast(
+            "{name}. z3ma... ball hog? walo. chi m3a9ed. safi.",
+            name=player_info.get("nickname", name)
+        )
+
+    await ctx.send(roast)
+
+@bot.command(name="personality")
+async def personality_cmd(ctx: commands.Context, mode: str):
+    """Switch bot personality"""
+    if mode.lower() in PERSONALITIES:
+        bot.darija.set_personality(mode.lower())
+        await ctx.send(f"Personality switched to {mode.upper()}. z3ma... change? walo. safi.")
+    else:
+        modes = ", ".join(PERSONALITIES.keys())
+        await ctx.send(f"z3ma... personality? walo. Available: {modes}")
+
+@bot.command(name="sync")
+async def sync_cmd(ctx: commands.Context):
+    """Manually sync recent matches from EA API"""
+    try:
+        added = await bot.scraper.sync_recent_matches(bot.stats, count=10)
+        if added > 0:
+            await ctx.send(f"Synced {added} new matches. z3ma... data? walo. safi.")
+        else:
+            await ctx.send("z3ma... new matches? walo. chi m3a9ed. safi.")
+    except Exception as e:
+        await ctx.send(f"z3ma... sync? walo. Error: {e}")
 
 @bot.command(name="help")
-async def cmd_help(ctx):
-    lines = [
-        "⚽ **Rachad L3ERGONI Bot** _(Bad Words Only - Auto Leaderboards - Anime Cards)_",
-        "",
-        "**🎮 SESSION** `!roast` `!stop`",
-        "**📋 MATCH** `!lastmatch`",
-        "**👥 PLAYERS** `!stats <nom>` `!roastplayer <nom>` `!mvp` `!compare <p1> <p2>`",
-        "**📊 LEADERBOARD** `!leaderboard day/week/month/all`",
-        "**😂 FUN** `!banter` `!drama` `!meme` `!transfer`",
-        "**🔮 PREDICT** `!predict <adversaire>`",
-        "**ℹ️ INFO** `!clubinfo` `!help`",
-        "",
-        "_Auto: matchs kol 5min - Daily LB 20h - Weekly LB dimanche 20h - Monthly LB 1er 20h_",
+async def help_cmd(ctx: commands.Context):
+    """Show all commands"""
+    embed = discord.Embed(
+        title="Rachad L3ERGONI Bot - Commands",
+        description="95% roast mode | Native Darija | Real Stats | Pro Visuals",
+        color=0xFF6B35
+    )
+
+    commands_list = [
+        ("!roast", "Start session monitoring (5min checks)"),
+        ("!stop", "Stop session"),
+        ("!lastmatch", "Last match + all stats + MOTM card"),
+        ("!stats <name>", "Player stats + premium card"),
+        ("!roastplayer <name>", "Roast specific player with data"),
+        ("!mvp", "MVP of last 5 matches + card"),
+        ("!compare <p1> <p2>", "1v1 comparison + card"),
+        ("!leaderboard <period>", "Leaderboard (day/week/month/all) + card"),
+        ("!banter", "Football trash talk"),
+        ("!drama", "Drama/polemique"),
+        ("!meme", "Meme b Darija"),
+        ("!transfer", "Transfer rumor (humour)"),
+        ("!predict <opponent>", "Match prediction"),
+        ("!clubinfo", "Club info with all stats"),
+        ("!worst", "Worst player of the week"),
+        ("!who_sold", "Who sold the match"),
+        ("!carry_detector", "Who is carrying the team"),
+        ("!fraud_check <name>", "Check if player is fraud"),
+        ("!ballon_dor", "Ballon d'Or of the squad"),
+        ("!ghost_detector", "Detect inactive players"),
+        ("!pass_the_ball <name>", "Call out ball hog"),
+        ("!personality <mode>", "Switch personality (casablanca/analyst/toxic/coach/commentator/cafeteria)"),
+        ("!sync", "Manually sync matches from EA API"),
+        ("!help", "This message")
     ]
-    await ctx.send(chr(10).join(lines))
 
-# --- EVENTS ---
+    for cmd, desc in commands_list:
+        embed.add_field(name=cmd, value=desc, inline=False)
 
-@bot.event
-async def on_ready():
-    global seen_matches
-    seen_matches = load_seen()
-    logger.info(f"Bot ready: {bot.user}")
-    logger.info(f"Session poll: every {POLL_MINUTES}min | Timeout: {TIMEOUT_MINUTES}min")
-    logger.info(f"Auto leaderboards: Daily 20h | Weekly dimanche 20h | Monthly 1er 20h")
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="your matches 👀"))
-    if not daily_leaderboard.is_running():
-        daily_leaderboard.start()
-    if not weekly_leaderboard.is_running():
-        weekly_leaderboard.start()
-    if not monthly_leaderboard.is_running():
-        monthly_leaderboard.start()
+    embed.set_footer(text="Rachad L3ERGONI Pro Clubs | Made with 🔥 for the squad")
 
-@bot.event
-async def on_message(message):
-    if message.author == bot.user:
-        return
-    if message.content:
-        logger.info("[MSG] #%s | %s: %s", getattr(message.channel, "name", "DM"), message.author.name, message.content[:80])
-    await bot.process_commands(message)
+    await ctx.send(embed=embed)
 
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await _send(ctx.channel, "Ma3ndekch permission!", emotion="disappointment")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await _send(ctx.channel, "Naqes argument - !help bach tchouf.", emotion="thinking")
-    elif isinstance(error, commands.CommandNotFound):
-        pass
-    else:
-        logger.error("Command error [%s]: %s", ctx.command, error, exc_info=True)
-        await _send(ctx.channel, f"Error: {str(error)[:100]}", emotion="disappointment")
+# ==========================================
+# SLASH COMMANDS (Modern Discord)
+# ==========================================
 
-# --- HEALTH SERVER ---
-import aiohttp
-from aiohttp import web
+@bot.tree.command(name="stats", description="Show player stats with premium card")
+@app_commands.describe(player="Player name")
+async def slash_stats(interaction: discord.Interaction, player: str):
+    ctx = await commands.Context.from_interaction(interaction)
+    await stats_cmd(ctx, player_name=player)
+    await interaction.response.send_message("Stats sent!")
 
-async def health_handler(request):
-    return web.Response(text="Rachad L3ERGONI OK")
+@bot.tree.command(name="roast", description="Roast a player")
+@app_commands.describe(player="Player name")
+async def slash_roast(interaction: discord.Interaction, player: str):
+    ctx = await commands.Context.from_interaction(interaction)
+    await roastplayer_cmd(ctx, player_name=player)
+    await interaction.response.send_message("Roast sent!")
+
+@bot.tree.command(name="mvp", description="MVP of last 5 matches")
+async def slash_mvp(interaction: discord.Interaction):
+    ctx = await commands.Context.from_interaction(interaction)
+    await mvp_cmd(ctx)
+    await interaction.response.send_message("MVP sent!")
+
+@bot.tree.command(name="compare", description="Compare two players")
+@app_commands.describe(player1="First player", player2="Second player")
+async def slash_compare(interaction: discord.Interaction, player1: str, player2: str):
+    ctx = await commands.Context.from_interaction(interaction)
+    await compare_cmd(ctx, p1=player1, p2=player2)
+    await interaction.response.send_message("Comparison sent!")
+
+@bot.tree.command(name="leaderboard", description="Show leaderboard")
+@app_commands.describe(period="Time period (day/week/month/all)")
+async def slash_leaderboard(interaction: discord.Interaction, period: str = "week"):
+    ctx = await commands.Context.from_interaction(interaction)
+    await leaderboard_cmd(ctx, period=period)
+    await interaction.response.send_message("Leaderboard sent!")
+
+# ==========================================
+# HEALTH SERVER (for Render)
+# ==========================================
 
 async def start_health_server():
-    port = int(os.environ.get("PORT", 10000))
+    """Start simple health check server for Render"""
+    from aiohttp import web
+
+    async def health(request):
+        return web.Response(text="Rachad L3ERGONI Bot is alive!")
+
     app = web.Application()
-    app.router.add_get("/", health_handler)
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logger.info(f"Health server bound to port {port}")
-    return runner
+    print(f"Health server running on port {PORT}")
 
-# --- START ---
+# ==========================================
+# MAIN
+# ==========================================
+
+async def main():
+    """Main entry point"""
+    # Start health server in background
+    asyncio.create_task(start_health_server())
+
+    # Start bot
+    await bot.start(DISCORD_TOKEN)
+
 if __name__ == "__main__":
-    async def main():
-        runner = await start_health_server()
-        await bot.start(TOKEN)
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
-    except Exception as e:
-        logger.error(f"Bot crashed: {e}")
-        raise
+    asyncio.run(main())
