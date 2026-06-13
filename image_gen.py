@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 class ImageGenerator:
     """Generate premium visual cards for player stats, match reports, etc."""
 
+    # Position colors
     POSITION_COLORS = {
         "gk": (0, 150, 255),
         "def": (0, 200, 100),
@@ -41,7 +42,7 @@ class ImageGenerator:
         self.assets_path = assets_path
         self.fonts = {}
         self._load_fonts()
-        self._photo_cache = {}
+        self._photo_cache = {}  # Cache loaded photos
 
     def _load_fonts(self):
         """Load fonts - fallback to default if custom fonts not found"""
@@ -50,13 +51,13 @@ class ImageGenerator:
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/System/Library/Fonts/Helvetica.ttc",
-            "C:/Windows/Fonts/arial.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",  # macOS
+            "C:/Windows/Fonts/arial.ttf",  # Windows
         ]
-        
+
         bold_font = None
         regular_font = None
-        
+
         for path in font_paths:
             if os.path.exists(path):
                 if "Bold" in path or "-Bold" in path:
@@ -71,15 +72,17 @@ class ImageGenerator:
                             regular_font = ImageFont.truetype(path, 18)
                         except:
                             pass
-        
+
+        # Use default as fallback
         default = ImageFont.load_default()
-        
+
         self.fonts["header"] = bold_font or default
         self.fonts["subheader"] = bold_font or default
         self.fonts["body"] = regular_font or default
         self.fonts["small"] = regular_font or default
         self.fonts["rating"] = bold_font or default
-        
+
+        # Resize fonts to proper sizes
         if bold_font:
             try:
                 self.fonts["subheader"] = ImageFont.truetype(bold_font.path, 24)
@@ -139,10 +142,12 @@ class ImageGenerator:
         """Load player photo from assets folder with extensive name matching"""
         if name in self._photo_cache:
             return self._photo_cache[name]
-        
+
+        # Generate all possible name variants
         variants = set()
         base_names = [name]
-        
+
+        # Add common transformations
         for n in base_names:
             variants.add(n)
             variants.add(n.lower())
@@ -152,16 +157,18 @@ class ImageGenerator:
             variants.add(n.replace(" ", "-"))
             variants.add(n.replace("_", " "))
             variants.add(n.replace("-", " "))
-            variants.add(n.replace("9", "Q").upper())
-            variants.add(n.replace("9", "").upper())
+            # Handle special cases
+            variants.add(n.replace("9", "Q").upper())  # 9HBA -> QHBA? No, file is 9HBA
+            variants.add(n.replace("9", "").upper())   # 9HBA -> HBA
             variants.add(n.replace("qahba", "9ahba").upper())
             variants.add(n.replace("9ahba", "qahba").upper())
-        
+
+        # Also try with just the first word (for multi-word names)
         words = name.split()
         if len(words) > 1:
             variants.add(words[0].upper())
             variants.add(words[-1].upper())
-        
+
         for ext in [".png", ".jpg", ".jpeg", ".webp"]:
             for variant in variants:
                 path = os.path.join(self.assets_path, f"{variant}{ext}")
@@ -173,7 +180,7 @@ class ImageGenerator:
                     except Exception as e:
                         print(f"[Photo Load Error] {path}: {e}")
                         continue
-        
+
         return None
 
     def _round_image_corners(self, img: Image.Image, radius: int) -> Image.Image:
@@ -191,7 +198,7 @@ class ImageGenerator:
         """Generate a premium player stat card"""
         width, height = 800, 1000
         rating = stats.get("rating", 6.0)
-        
+
         if rating >= 8.5:
             gradient_colors = self.GRADIENTS["gold"]
             tier = "ELITE"
@@ -207,6 +214,7 @@ class ImageGenerator:
         position = info.get("position", "CM").lower()
         pos_color = self.POSITION_COLORS.get(position, (200, 200, 200))
 
+        # Draw player photo
         photo = self._load_player_photo(name)
         if photo:
             photo_size = 300
@@ -216,12 +224,15 @@ class ImageGenerator:
             photo_y = 80
             card.paste(photo, (photo_x, photo_y), photo)
 
+        # Draw name and position
         nickname = info.get("nickname", name)
         draw.text((width//2, 420), nickname, fill=(255, 255, 255), font=self.fonts["header"], anchor="mm")
         draw.text((width//2, 460), f"{position.upper()} | {tier}", fill=pos_color, font=self.fonts["subheader"], anchor="mm")
 
+        # Draw hexagon rating
         self._draw_hexagon_rating(draw, width//2 - 60, 500, 120, rating, pos_color)
 
+        # Draw stat bars
         stats_to_show = [
             ("Goals", stats.get("goals", 0), 20, (255, 100, 100)),
             ("Assists", stats.get("assists", 0), 15, (100, 255, 100)),
@@ -237,6 +248,7 @@ class ImageGenerator:
             draw.text((710, bar_y), str(value), fill=(255, 255, 255), font=self.fonts["body"])
             bar_y += 50
 
+        # Add impact score at bottom
         impact = stats.get("impact_score", 0)
         draw.text((width//2, 950), f"Impact Score: {impact:.1f}", fill=(255, 255, 255), font=self.fonts["subheader"], anchor="mm")
 
