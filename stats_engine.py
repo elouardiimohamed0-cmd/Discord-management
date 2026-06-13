@@ -1,12 +1,11 @@
 """
-Rachad L3ERGONI Bot - Stats Engine
-Gathers every possible stat from EA FC Pro Clubs API
-Calculates advanced metrics and form indices
+Rachad L3ERGONI Bot - Stats Engine v2
+Fixed: accepts dict from scraper, added match_exists(), proper squad name mapping
 """
 
 import json
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -16,7 +15,7 @@ from pathlib import Path
 class PlayerMatchStats:
     """Complete stats for a single match"""
     name: str
-    position: str
+    position: str = "unknown"
     goals: int = 0
     assists: int = 0
     shots: int = 0
@@ -108,6 +107,7 @@ class MatchResult:
     opponent_corners: int = 0
     team_fouls: int = 0
     opponent_fouls: int = 0
+    match_type: str = "gameType9"
     player_stats: Dict[str, PlayerMatchStats] = None
 
     def __post_init__(self):
@@ -149,6 +149,7 @@ class MatchResult:
             "opponent_corners": self.opponent_corners,
             "team_fouls": self.team_fouls,
             "opponent_fouls": self.opponent_fouls,
+            "match_type": self.match_type,
             "player_stats": {k: v.to_dict() for k, v in self.player_stats.items()}
         }
 
@@ -174,7 +175,8 @@ class StatsEngine:
                         if name not in self.player_career:
                             self.player_career[name] = []
                         self.player_career[name].append(stats)
-        except:
+        except Exception as e:
+            print(f"[StatsEngine] Load error: {e}")
             pass
 
     def save_data(self):
@@ -207,12 +209,13 @@ class StatsEngine:
             team_corners=data.get("team_corners", 0),
             opponent_corners=data.get("opponent_corners", 0),
             team_fouls=data.get("team_fouls", 0),
-            opponent_fouls=data.get("opponent_fouls", 0)
+            opponent_fouls=data.get("opponent_fouls", 0),
+            match_type=data.get("match_type", "gameType9")
         )
         for name, stats_data in data.get("player_stats", {}).items():
             match.player_stats[name] = PlayerMatchStats(
-                name=stats_data["name"],
-                position=stats_data["position"],
+                name=stats_data.get("name", name),
+                position=stats_data.get("position", "unknown"),
                 goals=stats_data.get("goals", 0),
                 assists=stats_data.get("assists", 0),
                 shots=stats_data.get("shots", 0),
@@ -236,21 +239,50 @@ class StatsEngine:
             )
         return match
 
-    def add_match(self, match: MatchResult):
-        """Add a new match result"""
+    # FIX #1: Accept both MatchResult objects AND plain dicts from scraper
+    def add_match(self, match_data):
+        """Add a new match result - accepts MatchResult or dict"""
+        # Convert dict to MatchResult if needed
+        if isinstance(match_data, dict):
+            match = self._dict_to_match(match_data)
+        elif isinstance(match_data, MatchResult):
+            match = match_data
+        else:
+            print(f"[StatsEngine] Invalid match type: {type(match_data)}")
+            return
+
         self.matches.append(match)
         for name, stats in match.player_stats.items():
             if name not in self.player_career:
                 self.player_career[name] = []
             self.player_career[name].append(stats)
         self.save_data()
+        print(f"[StatsEngine] Added match {match.match_id}: {match.opponent} ({match.result})")
 
+    # FIX #2: match_exists method that scraper calls
+    def match_exists(self, match_id: str) -> bool:
+        """Check if a match is already in the database"""
+        return any(str(m.match_id) == str(match_id) for m in self.matches)
+
+    # FIX #3: Get player stats by squad name (handles name variations)
     def get_player_stats(self, name: str, last_n: int = 5) -> dict:
         """Get aggregated stats for a player over last N matches"""
-        if name not in self.player_career:
+        # Try exact match first, then case-insensitive
+        player_key = None
+        if name in self.player_career:
+            player_key = name
+        else:
+            # Try case-insensitive search
+            name_lower = name.lower()
+            for key in self.player_career:
+                if key.lower() == name_lower:
+                    player_key = key
+                    break
+
+        if not player_key:
             return {}
 
-        recent = self.player_career[name][-last_n:]
+        recent = self.player_career[player_key][-last_n:]
         if not recent:
             return {}
 
@@ -282,7 +314,7 @@ class StatsEngine:
             "shot_accuracy": round(sum(m.shot_accuracy for m in recent) / total_matches, 1)
         }
 
-        # Advanced metrics
+        # Per-match averages
         stats["goals_per_match"] = round(stats["goals"] / total_matches, 2)
         stats["assists_per_match"] = round(stats["assists"] / total_matches, 2)
         stats["shots_per_match"] = round(stats["shots"] / total_matches, 2)
@@ -290,26 +322,24 @@ class StatsEngine:
         stats["key_passes_per_match"] = round(stats["key_passes"] / total_matches, 2)
         stats["possession_losses_per_match"] = round(stats["possession_losses"] / total_matches, 2)
 
-        # Impact score: weighted combination of offensive and defensive contributions
+        # Advanced metrics
         offensive = stats["goals"] * 3 + stats["assists"] * 2 + stats["key_passes"] * 0.5
         defensive = stats["tackles"] * 0.5 + stats["interceptions"] * 0.3
         stats["impact_score"] = round(offensive + defensive, 1)
 
-        # Clutch score: goals + assists in close matches (goal diff <= 1)
+        # Clutch score
         clutch_matches = [m for m in recent if abs(
-            next((match.goal_difference for match in self.matches if name in match.player_stats), 0)
+            next((match.goal_difference for match in self.matches if player_key in match.player_stats), 0)
         ) <= 1]
         stats["clutch_score"] = round(
             sum(m.goals for m in clutch_matches) * 2 + sum(m.assists for m in clutch_matches), 1
         ) if clutch_matches else 0
 
-        # Error score: possession losses + fouls + cards
+        # Error score
         stats["error_score"] = stats["possession_losses"] + stats["fouls"] * 2 + stats["yellow_cards"] * 5 + stats["red_cards"] * 10
-
-        # Throwing score: high error score + low rating
         stats["throwing_score"] = round(stats["error_score"] / max(stats["rating"], 1), 1)
 
-        # Form index: trend of last 3 matches vs previous 2
+        # Form index
         if total_matches >= 5:
             recent_3 = recent[-3:]
             previous_2 = recent[-5:-3]
@@ -321,13 +351,8 @@ class StatsEngine:
             stats["form_index"] = 0
             stats["form_trend"] = "stable"
 
-        # Passing influence: key passes + pass accuracy weighted
         stats["passing_influence"] = round(stats["key_passes"] * 2 + stats["pass_accuracy"] * 0.1, 1)
-
-        # Defensive contribution: tackles + interceptions weighted
         stats["defensive_contribution"] = round(stats["tackles"] * 1.5 + stats["interceptions"] * 1.0, 1)
-
-        # Offensive contribution: goals + shots on target + key passes weighted
         stats["offensive_contribution"] = round(
             stats["goals"] * 3 + stats["shots_on_target"] * 0.5 + stats["key_passes"] * 0.8, 1
         )
@@ -369,7 +394,6 @@ class StatsEngine:
         }
 
     def _get_streak(self, matches: List[MatchResult]) -> str:
-        """Get current win/loss streak"""
         if not matches:
             return "none"
         streak_type = matches[-1].result
@@ -382,7 +406,6 @@ class StatsEngine:
         return f"{count} {streak_type}s"
 
     def _get_best_streak(self, matches: List[MatchResult]) -> int:
-        """Get longest win streak"""
         best = 0
         current = 0
         for m in matches:
@@ -394,7 +417,6 @@ class StatsEngine:
         return best
 
     def _get_worst_streak(self, matches: List[MatchResult]) -> int:
-        """Get longest loss streak"""
         worst = 0
         current = 0
         for m in matches:
@@ -458,7 +480,7 @@ class StatsEngine:
     def get_match_report(self, match_id: str) -> Optional[MatchResult]:
         """Get detailed match report"""
         for match in self.matches:
-            if match.match_id == match_id:
+            if str(match.match_id) == str(match_id):
                 return match
         return None
 
@@ -470,8 +492,6 @@ class StatsEngine:
         """Get form string (W/L/D) for last N matches"""
         if name not in self.player_career:
             return ""
-        recent = self.player_career[name][-last_n:]
-        # Find matches this player participated in
         form = []
         for match in self.matches[-last_n:]:
             if name in match.player_stats:
