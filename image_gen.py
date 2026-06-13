@@ -75,10 +75,20 @@ class ImageGenerator:
         return ImageFont.load_default()
 
     def _load_player_photo(self, image_path: str, size: Tuple[int, int] = (350, 450)) -> Optional[Image.Image]:
-        """Load and process player photo"""
+        """Load and process player photo - supports .png, .jpeg, .jpg"""
         try:
+            # Try the exact path first
             if not os.path.exists(image_path):
-                return None
+                # Try alternative extensions
+                base = os.path.splitext(image_path)[0]
+                for ext in ['.png', '.jpeg', '.jpg', '.PNG', '.JPEG', '.JPG']:
+                    alt_path = base + ext
+                    if os.path.exists(alt_path):
+                        image_path = alt_path
+                        break
+                else:
+                    return None
+
             img = Image.open(image_path).convert("RGBA")
             img = img.resize(size, Image.LANCZOS)
             # Create rounded mask
