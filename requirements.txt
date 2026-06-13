@@ -1,6 +1,9 @@
-discord.py
-openai
-playwright
-pillow
-httpx
-aiohttp
+discord.py>=2.3.0
+python-dotenv>=1.0.0
+Pillow>=10.0.0
+httpx>=0.25.0
+aiohttp>=3.9.0
+aiofiles>=23.0.0
+schedule>=1.2.0
+numpy>=1.24.0
+matplotlib>=3.8.0
