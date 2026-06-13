@@ -1,6 +1,5 @@
-discord.py
-aiohttp
-python-dotenv
-Pillow
-httpx
-playwright
+discord.py>=2.7.0
+aiohttp>=3.8.0
+python-dotenv>=1.0.0
+Pillow>=10.0.0
+httpx>=0.25.0
