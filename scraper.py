@@ -1,12 +1,14 @@
 """
-Rachad L3ERGONI Bot - EA FC Pro Clubs API Scraper
-Fetches real match data from EA's Pro Clubs API
+Rachad L3ERGONI Bot - EA FC26 Pro Clubs LIVE API Scraper
+Fetches real-time match data from EA's FC26 Pro Clubs API
+Based on: https://github.com/1erkandogan/fc26-clubs-api
 """
 
 import os
 import json
 import asyncio
-from typing import Dict, List, Optional
+import time
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 import httpx
 from dataclasses import asdict
@@ -15,161 +17,229 @@ from stats_engine import MatchResult, PlayerMatchStats, StatsEngine
 
 
 class ProClubsScraper:
-    """Scraper for EA FC Pro Clubs API"""
+    """Live scraper for EA FC26 Pro Clubs API"""
 
-    def __init__(self, club_id: str = None, platform: str = "ps5"):
+    BASE_URL = "https://proclubs.ea.com/ea_fc/clubs/"
+
+    def __init__(self, club_id: str = None, platform: str = "common-gen5"):
         self.club_id = club_id or os.getenv("CLUB_ID", "")
-        self.platform = platform or os.getenv("PLATFORM", "ps5")
-        self.base_url = os.getenv("EA_API_BASE", "https://proclubs.ea.com/api/fifa")
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.platform = platform or os.getenv("PLATFORM", "common-gen5")
+        self.client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+        self._last_match_id = None
 
-    async def fetch_club_stats(self) -> dict:
-        """Fetch club overall stats"""
-        url = f"{self.base_url}/clubs/stats?platform={self.platform}&clubId={self.club_id}"
+    async def _get(self, endpoint: str, params: dict = None) -> dict:
+        """Make authenticated GET request to EA API"""
+        url = f"{self.BASE_URL}{endpoint}"
         try:
-            response = await self.client.get(url)
+            response = await self.client.get(url, params=params)
             response.raise_for_status()
             return response.json()
         except Exception as e:
-            print(f"Error fetching club stats: {e}")
+            print(f"[EA API Error] {endpoint}: {e}")
             return {}
 
-    async def fetch_match_history(self, match_type: str = "gameType9", count: int = 20) -> List[dict]:
-        """Fetch recent match history"""
-        url = f"{self.base_url}/clubs/matches?matchType={match_type}&platform={self.platform}&clubIds={self.club_id}"
-        try:
-            response = await self.client.get(url)
-            response.raise_for_status()
-            data = response.json()
-            return data[:count] if isinstance(data, list) else []
-        except Exception as e:
-            print(f"Error fetching match history: {e}")
-            return []
+    async def get_club_info(self) -> dict:
+        """Get club basic info"""
+        return await self._get("getClubInfo", {
+            "platform": self.platform,
+            "clubId": self.club_id
+        })
 
-    async def fetch_match_details(self, match_id: str) -> dict:
-        """Fetch detailed match data"""
-        url = f"{self.base_url}/match?matchId={match_id}&platform={self.platform}"
-        try:
-            response = await self.client.get(url)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            print(f"Error fetching match details: {e}")
-            return {}
+    async def get_club_stats(self) -> dict:
+        """Get club overall stats"""
+        return await self._get("getClubStats", {
+            "platform": self.platform,
+            "clubId": self.club_id
+        })
 
-    async def fetch_player_stats(self, player_name: str) -> dict:
-        """Fetch individual player stats"""
-        url = f"{self.base_url}/members/stats?platform={self.platform}&clubId={self.club_id}"
-        try:
-            response = await self.client.get(url)
-            response.raise_for_status()
-            data = response.json()
-            for member in data.get("members", []):
-                if member.get("name", "").lower() == player_name.lower():
-                    return member
-            return {}
-        except Exception as e:
-            print(f"Error fetching player stats: {e}")
-            return {}
+    async def get_recent_matches(self, match_type: str = "gameType9", count: int = 20) -> List[dict]:
+        """Get recent match history"""
+        data = await self._get("matchHistory", {
+            "platform": self.platform,
+            "clubIds": self.club_id,
+            "matchType": match_type
+        })
+        matches = data if isinstance(data, list) else data.get("matches", [])
+        return matches[:count]
+
+    async def get_match_details(self, match_id: str) -> dict:
+        """Get detailed match data by match ID"""
+        return await self._get("match", {
+            "platform": self.platform,
+            "matchId": match_id
+        })
+
+    async def get_member_stats(self) -> List[dict]:
+        """Get all member stats"""
+        data = await self._get("members", {
+            "platform": self.platform,
+            "clubId": self.club_id
+        })
+        return data if isinstance(data, list) else data.get("members", [])
+
+    async def get_member_career_stats(self, player_name: str) -> dict:
+        """Get career stats for a specific member"""
+        members = await self.get_member_stats()
+        for member in members:
+            if member.get("name", "").lower() == player_name.lower():
+                return member
+        return {}
+
+    async def get_seasonal_stats(self) -> dict:
+        """Get seasonal stats"""
+        return await self._get("seasonalStats", {
+            "platform": self.platform,
+            "clubId": self.club_id
+        })
 
     def parse_match_data(self, match_data: dict) -> MatchResult:
-        """Parse raw API data into MatchResult"""
-        match_id = match_data.get("matchId", "")
+        """Parse raw EA API data into MatchResult"""
+        match_id = match_data.get("matchId", match_data.get("match_id", ""))
 
-        # Determine teams
+        # Parse clubs
         clubs = match_data.get("clubs", {})
         our_club = None
         opponent_club = None
+        opponent_id = None
 
         for club_id, club_info in clubs.items():
             if str(club_id) == str(self.club_id):
                 our_club = club_info
             else:
                 opponent_club = club_info
+                opponent_id = club_id
 
-        if not our_club or not opponent_club:
-            # Fallback: assume first is us
+        if not our_club:
             club_ids = list(clubs.keys())
-            our_club = clubs.get(club_ids[0], {}) if club_ids else {}
-            opponent_club = clubs.get(club_ids[1], {}) if len(club_ids) > 1 else {}
+            if club_ids:
+                our_club = clubs[club_ids[0]]
+            if len(club_ids) > 1:
+                opponent_club = clubs[club_ids[1]]
+                opponent_id = club_ids[1]
 
-        # Parse player stats
+        # Parse players
         players_data = match_data.get("players", {})
         player_stats = {}
 
         for club_id, players in players_data.items():
             if str(club_id) == str(self.club_id):
                 for player in players:
-                    name = player.get("playername", "Unknown")
+                    name = player.get("playername", player.get("name", "Unknown"))
                     stats = player.get("stats", {})
+
+                    # Handle both string and int stats from EA API
+                    def safe_int(val, default=0):
+                        if val is None:
+                            return default
+                        try:
+                            return int(val)
+                        except (ValueError, TypeError):
+                            return default
+
+                    def safe_float(val, default=0.0):
+                        if val is None:
+                            return default
+                        try:
+                            return float(val)
+                        except (ValueError, TypeError):
+                            return default
 
                     player_stats[name] = PlayerMatchStats(
                         name=name,
                         position=player.get("position", "ST"),
-                        goals=int(stats.get("goals", 0)),
-                        assists=int(stats.get("assists", 0)),
-                        shots=int(stats.get("shots", 0)),
-                        shots_on_target=int(stats.get("shotattempts", 0)),
-                        passes_attempted=int(stats.get("passattempts", 0)),
-                        passes_completed=int(stats.get("passesmade", 0)),
-                        key_passes=int(stats.get("keypasses", 0)),
-                        tackles=int(stats.get("tacklesmade", 0)),
-                        interceptions=int(stats.get("interceptions", 0)),
-                        possession_losses=int(stats.get("possessionlost", 0)),
-                        dribbles_attempted=int(stats.get("dribbles", 0)),
-                        dribbles_completed=int(stats.get("dribbleSuccess", 0)),
-                        fouls=int(stats.get("fouls", 0)),
-                        yellow_cards=int(stats.get("yellowcards", 0)),
-                        red_cards=int(stats.get("redcards", 0)),
-                        rating=float(stats.get("rating", 6.0)),
-                        motm=stats.get("motm", "0") == "1",
-                        minutes_played=int(stats.get("minutesPlayed", 90)),
-                        distance_covered=float(stats.get("distance", 0)),
-                        sprint_speed=float(stats.get("sprintSpeed", 0))
+                        goals=safe_int(stats.get("goals")),
+                        assists=safe_int(stats.get("assists")),
+                        shots=safe_int(stats.get("shots")),
+                        shots_on_target=safe_int(stats.get("shotattempts")),
+                        passes_attempted=safe_int(stats.get("passattempts")),
+                        passes_completed=safe_int(stats.get("passesmade")),
+                        key_passes=safe_int(stats.get("keypasses")),
+                        tackles=safe_int(stats.get("tacklesmade")),
+                        interceptions=safe_int(stats.get("interceptions")),
+                        possession_losses=safe_int(stats.get("possessionlost")),
+                        dribbles_attempted=safe_int(stats.get("dribbles")),
+                        dribbles_completed=safe_int(stats.get("dribbleSuccess")),
+                        fouls=safe_int(stats.get("fouls")),
+                        yellow_cards=safe_int(stats.get("yellowcards")),
+                        red_cards=safe_int(stats.get("redcards")),
+                        rating=safe_float(stats.get("rating"), 6.0),
+                        motm=str(stats.get("motm", "0")) == "1",
+                        minutes_played=safe_int(stats.get("minutesPlayed"), 90),
+                        distance_covered=safe_float(stats.get("distance")),
+                        sprint_speed=safe_float(stats.get("sprintSpeed"))
                     )
 
         # Parse team stats
-        team_stats = our_club.get("gameStats", {}) if our_club else {}
+        our_stats = our_club.get("gameStats", {}) if our_club else {}
         opp_stats = opponent_club.get("gameStats", {}) if opponent_club else {}
+
+        # Get opponent name
+        opp_name = "Unknown"
+        if opponent_club:
+            opp_details = opponent_club.get("details", {})
+            opp_name = opp_details.get("name", opp_details.get("clubName", "Unknown"))
 
         match_result = MatchResult(
             match_id=match_id,
             date=match_data.get("timestamp", datetime.now().isoformat()),
-            opponent=opponent_club.get("details", {}).get("name", "Unknown") if opponent_club else "Unknown",
-            team_goals=int(team_stats.get("goals", 0)),
-            opponent_goals=int(opp_stats.get("goals", 0)),
-            team_possession=float(team_stats.get("possession", 50)),
-            opponent_possession=float(opp_stats.get("possession", 50)),
-            team_shots=int(team_stats.get("shots", 0)),
-            opponent_shots=int(opp_stats.get("shots", 0)),
-            team_shots_on_target=int(team_stats.get("shotattempts", 0)),
-            opponent_shots_on_target=int(opp_stats.get("shotattempts", 0)),
-            team_passes=int(team_stats.get("passesmade", 0)),
-            opponent_passes=int(opp_stats.get("passesmade", 0)),
-            team_tackles=int(team_stats.get("tacklesmade", 0)),
-            opponent_tackles=int(opp_stats.get("tacklesmade", 0)),
-            team_corners=int(team_stats.get("corners", 0)),
-            opponent_corners=int(opp_stats.get("corners", 0)),
-            team_fouls=int(team_stats.get("fouls", 0)),
-            opponent_fouls=int(opp_stats.get("fouls", 0)),
+            opponent=opp_name,
+            team_goals=safe_int(our_stats.get("goals")),
+            opponent_goals=safe_int(opp_stats.get("goals")),
+            team_possession=safe_float(our_stats.get("possession"), 50.0),
+            opponent_possession=safe_float(opp_stats.get("possession"), 50.0),
+            team_shots=safe_int(our_stats.get("shots")),
+            opponent_shots=safe_int(opp_stats.get("shots")),
+            team_shots_on_target=safe_int(our_stats.get("shotattempts")),
+            opponent_shots_on_target=safe_int(opp_stats.get("shotattempts")),
+            team_passes=safe_int(our_stats.get("passesmade")),
+            opponent_passes=safe_int(opp_stats.get("passesmade")),
+            team_tackles=safe_int(our_stats.get("tacklesmade")),
+            opponent_tackles=safe_int(opp_stats.get("tacklesmade")),
+            team_corners=safe_int(our_stats.get("corners")),
+            opponent_corners=safe_int(opp_stats.get("corners")),
+            team_fouls=safe_int(our_stats.get("fouls")),
+            opponent_fouls=safe_int(opp_stats.get("fouls")),
             player_stats=player_stats
         )
 
         return match_result
 
+    async def check_new_match(self) -> Optional[MatchResult]:
+        """Check if there's a new match since last check"""
+        matches = await self.get_recent_matches(count=1)
+        if not matches:
+            return None
+
+        latest = matches[0]
+        match_id = latest.get("matchId", latest.get("match_id", ""))
+
+        if match_id and match_id != self._last_match_id:
+            self._last_match_id = match_id
+            details = await self.get_match_details(match_id)
+            if details:
+                return self.parse_match_data(details)
+
+        return None
+
     async def sync_recent_matches(self, stats_engine: StatsEngine, count: int = 10) -> int:
-        """Sync recent matches to stats engine"""
-        matches = await self.fetch_match_history(count=count)
+        """Sync recent matches to local stats engine"""
+        matches = await self.get_recent_matches(count=count)
         added = 0
 
         for match_summary in matches:
-            match_id = match_summary.get("matchId", "")
+            match_id = match_summary.get("matchId", match_summary.get("match_id", ""))
             if not any(m.match_id == match_id for m in stats_engine.matches):
-                match_data = await self.fetch_match_details(match_id)
+                match_data = await self.get_match_details(match_id)
                 if match_data:
-                    match_result = self.parse_match_data(match_data)
-                    stats_engine.add_match(match_result)
-                    added += 1
+                    try:
+                        match_result = self.parse_match_data(match_data)
+                        stats_engine.add_match(match_result)
+                        added += 1
+                    except Exception as e:
+                        print(f"[Parse Error] Match {match_id}: {e}")
+
+        if added > 0:
+            print(f"[Sync] Added {added} new matches")
 
         return added
 
@@ -178,10 +248,10 @@ class ProClubsScraper:
         await self.client.aclose()
 
 
-# Singleton instance
+# Singleton
 _scraper = None
 
-def get_scraper(club_id: str = None, platform: str = "ps5") -> ProClubsScraper:
+def get_scraper(club_id: str = None, platform: str = "common-gen5") -> ProClubsScraper:
     global _scraper
     if _scraper is None:
         _scraper = ProClubsScraper(club_id, platform)
