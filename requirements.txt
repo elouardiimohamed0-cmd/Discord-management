@@ -2,5 +2,5 @@ discord.py
 aiohttp
 python-dotenv
 Pillow
-httpx[http2]
+httpx
 playwright
