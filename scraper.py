@@ -1,7 +1,6 @@
 """
 Rachad L3ERGONI Bot - EA FC26 Pro Clubs LIVE API Scraper
-Fetches real-time match data from EA's FC26 Pro Clubs API
-Based on: https://github.com/1erkandogan/fc26-clubs-api
+Primary: Direct EA API (httpx) | Fallback: Playwright browser scraping
 """
 
 import os
@@ -17,7 +16,7 @@ from stats_engine import MatchResult, PlayerMatchStats, StatsEngine
 
 
 class ProClubsScraper:
-    """Live scraper for EA FC26 Pro Clubs API"""
+    """Live scraper for EA FC26 Pro Clubs - API + Playwright fallback"""
 
     BASE_URL = "https://proclubs.ea.com/ea_fc/clubs/"
 
@@ -26,6 +25,22 @@ class ProClubsScraper:
         self.platform = platform or os.getenv("PLATFORM", "common-gen5")
         self.client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
         self._last_match_id = None
+        self._playwright_available = False
+        self._browser = None
+        self._page = None
+
+    async def _init_playwright(self):
+        """Initialize Playwright browser as fallback"""
+        try:
+            from playwright.async_api import async_playwright
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(headless=True)
+            self._page = await self._browser.new_page()
+            self._playwright_available = True
+            print("[Scraper] Playwright fallback ready")
+        except Exception as e:
+            print(f"[Scraper] Playwright not available: {e}")
+            self._playwright_available = False
 
     async def _get(self, endpoint: str, params: dict = None) -> dict:
         """Make authenticated GET request to EA API"""
@@ -39,21 +54,12 @@ class ProClubsScraper:
             return {}
 
     async def get_club_info(self) -> dict:
-        """Get club basic info"""
-        return await self._get("getClubInfo", {
-            "platform": self.platform,
-            "clubId": self.club_id
-        })
+        return await self._get("getClubInfo", {"platform": self.platform, "clubId": self.club_id})
 
     async def get_club_stats(self) -> dict:
-        """Get club overall stats"""
-        return await self._get("getClubStats", {
-            "platform": self.platform,
-            "clubId": self.club_id
-        })
+        return await self._get("getClubStats", {"platform": self.platform, "clubId": self.club_id})
 
     async def get_recent_matches(self, match_type: str = "gameType9", count: int = 20) -> List[dict]:
-        """Get recent match history"""
         data = await self._get("matchHistory", {
             "platform": self.platform,
             "clubIds": self.club_id,
@@ -63,22 +69,13 @@ class ProClubsScraper:
         return matches[:count]
 
     async def get_match_details(self, match_id: str) -> dict:
-        """Get detailed match data by match ID"""
-        return await self._get("match", {
-            "platform": self.platform,
-            "matchId": match_id
-        })
+        return await self._get("match", {"platform": self.platform, "matchId": match_id})
 
     async def get_member_stats(self) -> List[dict]:
-        """Get all member stats"""
-        data = await self._get("members", {
-            "platform": self.platform,
-            "clubId": self.club_id
-        })
+        data = await self._get("members", {"platform": self.platform, "clubId": self.club_id})
         return data if isinstance(data, list) else data.get("members", [])
 
     async def get_member_career_stats(self, player_name: str) -> dict:
-        """Get career stats for a specific member"""
         members = await self.get_member_stats()
         for member in members:
             if member.get("name", "").lower() == player_name.lower():
@@ -86,17 +83,64 @@ class ProClubsScraper:
         return {}
 
     async def get_seasonal_stats(self) -> dict:
-        """Get seasonal stats"""
-        return await self._get("seasonalStats", {
-            "platform": self.platform,
-            "clubId": self.club_id
-        })
+        return await self._get("seasonalStats", {"platform": self.platform, "clubId": self.club_id})
+
+    # ==========================================
+    # PLAYWRIGHT FALLBACK METHODS
+    # ==========================================
+
+    async def _playwright_fetch(self, url: str) -> dict:
+        """Fetch data using Playwright browser"""
+        if not self._playwright_available:
+            await self._init_playwright()
+
+        if not self._page:
+            return {}
+
+        try:
+            await self._page.goto(url, wait_until="networkidle")
+            content = await self._page.evaluate("() => document.body.innerText")
+            return json.loads(content)
+        except Exception as e:
+            print(f"[Playwright Error] {url}: {e}")
+            return {}
+
+    async def get_recent_matches_playwright(self, count: int = 20) -> List[dict]:
+        """Fallback: Get matches via Playwright browser"""
+        url = f"{self.BASE_URL}matchHistory?platform={self.platform}&clubIds={self.club_id}&matchType=gameType9"
+        data = await self._playwright_fetch(url)
+        matches = data if isinstance(data, list) else data.get("matches", [])
+        return matches[:count]
+
+    async def get_match_details_playwright(self, match_id: str) -> dict:
+        """Fallback: Get match details via Playwright"""
+        url = f"{self.BASE_URL}match?platform={self.platform}&matchId={match_id}"
+        return await self._playwright_fetch(url)
+
+    # ==========================================
+    # UNIFIED METHODS (Auto-fallback)
+    # ==========================================
+
+    async def get_recent_matches_unified(self, count: int = 20) -> List[dict]:
+        """Get matches - tries API first, falls back to Playwright"""
+        matches = await self.get_recent_matches(count=count)
+        if not matches and self._playwright_available:
+            print("[Scraper] API failed, trying Playwright fallback...")
+            matches = await self.get_recent_matches_playwright(count=count)
+        return matches
+
+    async def get_match_details_unified(self, match_id: str) -> dict:
+        """Get match details - tries API first, falls back to Playwright"""
+        details = await self.get_match_details(match_id)
+        if not details and self._playwright_available:
+            print("[Scraper] API failed, trying Playwright fallback...")
+            details = await self.get_match_details_playwright(match_id)
+        return details
 
     def parse_match_data(self, match_data: dict) -> MatchResult:
         """Parse raw EA API data into MatchResult"""
         match_id = match_data.get("matchId", match_data.get("match_id", ""))
 
-        # Parse clubs
         clubs = match_data.get("clubs", {})
         our_club = None
         opponent_club = None
@@ -117,7 +161,6 @@ class ProClubsScraper:
                 opponent_club = clubs[club_ids[1]]
                 opponent_id = club_ids[1]
 
-        # Parse players
         players_data = match_data.get("players", {})
         player_stats = {}
 
@@ -127,22 +170,15 @@ class ProClubsScraper:
                     name = player.get("playername", player.get("name", "Unknown"))
                     stats = player.get("stats", {})
 
-                    # Handle both string and int stats from EA API
                     def safe_int(val, default=0):
-                        if val is None:
-                            return default
-                        try:
-                            return int(val)
-                        except (ValueError, TypeError):
-                            return default
+                        if val is None: return default
+                        try: return int(val)
+                        except: return default
 
                     def safe_float(val, default=0.0):
-                        if val is None:
-                            return default
-                        try:
-                            return float(val)
-                        except (ValueError, TypeError):
-                            return default
+                        if val is None: return default
+                        try: return float(val)
+                        except: return default
 
                     player_stats[name] = PlayerMatchStats(
                         name=name,
@@ -169,11 +205,9 @@ class ProClubsScraper:
                         sprint_speed=safe_float(stats.get("sprintSpeed"))
                     )
 
-        # Parse team stats
         our_stats = our_club.get("gameStats", {}) if our_club else {}
         opp_stats = opponent_club.get("gameStats", {}) if opponent_club else {}
 
-        # Get opponent name
         opp_name = "Unknown"
         if opponent_club:
             opp_details = opponent_club.get("details", {})
@@ -206,7 +240,7 @@ class ProClubsScraper:
 
     async def check_new_match(self) -> Optional[MatchResult]:
         """Check if there's a new match since last check"""
-        matches = await self.get_recent_matches(count=1)
+        matches = await self.get_recent_matches_unified(count=1)
         if not matches:
             return None
 
@@ -215,7 +249,7 @@ class ProClubsScraper:
 
         if match_id and match_id != self._last_match_id:
             self._last_match_id = match_id
-            details = await self.get_match_details(match_id)
+            details = await self.get_match_details_unified(match_id)
             if details:
                 return self.parse_match_data(details)
 
@@ -223,13 +257,13 @@ class ProClubsScraper:
 
     async def sync_recent_matches(self, stats_engine: StatsEngine, count: int = 10) -> int:
         """Sync recent matches to local stats engine"""
-        matches = await self.get_recent_matches(count=count)
+        matches = await self.get_recent_matches_unified(count=count)
         added = 0
 
         for match_summary in matches:
             match_id = match_summary.get("matchId", match_summary.get("match_id", ""))
             if not any(m.match_id == match_id for m in stats_engine.matches):
-                match_data = await self.get_match_details(match_id)
+                match_data = await self.get_match_details_unified(match_id)
                 if match_data:
                     try:
                         match_result = self.parse_match_data(match_data)
@@ -244,11 +278,14 @@ class ProClubsScraper:
         return added
 
     async def close(self):
-        """Close HTTP client"""
+        """Close HTTP client and browser"""
         await self.client.aclose()
+        if self._browser:
+            await self._browser.close()
+        if hasattr(self, '_playwright'):
+            await self._playwright.stop()
 
 
-# Singleton
 _scraper = None
 
 def get_scraper(club_id: str = None, platform: str = "common-gen5") -> ProClubsScraper:
