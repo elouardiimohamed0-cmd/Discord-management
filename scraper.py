@@ -1,37 +1,81 @@
 """
-Rachad L3ERGONI Bot - ProClubsTracker Scraper v5
-CORRECT approach: Playwright with proper waiting + network interception
+Rachad L3ERGONI Bot - ProClubsTracker Scraper v6
+Based on the WORKING code from yesterday.
+Strategy:
+  1. Direct PCT API: https://proclubstracker.com/api/clubs/{CLUB_ID}?platform={PLATFORM}
+  2. Playwright DOM fallback
+  3. In-memory cache with TTL
 """
 
-import os
-import json
 import asyncio
+import json
+import logging
 import re
+import shutil
+import time
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Tuple
-import httpx
-import hashlib
+from typing import Optional, Dict, Any, List
 
-EA_BASE = "https://proclubs.ea.com/api/fc"
-PCT_BASE = "https://proclubstracker.com"
+import httpx
+
+logger = logging.getLogger(__name__)
+
+CACHE_TTL_SECONDS = 1800
+
+UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+HEADERS = {
+    "User-Agent": UA,
+    "Accept": "application/json, text/html,*/*",
+    "Referer": "https://proclubstracker.com/",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+_cache: dict = {}
+_cache_ts: float = 0.0
+_cache_lock = asyncio.Lock()
 
 
 class ProClubsTrackerScraper:
     """
-    Proper scraper for ProClubsTracker.com
-    Strategy:
-    1. Playwright network intercept - catch the API calls ProClubsTracker makes
-    2. Fallback: wait for React render, then extract from DOM
-    3. Fallback: EA API direct
+    Scraper that uses ProClubsTracker's own API endpoint.
+    This was working yesterday and returns structured JSON.
     """
 
     def __init__(self, club_id: str, platform: str = "common-gen5", division: str = "6"):
         self.club_id = str(club_id)
         self.platform = platform
         self.division = division
-        self.club_url = f"{PCT_BASE}/club/{club_id}?platform={platform}&div={division}"
-        self._client: Optional[httpx.AsyncClient] = None
-        self._intercepted_data: Dict[str, Any] = {}
+        self.pct_url = f"https://proclubstracker.com/club/{club_id}?platform={platform}&div={division}"
+        self.pct_api = f"https://proclubstracker.com/api/clubs/{club_id}?platform={platform}"
+        self._playwright_available = None
+
+    # ── Cache helpers ─────────────────────────────────────────────────────
+
+    def _cache_age(self) -> float:
+        return time.time() - _cache_ts if _cache_ts else float("inf")
+
+    def _get_cached(self, max_matches: int = 5) -> Optional[dict]:
+        if not _cache or self._cache_age() > CACHE_TTL_SECONDS:
+            return None
+        raw = _cache.get("raw", {})
+        matches = (raw.get("matches") or [])[:max_matches]
+        return {**raw, "matches": matches} if matches else None
+
+    def _set_cache(self, data: dict):
+        global _cache, _cache_ts
+        _cache = {"raw": data}
+        _cache_ts = time.time()
+
+    def _invalidate_cache(self):
+        global _cache, _cache_ts
+        _cache = {}
+        _cache_ts = 0.0
+
+    # ── Squad helpers ─────────────────────────────────────────────────────────
 
     def _load_squad(self) -> Dict[str, dict]:
         try:
@@ -52,442 +96,309 @@ class ProClubsTrackerScraper:
             if nick in ea_lower or ea_lower in nick: return key
         return None
 
-    # ===================== PLAYWRIGHT SCRAPER =====================
+    # ── Tier 1: Direct PCT API ──────────────────────────────────────────────
 
-    async def _scrape_with_playwright(self) -> Dict[str, Any]:
-        """
-        Use Playwright to either:
-        A) Intercept network requests to EA API
-        B) Extract rendered DOM after React loads
-        """
+    async def _pct_api_fetch(self, max_matches: int = 10) -> dict:
+        """Fetch from ProClubsTracker's own API endpoint."""
         try:
-            from playwright.async_api import async_playwright
-        except ImportError:
-            print("[Scraper] Playwright not installed")
-            return {}
+            async with httpx.AsyncClient(
+                headers=HEADERS, follow_redirects=True, timeout=20
+            ) as client:
+                logger.info("📡 Fetching PCT API: %s", self.pct_api)
+                resp = await client.get(self.pct_api)
 
-        print(f"[Scraper] Launching Playwright for: {self.club_url}")
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--disable-web-security',
-                    '--disable-features=IsolateOrigins,site-per-process'
-                ]
-            )
-            context = await browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
-            )
-            page = await context.new_page()
-
-            # Setup network interception to catch EA API calls
-            intercepted_matches = []
-            intercepted_players = []
-
-            async def handle_route(route, request):
-                url = request.url
-                # Intercept EA API calls
-                if 'proclubs.ea.com/api/fc' in url or 'ea.com/api/fc' in url:
-                    try:
-                        response = await route.fetch()
-                        body = await response.json()
-                        if 'matches' in url or 'match' in url:
-                            if isinstance(body, list):
-                                intercepted_matches.extend(body)
-                            elif isinstance(body, dict):
-                                intercepted_matches.append(body)
-                        elif 'members' in url or 'player' in url or 'career' in url:
-                            if isinstance(body, list):
-                                intercepted_players.extend(body)
-                        print(f"[Intercept] EA API: {url.split('?')[0]}")
-                    except:
-                        pass
-                    await route.fallback()
-                else:
-                    await route.fallback()
-
-            await page.route("**/*", handle_route)
-
-            # Navigate to the page
-            try:
-                await page.goto(self.club_url, wait_until="networkidle", timeout=45000)
-            except Exception as e:
-                print(f"[Scraper] Navigation timeout: {e}")
-                await browser.close()
+            if resp.status_code != 200:
+                logger.warning("PCT API returned HTTP %s", resp.status_code)
                 return {}
 
-            # Wait for loading to finish
-            print("[Scraper] Waiting for content to load...")
-            for i in range(15):
-                loading = await page.query_selector("text=/Loading club data|Loading...|Spinner/i")
-                if not loading:
-                    break
-                await asyncio.sleep(1)
+            data = resp.json()
+            logger.info("✅ PCT API OK (keys: %s)", list(data.keys()))
 
-            # Extra wait for React to render
-            await asyncio.sleep(3)
+        except Exception as e:
+            logger.error("PCT API request failed: %s", e)
+            return {}
 
-            # If we intercepted API data, use it
-            if intercepted_matches or intercepted_players:
-                print(f"[Scraper] Intercepted {len(intercepted_matches)} matches, {len(intercepted_players)} players")
-                await browser.close()
-                return {
-                    "matches": intercepted_matches,
-                    "players": intercepted_players,
-                    "source": "network_intercept",
-                    "timestamp": datetime.now().isoformat()
-                }
+        raw_matches_dict = data.get("matches") or {}
+        league   = raw_matches_dict.get("league",   []) or []
+        playoff  = raw_matches_dict.get("playoff",  []) or []
+        friendly = raw_matches_dict.get("friendly", []) or []
+        all_matches = (league + playoff + friendly)[:max_matches]
 
-            # Otherwise, extract from DOM
-            print("[Scraper] No API interception, extracting from DOM...")
+        logger.info(
+            "Matches: %d league + %d playoff + %d friendly → %d total",
+            len(league), len(playoff), len(friendly), len(all_matches),
+        )
 
-            # Strategy 1: Look for window.__NEXT_DATA__
-            next_data = await page.evaluate("""() => {
-                try {
-                    return window.__NEXT_DATA__;
-                } catch(e) { return null; }
-            }""")
+        # Parse each match into stats_engine format
+        parsed_matches = []
+        for raw_match in all_matches:
+            parsed = self._parse_pct_match(raw_match)
+            if parsed:
+                parsed_matches.append(parsed)
 
-            if next_data:
-                print("[Scraper] Found window.__NEXT_DATA__")
-                props = next_data.get("props", {})
-                page_props = props.get("pageProps", {}) if isinstance(props, dict) else {}
+        member_stats = data.get("memberStats") or {}
+        members = member_stats.get("members") or []
 
-                matches = []
-                players = []
+        club_info_raw = data.get("clubInfoData") or {}
+        club_info = club_info_raw.get(str(self.club_id)) or next(iter(club_info_raw.values()), {})
 
-                if isinstance(page_props, dict):
-                    if "matches" in page_props and isinstance(page_props["matches"], list):
-                        matches = page_props["matches"]
-                    if "players" in page_props and isinstance(page_props["players"], list):
-                        players = page_props["players"]
-                    if "club" in page_props and isinstance(page_props["club"], dict):
-                        club_data = page_props["club"]
-                        if "matches" in club_data:
-                            matches = club_data["matches"]
-                        if "players" in club_data:
-                            players = club_data["players"]
+        overall = data.get("overallStats") or {}
+        club_stats = {
+            "wins":         overall.get("wins", "?"),
+            "losses":       overall.get("losses", "?"),
+            "ties":         overall.get("ties", "?"),
+            "goals":        overall.get("goals", "?"),
+            "goalsAgainst": overall.get("goalsAgainst", "?"),
+            "skillRating":  overall.get("skillRating", "?"),
+            "gamesPlayed":  overall.get("gamesPlayed", "?"),
+            "bestDivision": overall.get("bestDivision", "?"),
+            "wstreak":      overall.get("wstreak", "?"),
+            "unbeatenstreak": overall.get("unbeatenstreak", "?"),
+            "leagueAppearances": overall.get("leagueAppearances", "?"),
+            "reputationtier": overall.get("reputationtier", "?"),
+        }
 
-                if matches or players:
-                    await browser.close()
-                    return {
-                        "matches": matches,
-                        "players": players,
-                        "source": "nextjs_data",
-                        "timestamp": datetime.now().isoformat()
-                    }
+        return {
+            "matches":    parsed_matches,
+            "members":    members,
+            "club_info":  club_info,
+            "club_stats": club_stats,
+        }
 
-            # Strategy 2: Extract from rendered DOM by looking for structured data
-            dom_data = await page.evaluate("""() => {
-                const results = { matches: [], players: [], raw_texts: [] };
-
-                // Look for match cards/rows - common patterns in React apps
-                const matchSelectors = [
-                    '[class*="match"]',
-                    '[class*="game"]',
-                    '[class*="fixture"]',
-                    '[data-testid*="match"]',
-                    'div:has(> div:has-text("vs"))',
-                    'div:has(> div:has-text("-"))'
-                ];
-
-                for (const selector of matchSelectors) {
-                    try {
-                        const elements = document.querySelectorAll(selector);
-                        for (const el of elements) {
-                            const text = el.innerText || el.textContent || '';
-                            if (text.length > 10 && text.length < 500) {
-                                // Check if it looks like a match result
-                                if (/\d+\s*[-–]\s*\d+/.test(text) || text.includes('vs')) {
-                                    results.matches.push(text.trim());
-                                }
-                            }
-                        }
-                    } catch(e) {}
-                }
-
-                // Look for player stats tables/cards
-                const playerSelectors = [
-                    'table tr',
-                    '[class*="player"]',
-                    '[class*="stat"]',
-                    '[class*="row"]'
-                ];
-
-                for (const selector of playerSelectors) {
-                    try {
-                        const elements = document.querySelectorAll(selector);
-                        for (const el of elements) {
-                            const text = el.innerText || el.textContent || '';
-                            if (text.includes('Goals') || text.includes('Assists') || text.includes('Rating') || /\d+\.\d+/.test(text)) {
-                                if (text.length > 5 && text.length < 300) {
-                                    results.players.push(text.trim());
-                                }
-                            }
-                        }
-                    } catch(e) {}
-                }
-
-                // Get all visible text as fallback
-                const allText = document.body.innerText;
-                results.raw_texts = allText.split('\n').filter(t => t.trim().length > 0).slice(0, 100);
-
-                return results;
-            }""")
-
-            await browser.close()
-
-            print(f"[Scraper] DOM extraction: {len(dom_data.get('matches', []))} matches, {len(dom_data.get('players', []))} players")
-
-            return {
-                "matches": dom_data.get("matches", []),
-                "players": dom_data.get("players", []),
-                "raw_texts": dom_data.get("raw_texts", []),
-                "source": "dom_extraction",
-                "timestamp": datetime.now().isoformat()
-            }
-
-    # ===================== EA API =====================
-
-    async def _ea_api_get(self, endpoint: str, params: dict) -> Optional[dict]:
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0, connect=10.0),
-                follow_redirects=True,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-                    "Accept": "application/json",
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Origin": "https://www.ea.com",
-                    "Referer": "https://www.ea.com/",
-                }
-            )
-
-        url = f"{EA_BASE}/{endpoint}"
-        for attempt in range(3):
-            try:
-                resp = await self._client.get(url, params=params)
-                if resp.status_code == 200:
-                    return resp.json()
-                elif resp.status_code == 429:
-                    await asyncio.sleep(2 ** attempt)
-                else:
-                    return None
-            except Exception as e:
-                if attempt < 2:
-                    await asyncio.sleep(2 ** attempt)
-        return None
-
-    async def _ea_get_matches(self, count: int = 20) -> List[dict]:
-        data = await self._ea_api_get("clubs/matches", {
-            "matchType": "gameType9", "platform": self.platform,
-            "clubIds": self.club_id, "maxResultCount": count
-        })
-        return data if isinstance(data, list) else []
-
-    # ===================== PARSING =====================
-
-    def _parse_dom_match_text(self, text: str, squad_map: Dict[str, dict]) -> Optional[dict]:
-        """Parse match from DOM text like 'FC Barcelona 3 - 2' or '3-2 vs Real Madrid'"""
+    def _parse_pct_match(self, raw: dict) -> Optional[dict]:
+        """Parse raw PCT API match into stats_engine MatchResult format."""
         try:
-            # Extract score
-            score_match = re.search(r'(\d+)\s*[-–]\s*(\d+)', text)
-            if not score_match:
+            our_id = str(self.club_id)
+            clubs = raw.get("clubs", {})
+
+            our_club = None
+            opp_club = None
+            for cid, club in clubs.items():
+                if str(cid) == our_id:
+                    our_club = club
+                else:
+                    opp_club = club
+
+            if not our_club:
                 return None
 
-            team_goals = int(score_match.group(1))
-            opponent_goals = int(score_match.group(2))
-            result = "win" if team_goals > opponent_goals else "loss" if team_goals < opponent_goals else "draw"
+            our_goals = int(our_club.get("goals", 0))
+            opp_goals = int(our_club.get("goalsAgainst", 0))
+            result = "win" if our_goals > opp_goals else "loss" if our_goals < opp_goals else "draw"
 
-            # Extract opponent name
-            opponent = "Unknown"
-            text_without_score = text.replace(score_match.group(0), " ").replace("vs", " ").replace("VS", " ")
-            words = [w.strip() for w in text_without_score.split() if w.strip() and not w.isdigit() and len(w) > 2]
-            if words:
-                opponent = " ".join(words[:3])  # Take first 3 non-numeric words
-
-            match_id = f"dom_{hash(text) % 10000000}"
-            return {
-                "match_id": match_id, "date": datetime.now().isoformat(),
-                "opponent": opponent, "team_goals": team_goals,
-                "opponent_goals": opponent_goals, "result": result,
-                "match_type": "gameType9", "player_stats": {}
-            }
-        except Exception as e:
-            return None
-
-    def _parse_ea_match(self, match: dict, squad_map: Dict[str, dict]) -> Optional[dict]:
-        """Parse EA API match format with full player stats"""
-        try:
-            ts = match.get("match_timestamp", "")
-            match_time = datetime.fromtimestamp(int(ts)).isoformat() if str(ts).isdigit() else datetime.now().isoformat()
-            teams = match.get("teams", {})
-            our_team = teams.get(self.club_id, {})
-
-            opponent_name = "Unknown"
-            for cid, team in teams.items():
-                if str(cid) != str(self.club_id):
-                    opponent_name = team.get("name", "Unknown")
-
-            team_goals = int(our_team.get("goals", 0))
-            opponent_goals = int(our_team.get("goalsAgainst", 0))
-
+            # Parse players into stats_engine format
             player_stats = {}
-            all_players = match.get("players", {})
-            our_players = all_players.get(self.club_id, {})
+            our_players_raw = raw.get("players", {}).get(our_id, {})
+            squad = self._load_squad()
 
-            for player_id, pstats in our_players.items():
-                ea_name = pstats.get("playername", "Unknown")
-                squad_key = self._find_squad_key(ea_name, squad_map)
+            for pid, p in our_players_raw.items():
+                ea_name = p.get("playername", "Unknown")
+                squad_key = self._find_squad_key(ea_name, squad)
                 display_name = squad_key if squad_key else ea_name
 
-                pos = pstats.get("pos", "midfielder").upper()
+                pos = p.get("pos", "midfielder").upper()
                 position_map = {"goalkeeper": "GK", "defender": "CB", "midfielder": "CM", "forward": "ST", "striker": "ST", "wing": "LW"}
                 position = position_map.get(pos.lower(), pos)
 
-                pass_attempts = int(pstats.get("passattempts", 0))
-                passes_made = int(pstats.get("passesmade", 0))
-                pass_acc = round((passes_made / max(pass_attempts, 1)) * 100, 1)
-                shots = int(pstats.get("shots", 0))
-                motm = str(pstats.get("man_of_the_match", "0")) == "1"
-                rating = float(pstats.get("rating", "6.0"))
-                seconds = int(pstats.get("secondsPlayed", 0))
+                passes_att = int(p.get("passattempts", 0))
+                passes_comp = int(p.get("passesmade", 0))
+                pass_pct = round(passes_comp / max(passes_att, 1) * 100, 1) if passes_att > 0 else 0
+                shots = int(p.get("shots", 0))
+                motm = str(p.get("man_of_the_match", "0")) == "1"
+                rating = float(p.get("rating", "6.0"))
+                seconds = int(p.get("secondsPlayed", 0))
                 minutes = seconds // 60
 
                 player_stats[display_name] = {
                     "name": display_name, "position": position,
-                    "goals": int(pstats.get("goals", 0)), "assists": int(pstats.get("assists", 0)),
+                    "goals": int(p.get("goals", 0)), "assists": int(p.get("assists", 0)),
                     "shots": shots, "shots_on_target": shots,
-                    "passes_attempted": pass_attempts, "passes_completed": passes_made,
-                    "pass_accuracy": pass_acc, "key_passes": int(pstats.get("assists", 0)) * 2,
-                    "tackles": int(pstats.get("tacklesmade", 0)), "interceptions": 0,
-                    "possession_losses": pass_attempts - passes_made,
+                    "passes_attempted": passes_att, "passes_completed": passes_comp,
+                    "pass_accuracy": pass_pct, "key_passes": int(p.get("assists", 0)) * 2,
+                    "tackles": int(p.get("tacklesmade", 0)), "interceptions": int(p.get("interceptions", 0)),
+                    "possession_losses": passes_att - passes_comp,
                     "dribbles_attempted": 0, "dribbles_completed": 0,
-                    "fouls": 0, "yellow_cards": int(pstats.get("yellowcards", 0)),
-                    "red_cards": int(pstats.get("redcards", 0)), "rating": rating,
+                    "fouls": 0, "yellow_cards": int(p.get("yellowcards", 0)),
+                    "red_cards": int(p.get("redcards", 0)), "rating": rating,
                     "motm": motm, "minutes_played": minutes,
-                    "distance_covered": 0.0, "sprint_speed": 0.0
+                    "distance_covered": 0.0, "sprint_speed": 0.0,
+                    "tackles_attempted": int(p.get("tackleattempts", 0)),
+                    "own_goals": int(p.get("owngoals", 0)),
+                    "big_chances_missed": max(0, int(p.get("chancescreated", 0)) - int(p.get("assists", 0))),
+                    "long_goals": int(p.get("longshots", 0)),
                 }
 
             return {
-                "match_id": hashlib.sha256(f"{match.get('match_id', '')}_{ts}_{self.club_id}".encode()).hexdigest()[:16],
-                "date": match_time, "opponent": opponent_name,
-                "team_goals": team_goals, "opponent_goals": opponent_goals,
-                "team_possession": 50.0, "opponent_possession": 50.0,
-                "team_shots": team_goals * 3, "opponent_shots": opponent_goals * 3,
-                "team_shots_on_target": team_goals * 2, "opponent_shots_on_target": opponent_goals * 2,
-                "team_passes": sum(p.get("passes_attempted", 0) for p in player_stats.values()),
-                "opponent_passes": 0,
-                "team_tackles": sum(p.get("tackles", 0) for p in player_stats.values()),
-                "opponent_tackles": 0, "team_corners": 0, "opponent_corners": 0,
-                "team_fouls": 0, "opponent_fouls": 0, "match_type": "gameType9",
-                "player_stats": player_stats
+                "match_id": str(raw.get("matchId", raw.get("timestamp", ""))),
+                "date": str(raw.get("timestamp", "")),
+                "opponent": opp_club.get("details", {}).get("name", "Unknown") if opp_club else "Unknown",
+                "team_goals": our_goals, "opponent_goals": opp_goals,
+                "result": result, "match_type": "gameType9",
+                "player_stats": player_stats,
+                "our_name": our_club.get("details", {}).get("name", "Rachad L3ERGONI"),
+                "raw_players": list(player_stats.values()),
             }
         except Exception as e:
-            print(f"[Parse EA Match Error] {e}")
+            logger.error("Parse match error: %s", e)
             return None
 
-    # ===================== PUBLIC API =====================
+    # ── Tier 2: Playwright DOM fallback ───────────────────────────────────────
 
-    async def scrape_all(self) -> Dict[str, Any]:
-        """Try all methods to get live data"""
-        # Method 1: Playwright (network intercept + DOM)
-        pct_data = await self._scrape_with_playwright()
-        if pct_data.get("matches") and len(pct_data["matches"]) > 0:
-            print(f"[scrape_all] ProClubsTracker returned {len(pct_data['matches'])} items")
-            return pct_data
+    async def _playwright_dom_fetch(self, max_matches: int = 10) -> dict:
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            logger.error("playwright not installed")
+            return {}
 
-        # Method 2: EA API direct
-        ea_matches = await self._ea_get_matches(20)
-        if ea_matches:
-            print(f"[scrape_all] EA API returned {len(ea_matches)} matches")
-            return {
-                "matches": ea_matches,
-                "players": [],
-                "source": "ea_api",
-                "timestamp": datetime.now().isoformat()
+        chrome = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
+        if not chrome:
+            logger.error("No Chromium binary found")
+            return {}
+
+        async with async_playwright() as pw:
+            try:
+                browser = await pw.chromium.launch(
+                    executable_path=chrome, headless=True,
+                    args=["--no-sandbox","--disable-dev-shm-usage","--disable-gpu",
+                          "--disable-setuid-sandbox","--no-zygote"],
+                )
+            except Exception as e:
+                logger.error("Chromium launch failed: %s", e)
+                return {}
+
+            ctx = await browser.new_context(user_agent=UA, viewport={"width":1280,"height":800})
+            page = await ctx.new_page()
+            try:
+                await page.goto(self.pct_url, wait_until="domcontentloaded", timeout=45_000)
+            except Exception as e:
+                logger.warning("goto failed: %s", e)
+                await browser.close()
+                return {}
+
+            await asyncio.sleep(5)
+
+            for sel in ["button:has-text('Matches')","a:has-text('Matches')","text=⚽","text=Matches"]:
+                try:
+                    el = page.locator(sel).first
+                    if await el.is_visible(timeout=2_000):
+                        await el.click()
+                        break
+                except Exception:
+                    pass
+
+            await asyncio.sleep(4)
+
+            cards_data = await page.evaluate(r"""
+            () => {
+                const cards = Array.from(document.querySelectorAll(
+                    '[class*="bg-gray-800"][class*="rounded-xl"], [class*="match-card"]'
+                ));
+                return cards.slice(0, 15).map(card => {
+                    const text = (card.innerText || '').trim();
+                    const scoreEl = card.querySelector('[class*="bg-gray-900"][class*="rounded"]');
+                    const score = scoreEl ? scoreEl.innerText.trim() : '';
+                    const result = /WIN/i.test(text) ? 'WIN' : /LOSS/i.test(text) ? 'LOSS' : /DRAW/i.test(text) ? 'DRAW' : '';
+                    const matchType = /League/i.test(text) ? 'league' : /Friendly/i.test(text) ? 'friendly' : 'league';
+                    return {text: text.slice(0, 300), score, result, matchType};
+                });
             }
+            """)
+            await browser.close()
 
-        return {"matches": [], "players": [], "error": "No data from any source"}
+        matches = []
+        for card in cards_data[:max_matches]:
+            score_m = re.search(r'(\d+)\s*[-–]\s*(\d+)', card.get("score","") or card.get("text",""))
+            if not score_m:
+                continue
+            our_goals, opp_goals = int(score_m.group(1)), int(score_m.group(2))
+            text = card.get("text","")
+            lines = [l.strip() for l in text.split('\n') if l.strip()]
+            opp_name = "Adversaire"
+            idx = next((i for i,l in enumerate(lines) if 'Rachad' in l or 'L3ERGONI' in l), None)
+            if idx is not None:
+                for j in range(idx+1, min(idx+8, len(lines))):
+                    l = lines[j]
+                    if re.match(r'^\d+$',l) or 'players' in l.lower(): continue
+                    if re.match(r'^\d+\s*[-–]\s*\d+$',l): continue
+                    if l in ('WIN','LOSS','DRAW','League','Friendly','Today','Yesterday',''): continue
+                    if any(c in l for c in ('🏆','🤝','🎖','⚽','⭐')): continue
+                    opp_name = l; break
+            result = "win" if card.get("result","").upper()=="WIN" else ("draw" if "DRAW" in card.get("result","").upper() else "loss")
+            matches.append({
+                "match_id": f"dom_{our_goals}_{opp_goals}_{len(matches)}",
+                "date": "—", "opponent": opp_name,
+                "team_goals": our_goals, "opponent_goals": opp_goals,
+                "result": result, "match_type": "gameType9",
+                "player_stats": {}, "_from_dom": True,
+            })
+
+        if matches:
+            return {"matches": matches, "members": [], "club_info": {}, "club_stats": {}}
+        return {}
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    async def scrape_all(self, max_matches: int = 5, force: bool = False) -> dict:
+        """Fetch all data from best available source."""
+        async with _cache_lock:
+            if not force:
+                cached = self._get_cached(max_matches)
+                if cached:
+                    age = int(self._cache_age())
+                    logger.info("📦 Cache hit (%ds old) — %d matches", age, len(cached.get("matches",[])))
+                    return cached
+
+            try:
+                data = await asyncio.wait_for(self._pct_api_fetch(max_matches=10), timeout=25)
+                if data.get("matches"):
+                    self._set_cache(data)
+                    logger.info("✅ Cache updated — %d matches stored", len(data["matches"]))
+                    data["matches"] = data["matches"][:max_matches]
+                    return data
+                logger.info("PCT API returned no matches — trying Playwright")
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning("PCT API failed: %s", e)
+
+            try:
+                data = await asyncio.wait_for(self._playwright_dom_fetch(max_matches=10), timeout=75)
+                if data.get("matches"):
+                    self._set_cache(data)
+                    data["matches"] = data["matches"][:max_matches]
+                    return data
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.error("Playwright DOM failed: %s", e)
+
+            logger.error("All data sources failed")
+            return {"matches": [], "members": [], "club_info": {}, "club_stats": {}}
 
     async def sync_to_stats_engine(self, stats_engine, count: int = 10) -> int:
-        """Sync matches to stats engine"""
-        squad = self._load_squad()
+        """Sync matches to stats engine."""
+        data = await self.scrape_all(max_matches=count, force=True)
+        matches = data.get("matches", [])
         added = 0
-
-        # Try ProClubsTracker first
-        pct_data = await self._scrape_with_playwright()
-        matches = pct_data.get("matches", [])
-
-        for match in matches[:count]:
-            parsed = None
-            if isinstance(match, dict):
-                if "teams" in match:  # EA API format
-                    parsed = self._parse_ea_match(match, squad)
-                elif "team_goals" in match:  # Already parsed
-                    parsed = match
-            elif isinstance(match, str):  # DOM text format
-                parsed = self._parse_dom_match_text(match, squad)
-
-            if parsed and not stats_engine.match_exists(parsed["match_id"]):
-                stats_engine.add_match(parsed)
+        for match in matches:
+            if match and not stats_engine.match_exists(match["match_id"]):
+                stats_engine.add_match(match)
                 added += 1
-
-        if added > 0:
-            print(f"[Sync] Added {added} matches from ProClubsTracker")
-            return added
-
-        # Fallback to EA API
-        ea_matches = await self._ea_get_matches(count)
-        for match in ea_matches:
-            parsed = self._parse_ea_match(match, squad)
-            if parsed and not stats_engine.match_exists(parsed["match_id"]):
-                stats_engine.add_match(parsed)
-                added += 1
-
-        if added > 0:
-            print(f"[Sync] Added {added} matches from EA API")
-        else:
-            print("[Sync] No new matches found")
+        logger.info("[Sync] Added %d new matches", added)
         return added
 
     async def check_new_match(self) -> Optional[dict]:
-        """Check for most recent match"""
-        squad = self._load_squad()
-
-        # Try ProClubsTracker
-        pct_data = await self._scrape_with_playwright()
-        matches = pct_data.get("matches", [])
+        """Check for most recent match."""
+        data = await self.scrape_all(max_matches=1, force=True)
+        matches = data.get("matches", [])
         if matches:
-            match = matches[0]
-            if isinstance(match, dict) and "teams" in match:
-                return self._parse_ea_match(match, squad)
-            elif isinstance(match, str):
-                return self._parse_dom_match_text(match, squad)
-
-        # Fallback to EA API
-        ea_matches = await self._ea_get_matches(1)
-        if ea_matches:
-            return self._parse_ea_match(ea_matches[0], squad)
-
+            return matches[0]
         return None
 
     async def get_club_info(self) -> Optional[dict]:
-        """Get club info from EA API"""
-        data = await self._ea_api_get("clubs/info", {"platform": self.platform, "clubIds": self.club_id})
-        if data and isinstance(data, dict):
-            return data.get(self.club_id, data)
-        return None
+        """Get club info from PCT API."""
+        data = await self.scrape_all(max_matches=1, force=True)
+        return data.get("club_info")
 
-    async def close(self):
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
+    def _invalidate_cache(self):
+        self._invalidate_cache()
 
 
 def get_scraper(club_id: str, platform: str = "common-gen5", division: str = "6"):
