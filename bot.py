@@ -153,6 +153,7 @@ class L3ERGONIBot(commands.Bot):
 
 
 bot = L3ERGONIBot()
+bot.remove_command('help')  # FIX #1: Remove discord.py's built-in help command so our custom !help works
 
 @bot.command(name="roast")
 async def roast_cmd(ctx):
@@ -483,7 +484,7 @@ async def help_cmd(ctx):
         color=0xFF6B35
     )
 
-    commands = [
+    commands_list = [
         ("!roast", "Start session monitoring (5min auto-checks)"),
         ("!stop", "Stop session"),
         ("!lastmatch", "Last match + all stats + MOTM card"),
@@ -510,7 +511,7 @@ async def help_cmd(ctx):
         ("!help", "This message")
     ]
 
-    for cmd, desc in commands:
+    for cmd, desc in commands_list:
         embed.add_field(name=cmd, value=desc, inline=False)
 
     embed.set_footer(text="Rachad L3ERGONI Pro Clubs | Live EA FC26 Stats | Made with 🔥 for the squad")
@@ -566,7 +567,10 @@ async def start_health_server():
     print(f"[Health] Server running on port {PORT}")
 
 async def main():
-    asyncio.create_task(start_health_server())
+    # FIX #2: Start health server FIRST, wait for it to bind, then start bot
+    await start_health_server()
+    # Give Render's port scanner a moment to detect the open port
+    await asyncio.sleep(1)
     await bot.start(DISCORD_TOKEN)
 
 if __name__ == "__main__":
