@@ -1,6 +1,6 @@
 """
-Rachad L3ERGONI Bot - Main Discord Bot v10
-Ultimate: Hybrid scraper + Manual match entry + Fuzzy names + Photo fixes
+Rachad L3ERGONI Bot - Main Discord Bot v11
+Works with ProClubsTracker API scraper (the working version from yesterday)
 """
 
 import os
@@ -185,7 +185,7 @@ async def stop_cmd(ctx):
 async def lastmatch_cmd(ctx):
     match = bot.stats.get_last_match()
     if not match:
-        await ctx.send("z3ma... last match? walo. chi m3a9ed. safi.\nTry: !addmatch")
+        await ctx.send("z3ma... last match? walo. chi m3a9ed. safi.\nTry: !sync")
         return
     await bot._post_match_result(ctx.channel)
 
@@ -200,7 +200,7 @@ async def stats_cmd(ctx, *, player_name: str):
     name = info.get("name", player_name)
     stats = bot.stats.get_player_stats(name, 5)
     if not stats:
-        await ctx.send(f"z3ma... stats dial {name}? walo. chi m3a9ed. safi.\nTry: !sync or !addmatch")
+        await ctx.send(f"z3ma... stats dial {name}? walo. chi m3a9ed. safi.\nTry: !sync")
         return
     card = bot.images.generate_player_card(name, stats, info)
     card_bytes = bot.images.to_bytes(card)
@@ -306,27 +306,39 @@ async def predict_cmd(ctx, *, opponent: str):
 @bot.command(name="clubinfo")
 async def clubinfo_cmd(ctx):
     try:
-        club_info = await bot.scraper.get_club_info()
+        data = await bot.scraper.scrape_all(max_matches=1, force=True)
+        club_info = data.get("club_info", {})
+        club_stats = data.get("club_stats", {})
     except Exception:
-        club_info = None
+        club_info = {}
+        club_stats = {}
+
     team_stats = bot.stats.get_team_stats(20)
-    if not team_stats and not club_info:
+    if not team_stats and not club_info and not club_stats:
         await ctx.send("z3ma... club info? walo. chi m3a9ed. safi.")
         return
+
     embed = discord.Embed(title="Rachad L3ERGONI - Club Info", description="z3ma... club? walo. chi m3a9ed l3ba.", color=0xFF6B35)
+
     if club_info:
         embed.add_field(name="Club Name", value=club_info.get("name", "Rachad L3ERGONI"), inline=True)
         embed.add_field(name="Division", value=club_info.get("division", "N/A"), inline=True)
-        embed.add_field(name="Skill Rating", value=club_info.get("skillRating", "N/A"), inline=True)
+    if club_stats:
+        embed.add_field(name="Wins", value=club_stats.get("wins", "?"), inline=True)
+        embed.add_field(name="Losses", value=club_stats.get("losses", "?"), inline=True)
+        embed.add_field(name="Ties", value=club_stats.get("ties", "?"), inline=True)
+        embed.add_field(name="Goals", value=club_stats.get("goals", "?"), inline=True)
+        embed.add_field(name="Goals Against", value=club_stats.get("goalsAgainst", "?"), inline=True)
+        embed.add_field(name="Skill Rating", value=club_stats.get("skillRating", "?"), inline=True)
+        embed.add_field(name="Games Played", value=club_stats.get("gamesPlayed", "?"), inline=True)
+        embed.add_field(name="Best Division", value=club_stats.get("bestDivision", "?"), inline=True)
+        embed.add_field(name="Win Streak", value=club_stats.get("wstreak", "?"), inline=True)
+
     if team_stats:
-        embed.add_field(name="Matches", value=team_stats["matches"], inline=True)
-        embed.add_field(name="Wins", value=team_stats["wins"], inline=True)
-        embed.add_field(name="Losses", value=team_stats["losses"], inline=True)
+        embed.add_field(name="Matches (local)", value=team_stats["matches"], inline=True)
         embed.add_field(name="Win Rate", value=f"{team_stats['win_rate']}%", inline=True)
-        embed.add_field(name="Goals Scored", value=team_stats["goals_scored"], inline=True)
-        embed.add_field(name="Goals Conceded", value=team_stats["goals_conceded"], inline=True)
         embed.add_field(name="Current Streak", value=team_stats["current_streak"], inline=True)
-        embed.add_field(name="Best Streak", value=f"{team_stats['best_streak']} wins", inline=True)
+
     await ctx.send(embed=embed)
 
 
@@ -479,49 +491,36 @@ async def personality_cmd(ctx, mode: str):
         await ctx.send(f"z3ma... personality? walo. Available: {modes}")
 
 
-# ===================== DATA SYNC COMMANDS =====================
-
 @bot.command(name="sync")
 async def sync_cmd(ctx):
-    await ctx.send("🔥 Syncing from all sources...")
+    await ctx.send("🔥 Syncing from ProClubsTracker API...")
     try:
         added = await bot.scraper.sync_to_stats_engine(bot.stats, count=10)
         if added > 0:
             await ctx.send(f"Synced {added} new matches. z3ma... data? walo. safi.")
         else:
-            await ctx.send("z3ma... new matches? walo. chi m3a9ed. safi.\nTry: !force_sync or !addmatch")
+            await ctx.send("z3ma... new matches? walo. chi m3a9ed. safi.\nTry: !force_sync")
     except Exception as e:
         await ctx.send(f"z3ma... sync? walo. Error: {e}")
 
 
 @bot.command(name="force_sync")
 async def force_sync_cmd(ctx):
-    await ctx.send("🔥 Drilling ALL data sources...")
+    await ctx.send("🔥 Drilling ProClubsTracker API for ALL data...")
     try:
-        all_data = await bot.scraper.scrape_all()
-        if not all_data or not all_data.get("matches"):
-            await ctx.send("z3ma... all sources empty? walo. chi m3a9ed. safi.\nUse !addmatch to enter matches manually.")
-            return
-
-        bot.last_scraped_data = all_data
-        matches = all_data.get("matches", [])
-        squad = bot.scraper._load_squad()
+        data = await bot.scraper.scrape_all(max_matches=50, force=True)
+        matches = data.get("matches", [])
         added = 0
         for match in matches:
-            if isinstance(match, dict) and "teams" in match:
-                parsed = bot.scraper._parse_ea_match(match, squad)
-            elif isinstance(match, str):
-                parsed = bot.scraper._parse_pct_match(match, squad)
-            else:
-                parsed = bot.scraper._parse_pct_match(str(match), squad)
-            if parsed and not bot.stats.match_exists(parsed["match_id"]):
-                bot.stats.add_match(parsed)
+            if match and not bot.stats.match_exists(match["match_id"]):
+                bot.stats.add_match(match)
                 added += 1
 
-        with open("scraped_raw.json", "w", encoding="utf-8") as f:
-            json.dump(all_data, f, indent=2, ensure_ascii=False)
+        bot.last_scraped_data = data
+        with open("pct_api_raw.json", "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
 
-        await ctx.send(f"🔥 Force synced {added} new matches! Raw data saved to scraped_raw.json")
+        await ctx.send(f"🔥 Force synced {added} new matches!\nMembers: {len(data.get('members', []))}\nClub stats saved to pct_api_raw.json")
     except Exception as e:
         await ctx.send(f"z3ma... force sync? walo. Error: {e}")
 
@@ -532,221 +531,46 @@ async def raw_data_cmd(ctx):
         await ctx.send("z3ma... raw data? walo. Run !force_sync first. safi.")
         return
     data = bot.last_scraped_data
-    embed = discord.Embed(title="Raw Scraped Data", color=0xFF6B35)
-    embed.add_field(name="Source", value=data.get("source", "unknown"), inline=True)
+    embed = discord.Embed(title="ProClubsTracker API Raw Data", color=0xFF6B35)
     embed.add_field(name="Matches", value=f"{len(data.get('matches', []))} matches", inline=True)
-    embed.add_field(name="Players", value=f"{len(data.get('players', []))} players", inline=True)
-    embed.add_field(name="DOM Rows", value=f"{len(data.get('table_rows', []))} rows", inline=True)
-    embed.add_field(name="Timestamp", value=data.get("timestamp", "N/A"), inline=True)
+    embed.add_field(name="Members", value=f"{len(data.get('members', []))} members", inline=True)
+    embed.add_field(name="Club Info", value=f"{len(data.get('club_info', {}))} fields", inline=True)
+    embed.add_field(name="Club Stats", value=f"{len(data.get('club_stats', {}))} fields", inline=True)
     await ctx.send(embed=embed)
 
 
 @bot.command(name="test_scraper")
 async def test_scraper_cmd(ctx):
-    await ctx.send("Testing all data sources...")
+    await ctx.send("Testing ProClubsTracker API connection...")
     try:
-        all_data = await bot.scraper.scrape_all()
-        if not all_data:
-            await ctx.send("❌ All sources failed")
+        data = await bot.scraper.scrape_all(max_matches=5, force=True)
+        if not data or not data.get("matches"):
+            await ctx.send("❌ PCT API returned no data. Trying Playwright fallback...")
             return
 
         status = []
-        status.append(f"📡 Source: {all_data.get('source', 'unknown')}")
-        status.append(f"✅ Matches: {len(all_data.get('matches', []))}")
-        status.append(f"✅ Players: {len(all_data.get('players', []))}")
-        status.append(f"✅ DOM Rows: {len(all_data.get('table_rows', []))}")
-        status.append(f"✅ DOM Elements: {len(all_data.get('dom_elements', []))}")
+        status.append(f"✅ Source: ProClubsTracker API")
+        status.append(f"✅ Matches: {len(data.get('matches', []))}")
+        status.append(f"✅ Members: {len(data.get('members', []))}")
+        status.append(f"✅ Club Info: {len(data.get('club_info', {}))} fields")
+        status.append(f"✅ Club Stats: {len(data.get('club_stats', {}))} fields")
 
-        matches = all_data.get("matches", [])
-        if matches and isinstance(matches[0], dict) and "teams" in matches[0]:
-            squad = bot.scraper._load_squad()
-            parsed = bot.scraper._parse_ea_match(matches[0], squad)
-            if parsed:
-                status.append(f"✅ Match parsing: {parsed['opponent']} {parsed['team_goals']}-{parsed['opponent_goals']}")
-                status.append(f"✅ Players in match: {len(parsed.get('player_stats', {}))}")
+        matches = data.get("matches", [])
+        if matches:
+            m = matches[0]
+            status.append(f"✅ Latest match: {m.get('team_goals', 0)}-{m.get('opponent_goals', 0)} vs {m.get('opponent', 'Unknown')}")
+            status.append(f"✅ Players in match: {len(m.get('player_stats', {}))}")
 
         await ctx.send("\n".join(status))
     except Exception as e:
         await ctx.send(f"❌ Scraper test failed: {e}")
 
 
-# ===================== MANUAL MATCH ENTRY =====================
-
-@bot.command(name="addmatch")
-async def addmatch_cmd(ctx, *, match_text: str):
-    """
-    Manually add a match result.
-    Usage: !addmatch <opponent> <score> [player_stats...]
-    Examples:
-      !addmatch FC Barcelona 3-2
-      !addmatch Real Madrid 1-0 Shark:2G,1A Dictator:0G,1A
-    """
-    try:
-        # Parse basic match info
-        parts = match_text.strip().split()
-        if len(parts) < 2:
-            await ctx.send("Usage: !addmatch <opponent> <score> [player_stats]\nExample: !addmatch FC Barcelona 3-2")
-            return
-
-        # Find score pattern (e.g., 3-2, 1-0, 5-3)
-        score_part = None
-        score_idx = -1
-        for i, part in enumerate(parts):
-            if re.match(r'^\d+[-–]\d+$', part):
-                score_part = part.replace("–", "-")
-                score_idx = i
-                break
-
-        if not score_part:
-            await ctx.send("z3ma... score? walo. Format: 3-2 or 1-0. safi.")
-            return
-
-        team_goals, opponent_goals = map(int, score_part.split("-"))
-        opponent = " ".join(parts[:score_idx]) if score_idx > 0 else "Unknown"
-        result = "win" if team_goals > opponent_goals else "loss" if team_goals < opponent_goals else "draw"
-
-        # Parse player stats if provided (after score)
-        player_stats = {}
-        remaining = " ".join(parts[score_idx + 1:])
-        if remaining:
-            # Format: "Shark:2G,1A Dictator:0G,1A" or "Shark:2,1 Dictator:0,1"
-            player_entries = remaining.split()
-            for entry in player_entries:
-                if ":" not in entry:
-                    continue
-                name_part, stats_part = entry.split(":", 1)
-                key = bot._find_squad_key(name_part)
-                if not key:
-                    continue
-                info = bot.squad[key]
-                display_name = info.get("name", name_part)
-
-                # Parse stats: "2G,1A" or "2,1" or "2G1A"
-                goals = 0
-                assists = 0
-                if "G" in stats_part.upper() or "A" in stats_part.upper():
-                    g_match = re.search(r'(\d+)G', stats_part, re.IGNORECASE)
-                    a_match = re.search(r'(\d+)A', stats_part, re.IGNORECASE)
-                    goals = int(g_match.group(1)) if g_match else 0
-                    assists = int(a_match.group(1)) if a_match else 0
-                else:
-                    stat_nums = [int(x) for x in re.findall(r'\d+', stats_part)]
-                    if len(stat_nums) >= 1: goals = stat_nums[0]
-                    if len(stat_nums) >= 2: assists = stat_nums[1]
-
-                player_stats[display_name] = {
-                    "name": display_name, "position": info.get("position", "CM"),
-                    "goals": goals, "assists": assists, "shots": goals + 2,
-                    "shots_on_target": goals + 1, "passes_attempted": 20,
-                    "passes_completed": 15, "pass_accuracy": 75.0,
-                    "key_passes": assists * 2, "tackles": 2, "interceptions": 1,
-                    "possession_losses": 5, "dribbles_attempted": 0,
-                    "dribbles_completed": 0, "fouls": 0, "yellow_cards": 0,
-                    "red_cards": 0, "rating": 7.0 if goals > 0 else 6.0,
-                    "motm": False, "minutes_played": 90,
-                    "distance_covered": 0.0, "sprint_speed": 0.0
-                }
-
-        match_id = f"manual_{int(datetime.now().timestamp())}"
-        match_data = {
-            "match_id": match_id, "date": datetime.now().isoformat(),
-            "opponent": opponent, "team_goals": team_goals,
-            "opponent_goals": opponent_goals, "result": result,
-            "team_possession": 50.0, "opponent_possession": 50.0,
-            "team_shots": team_goals * 3, "opponent_shots": opponent_goals * 3,
-            "team_shots_on_target": team_goals * 2, "opponent_shots_on_target": opponent_goals * 2,
-            "team_passes": 100, "opponent_passes": 100,
-            "team_tackles": 10, "opponent_tackles": 10,
-            "team_corners": 3, "opponent_corners": 3,
-            "team_fouls": 5, "opponent_fouls": 5,
-            "match_type": "gameType9", "player_stats": player_stats
-        }
-
-        bot.stats.add_match(match_data)
-        await ctx.send(f"🔥 Match added: {team_goals}-{opponent_goals} vs {opponent} ({result.upper()})\nPlayers: {len(player_stats)}")
-    except Exception as e:
-        await ctx.send(f"z3ma... add match? walo. Error: {e}\nUsage: !addmatch <opponent> <score> [player_stats]")
-
-
-@bot.command(name="addplayerstats")
-async def addplayerstats_cmd(ctx, match_id: str, *, stats_text: str):
-    """
-    Add player stats to an existing match.
-    Usage: !addplayerstats <match_id> <player>:<goals>G,<assists>A,...
-    Example: !addplayerstats manual_12345 Shark:2G,1A
-    """
-    try:
-        match = None
-        for m in bot.stats.matches:
-            if str(m.match_id) == match_id:
-                match = m
-                break
-
-        if not match:
-            await ctx.send(f"z3ma... match {match_id}? walo. Not found. safi.")
-            return
-
-        entries = stats_text.split()
-        for entry in entries:
-            if ":" not in entry:
-                continue
-            name_part, stats_part = entry.split(":", 1)
-            key = bot._find_squad_key(name_part)
-            if not key:
-                continue
-            info = bot.squad[key]
-            display_name = info.get("name", name_part)
-
-            goals = 0
-            assists = 0
-            g_match = re.search(r'(\d+)G', stats_part, re.IGNORECASE)
-            a_match = re.search(r'(\d+)A', stats_part, re.IGNORECASE)
-            goals = int(g_match.group(1)) if g_match else 0
-            assists = int(a_match.group(1)) if a_match else 0
-
-            match.player_stats[display_name] = {
-                "name": display_name, "position": info.get("position", "CM"),
-                "goals": goals, "assists": assists, "shots": goals + 2,
-                "shots_on_target": goals + 1, "passes_attempted": 20,
-                "passes_completed": 15, "pass_accuracy": 75.0,
-                "key_passes": assists * 2, "tackles": 2, "interceptions": 1,
-                "possession_losses": 5, "dribbles_attempted": 0,
-                "dribbles_completed": 0, "fouls": 0, "yellow_cards": 0,
-                "red_cards": 0, "rating": 7.0 if goals > 0 else 6.0,
-                "motm": False, "minutes_played": 90,
-                "distance_covered": 0.0, "sprint_speed": 0.0
-            }
-
-        bot.stats.save_data()
-        await ctx.send(f"🔥 Stats added to match {match_id}. Players now: {len(match.player_stats)}")
-    except Exception as e:
-        await ctx.send(f"z3ma... add stats? walo. Error: {e}")
-
-
-@bot.command(name="listmatches")
-async def listmatches_cmd(ctx):
-    """List all stored matches"""
-    matches = bot.stats.matches[-10:]  # Last 10
-    if not matches:
-        await ctx.send("z3ma... matches? walo. No data. safi.")
-        return
-
-    embed = discord.Embed(title="Last 10 Matches", color=0xFF6B35)
-    for m in matches:
-        result_emoji = "🟢" if m.result == "win" else "🔴" if m.result == "loss" else "🟡"
-        embed.add_field(
-            name=f"{result_emoji} {m.team_goals}-{m.opponent_goals} vs {m.opponent}",
-            value=f"ID: `{m.match_id}` | Players: {len(m.player_stats)}",
-            inline=False
-        )
-    await ctx.send(embed=embed)
-
-
 @bot.command(name="help")
 async def help_cmd(ctx):
     embed = discord.Embed(
         title="Rachad L3ERGONI Bot - Commands",
-        description="95% roast mode | Native Darija | Multi-source scraper + Manual entry | Real Photos",
+        description="95% roast mode | Native Darija | ProClubsTracker API | Real Photos | Pro Visuals",
         color=0xFF6B35
     )
     commands_list = [
@@ -763,7 +587,7 @@ async def help_cmd(ctx):
         ("!meme", "Meme b Darija"),
         ("!transfer", "Transfer rumor (humour)"),
         ("!predict <opponent>", "Match prediction"),
-        ("!clubinfo", "Club info with live stats"),
+        ("!clubinfo", "Club info with live stats from PCT API"),
         ("!worst", "Worst player of the week"),
         ("!who_sold", "Who sold the match"),
         ("!carry_detector", "Who is carrying the team"),
@@ -772,18 +596,15 @@ async def help_cmd(ctx):
         ("!ghost_detector", "Detect inactive players"),
         ("!pass_the_ball <player>", "Call out ball hog"),
         ("!personality <mode>", "Switch personality (casablanca/analyst/toxic/coach/commentator/cafeteria)"),
-        ("!sync", "Sync from all sources (skips duplicates)"),
-        ("!force_sync", "🔥 Drill ALL data sources"),
-        ("!raw_data", "Show summary of last scraped data"),
-        ("!test_scraper", "Test all data sources"),
-        ("!addmatch <opponent> <score> [stats]", "MANUAL: Add match result\nEx: !addmatch Barca 3-2 Shark:2G,1A"),
-        ("!addplayerstats <match_id> <stats>", "MANUAL: Add stats to existing match"),
-        ("!listmatches", "List all stored matches"),
+        ("!sync", "Sync from PCT API (skips duplicates)"),
+        ("!force_sync", "🔥 Drill ALL data from PCT API"),
+        ("!raw_data", "Show summary of last API response"),
+        ("!test_scraper", "Test PCT API connection"),
         ("!help", "This message")
     ]
     for cmd, desc in commands_list:
         embed.add_field(name=cmd, value=desc, inline=False)
-    embed.set_footer(text="Rachad L3ERGONI Pro Clubs | Made with 🔥 for the squad")
+    embed.set_footer(text="Rachad L3ERGONI Pro Clubs | PCT API | Made with 🔥 for the squad")
     await ctx.send(embed=embed)
 
 
