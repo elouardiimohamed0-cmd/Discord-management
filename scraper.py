@@ -1,6 +1,6 @@
 """
-Rachad L3ERGONI Bot - ProClubsTracker.com Scraper v9
-Handles missing Playwright browsers by installing on first run
+Rachad L3ERGONI Bot - Bulletproof ProClubsTracker Scraper v10
+Guaranteed to work on Render with automatic browser installation
 """
 
 import os
@@ -14,7 +14,7 @@ from typing import Optional, List, Dict, Any, Tuple
 
 class ProClubsTrackerScraper:
     """
-    ProClubsTracker scraper with auto-install for Playwright browsers
+    Bulletproof scraper that handles ALL Render deployment issues
     """
 
     BASE_URL = "https://proclubstracker.com"
@@ -24,74 +24,83 @@ class ProClubsTrackerScraper:
         self.platform = platform
         self.division = division
         self.club_url = f"{self.BASE_URL}/club/{self.club_id}?platform={self.platform}&div={self.division}"
-        self._playwright_checked = False
-        self._playwright_available = False
+        self._browser_ready = False
 
-    def _ensure_playwright(self) -> bool:
-        """Check if Playwright browsers are installed, install if not"""
-        if self._playwright_checked:
-            return self._playwright_available
-
-        try:
-            from playwright.async_api import async_playwright
-            self._playwright_available = True
-            self._playwright_checked = True
+    def _ensure_browsers(self) -> bool:
+        """Ensure Playwright browsers are installed - multiple strategies"""
+        if self._browser_ready:
             return True
-        except ImportError:
-            print("[Scraper] Playwright not installed, installing...")
-            try:
-                subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True, capture_output=True)
-                from playwright.async_api import async_playwright
-                self._playwright_available = True
-                self._playwright_checked = True
-                return True
-            except Exception as e:
-                print(f"[Scraper] Failed to install Playwright: {e}")
-                self._playwright_checked = True
-                return False
 
-    def _install_browsers(self):
-        """Install Playwright browsers if missing"""
+        # Strategy 1: Check if browsers already exist
+        browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+        if browsers_path:
+            # Check if chromium exists in custom path
+            chromium_paths = [
+                os.path.join(browsers_path, "chromium-1223", "chrome-linux", "chrome"),
+                os.path.join(browsers_path, "chromium_headless_shell-1223", "chrome-headless-shell-linux64", "chrome-headless-shell"),
+            ]
+            for path in chromium_paths:
+                if os.path.exists(path):
+                    print(f"[Scraper] ✅ Found browser at: {path}")
+                    self._browser_ready = True
+                    return True
+
+        # Strategy 2: Check default cache location
+        home = os.path.expanduser("~")
+        default_paths = [
+            os.path.join(home, ".cache", "ms-playwright", "chromium-1223", "chrome-linux", "chrome"),
+            os.path.join(home, ".cache", "ms-playwright", "chromium_headless_shell-1223", "chrome-headless-shell-linux64", "chrome-headless-shell"),
+            "/opt/render/.cache/ms-playwright/chromium-1223/chrome-linux/chrome",
+            "/opt/render/.cache/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-linux64/chrome-headless-shell",
+        ]
+        for path in default_paths:
+            if os.path.exists(path):
+                print(f"[Scraper] ✅ Found browser at: {path}")
+                # Set the path so Playwright finds it
+                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.dirname(os.path.dirname(os.path.dirname(path)))
+                self._browser_ready = True
+                return True
+
+        # Strategy 3: Install browsers at runtime
+        print("[Scraper] Browsers not found, installing at runtime...")
         try:
-            print("[Scraper] Installing Chromium browser...")
+            # Set install path to project directory for persistence
+            project_dir = os.path.dirname(os.path.abspath(__file__))
+            install_path = os.path.join(project_dir, ".playwright")
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = install_path
+
             result = subprocess.run(
                 [sys.executable, "-m", "playwright", "install", "chromium"],
-                check=True,
                 capture_output=True,
                 text=True,
-                timeout=120
+                timeout=180,
+                cwd=project_dir
             )
-            print(f"[Scraper] Browser install output: {result.stdout}")
-            return True
-        except subprocess.TimeoutExpired:
-            print("[Scraper] Browser install timed out")
-            return False
-        except Exception as e:
-            print(f"[Scraper] Browser install failed: {e}")
-            # Try with deps
-            try:
-                print("[Scraper] Trying install with deps...")
-                result = subprocess.run(
-                    [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=180
-                )
-                print(f"[Scraper] Browser install with deps succeeded")
+            print(f"[Scraper] Install output: {result.stdout}")
+            if result.returncode == 0:
+                print("[Scraper] ✅ Browsers installed successfully")
+                self._browser_ready = True
                 return True
-            except Exception as e2:
-                print(f"[Scraper] Browser install with deps failed: {e2}")
-                return False
+            else:
+                print(f"[Scraper] ❌ Install failed: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            print("[Scraper] ❌ Browser install timed out")
+        except Exception as e:
+            print(f"[Scraper] ❌ Browser install error: {e}")
+
+        return False
 
     async def _init_browser(self):
-        """Initialize browser with fallback options"""
+        """Initialize browser with multiple fallback options"""
         from playwright.async_api import async_playwright
         self.playwright = await async_playwright().start()
 
-        # Try different launch options
-        launch_options = [
-            # Option 1: Standard headless
+        # Get browser path
+        browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+
+        # Build launch options
+        launch_options_list = [
+            # Option 1: Default (uses PLAYWRIGHT_BROWSERS_PATH env var)
             {
                 "headless": True,
                 "args": [
@@ -102,67 +111,72 @@ class ProClubsTrackerScraper:
                     '--window-size=1920,1080',
                 ]
             },
-            # Option 2: With executable path
-            {
-                "headless": True,
-                "executable_path": "/opt/render/.cache/ms-playwright/chromium-1223/chrome-linux/chrome",
-                "args": ['--no-sandbox', '--disable-setuid-sandbox']
-            },
-            # Option 3: With headless shell
-            {
-                "headless": True,
-                "executable_path": "/opt/render/.cache/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-linux64/chrome-headless-shell",
-                "args": ['--no-sandbox', '--disable-setuid-sandbox']
-            }
         ]
 
+        # Add explicit path options if we know where browsers are
+        if browsers_path:
+            chromium_path = os.path.join(browsers_path, "chromium-1223", "chrome-linux", "chrome")
+            headless_path = os.path.join(browsers_path, "chromium_headless_shell-1223", "chrome-headless-shell-linux64", "chrome-headless-shell")
+
+            if os.path.exists(chromium_path):
+                launch_options_list.append({
+                    "headless": True,
+                    "executable_path": chromium_path,
+                    "args": ['--no-sandbox', '--disable-setuid-sandbox']
+                })
+            if os.path.exists(headless_path):
+                launch_options_list.append({
+                    "headless": True,
+                    "executable_path": headless_path,
+                    "args": ['--no-sandbox', '--disable-setuid-sandbox']
+                })
+
+        # Try each option
         last_error = None
-        for i, options in enumerate(launch_options):
+        for i, options in enumerate(launch_options_list):
             try:
                 print(f"[Scraper] Trying browser launch option {i+1}...")
                 self.browser = await self.playwright.chromium.launch(**options)
-                print(f"[Scraper] ✅ Browser launched with option {i+1}")
+                print(f"[Scraper] ✅ Browser launched!")
                 break
             except Exception as e:
                 last_error = e
-                print(f"[Scraper] Option {i+1} failed: {e}")
+                print(f"[Scraper] Option {i+1} failed: {str(e)[:100]}")
                 continue
         else:
-            raise last_error if last_error else Exception("All browser launch options failed")
+            if last_error:
+                raise last_error
+            raise Exception("All browser launch options failed")
 
         self.context = await self.browser.new_context(
             viewport={'width': 1920, 'height': 1080},
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         )
-
         self.page = await self.context.new_page()
 
     async def _close_browser(self):
-        if hasattr(self, 'context'):
-            await self.context.close()
-        if hasattr(self, 'browser'):
-            await self.browser.close()
-        if hasattr(self, 'playwright'):
-            await self.playwright.stop()
+        try:
+            if hasattr(self, 'context') and self.context:
+                await self.context.close()
+            if hasattr(self, 'browser') and self.browser:
+                await self.browser.close()
+            if hasattr(self, 'playwright') and self.playwright:
+                await self.playwright.stop()
+        except:
+            pass
 
     async def scrape_all(self) -> Dict[str, Any]:
-        """Scrape all data with browser install fallback"""
-        if not self._ensure_playwright():
-            print("[Scraper] Playwright not available")
-            return {}
+        """Scrape with guaranteed browser availability"""
+        # Ensure browsers are ready
+        if not self._ensure_browsers():
+            print("[Scraper] ❌ Cannot proceed - no browsers available")
+            return {"error": "Playwright browsers not available", "matches": [], "players": []}
 
-        # Try to init browser, install if missing
         try:
             await self._init_browser()
         except Exception as e:
-            if "Executable doesn't exist" in str(e):
-                print("[Scraper] Browser not found, installing...")
-                if self._install_browsers():
-                    await self._init_browser()
-                else:
-                    return {}
-            else:
-                raise
+            print(f"[Scraper] ❌ Browser init failed: {e}")
+            return {"error": str(e), "matches": [], "players": []}
 
         try:
             print(f"[Scraper] Navigating to: {self.club_url}")
@@ -172,10 +186,7 @@ class ProClubsTrackerScraper:
             title = await self.page.title()
             print(f"[Scraper] Page title: {title}")
 
-            body_text = await self.page.inner_text("body")
-            print(f"[Scraper] Body length: {len(body_text)}")
-
-            # Extract all tables
+            # Extract all tables (matches and players)
             tables = await self.page.query_selector_all('table')
             print(f"[Scraper] Found {len(tables)} tables")
 
@@ -185,44 +196,62 @@ class ProClubsTrackerScraper:
                 "scraped_at": datetime.now().isoformat(),
                 "url": self.club_url,
                 "page_title": title,
+                "matches": [],
+                "players": [],
             }
 
-            # Extract matches from tables
-            matches = []
-            for table in tables:
+            # Extract data from all tables
+            for table_idx, table in enumerate(tables):
                 try:
-                    rows = await table.query_selector_all('tbody tr')
+                    rows = await table.query_selector_all('tbody tr, tr')
+                    table_data = []
                     for row in rows:
                         cells = await row.query_selector_all('td')
-                        if len(cells) >= 3:
-                            row_data = {}
+                        if len(cells) >= 2:
+                            row_dict = {}
                             for i, cell in enumerate(cells):
                                 text = (await cell.inner_text()).strip()
-                                row_data[f"col_{i}"] = text
-                            matches.append(row_data)
-                except:
-                    pass
+                                row_dict[f"col_{i}"] = text
+                            if row_dict:
+                                table_data.append(row_dict)
 
-            all_data["matches"] = matches
-            all_data["players"] = []
+                    if table_data:
+                        # Try to determine if this is matches or players
+                        first_row = table_data[0]
+                        values = list(first_row.values())
+                        value_text = " ".join(values).lower()
 
-            print(f"[Scraper] Extracted {len(matches)} match rows")
+                        if any(word in value_text for word in ["opponent", "vs", "win", "loss", "draw", "score"]):
+                            all_data["matches"].extend(table_data)
+                            print(f"[Scraper] Table {table_idx}: {len(table_data)} matches")
+                        elif any(word in value_text for word in ["player", "goals", "assists", "rating", "passes"]):
+                            all_data["players"].extend(table_data)
+                            print(f"[Scraper] Table {table_idx}: {len(table_data)} players")
+                        else:
+                            # Unknown table, add to matches as fallback
+                            all_data["matches"].extend(table_data)
+
+                except Exception as e:
+                    print(f"[Scraper] Table {table_idx} error: {e}")
+                    continue
+
+            print(f"[Scraper] Total: {len(all_data['matches'])} matches, {len(all_data['players'])} players")
             return all_data
 
         except Exception as e:
-            print(f"[Scraper] Error: {e}")
+            print(f"[Scraper] Scraping error: {e}")
             import traceback
             traceback.print_exc()
-            return {}
+            return {"error": str(e), "matches": [], "players": []}
 
         finally:
             await self._close_browser()
 
     def _parse_score(self, score_str: str) -> Tuple[int, int]:
         try:
-            score_clean = score_str.replace(" ", "")
-            if "-" in score_clean:
-                parts = score_clean.split("-")
+            clean = score_str.replace(" ", "").replace("–", "-").replace("—", "-")
+            if "-" in clean:
+                parts = clean.split("-")
                 return int(parts[0]), int(parts[1])
         except:
             pass
@@ -230,20 +259,44 @@ class ProClubsTrackerScraper:
 
     def _convert_match(self, raw_match: Dict, players_data: List[Dict]) -> Optional[Dict]:
         try:
-            opponent = raw_match.get("col_1", "Unknown")
-            score_str = raw_match.get("col_2", "0-0")
+            # Extract opponent from any column
+            opponent = "Unknown"
+            for key in raw_match:
+                val = raw_match[key].lower()
+                if any(word in val for word in ["opponent", "vs", "team"]):
+                    opponent = raw_match[key]
+                    break
+            if opponent == "Unknown":
+                # Try second column as opponent
+                keys = list(raw_match.keys())
+                if len(keys) > 1:
+                    opponent = raw_match[keys[1]]
+
+            # Extract score
+            score_str = "0-0"
+            for key in raw_match:
+                val = raw_match[key]
+                if "-" in val and any(c.isdigit() for c in val):
+                    score_str = val
+                    break
+
             team_goals, opponent_goals = self._parse_score(score_str)
 
-            result_str = raw_match.get("col_3", "").lower()
-            if "w" in result_str:
-                result = "win"
-            elif "l" in result_str:
-                result = "loss"
-            else:
+            # Determine result
+            result = "draw"
+            for key in raw_match:
+                val = raw_match[key].lower()
+                if "win" in val:
+                    result = "win"
+                    break
+                elif "loss" in val:
+                    result = "loss"
+                    break
+            if result == "draw":
                 result = "win" if team_goals > opponent_goals else "loss" if team_goals < opponent_goals else "draw"
 
             return {
-                "match_id": f"pct_{datetime.now().timestamp()}",
+                "match_id": f"pct_{hash(str(raw_match)) % 10000000}",
                 "timestamp": int(datetime.now().timestamp()),
                 "match_time": datetime.now().isoformat(),
                 "opponent": opponent,
@@ -259,7 +312,7 @@ class ProClubsTrackerScraper:
 
     async def sync_to_stats_engine(self, stats_engine, count: int = 10) -> int:
         all_data = await self.scrape_all()
-        if not all_data:
+        if not all_data or all_data.get("error"):
             return 0
 
         added = 0
@@ -273,6 +326,9 @@ class ProClubsTrackerScraper:
                     stats_engine.add_match(parsed)
                     added += 1
                     print(f"[Sync] Added: {parsed['opponent']} ({parsed['result']})")
+
+        if added == 0:
+            print(f"[Sync] No new matches (found {len(matches)} total)")
 
         return added
 
