@@ -1,108 +1,131 @@
 """
-Rachad L3ERGONI Bot - Working Version
+Rachad L3ERGONI Bot - ProClubsTracker Scraper
 """
 
 import os
-import io
-import asyncio
 import json
+import asyncio
+import subprocess
+import sys
 from datetime import datetime
+from typing import Optional, List, Dict, Any, Tuple
 
-import discord
-from discord.ext import commands, tasks
-from dotenv import load_dotenv
 
-from darija_engine import get_engine, PERSONALITIES
-from stats_engine import get_stats_engine
-from image_gen import get_image_generator
-from scraper import get_scraper
-
-load_dotenv()
-
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-MATCH_CHANNEL_ID = int(os.getenv("MATCH_CHANNEL_ID", "0"))
-LEADERBOARD_CHANNEL_ID = int(os.getenv("LEADERBOARD_CHANNEL_ID", "0"))
-GENERAL_CHANNEL_ID = int(os.getenv("GENERAL_CHANNEL_ID", "0"))
-CLUB_ID = os.getenv("CLUB_ID", "1427607")
-PLATFORM = os.getenv("PLATFORM", "common-gen5")
-PORT = int(os.getenv("PORT", "10000"))
-
-darija = get_engine("squad.json")
-stats_engine = get_stats_engine("match_data.json")
-image_gen = get_image_generator("assets")
-scraper = get_scraper(CLUB_ID, PLATFORM)
-
-intents = discord.Intents.default()
-intents.message_content = True
-
-bot = commands.Bot(command_prefix="!", intents=intents)
-bot.remove_command('help')
-
-@bot.event
-async def on_ready():
-    print(f"✅ Bot ready: {bot.user}")
-
-@bot.command(name="ping")
-async def ping_cmd(ctx):
-    await ctx.send("🏓 Pong!")
-
-@bot.command(name="sync")
-async def sync_cmd(ctx):
-    await ctx.send("🔥 Syncing...")
-    try:
-        added = await scraper.sync_to_stats_engine(stats_engine, count=10)
-        await ctx.send(f"✅ Synced {added} matches!")
-    except Exception as e:
-        await ctx.send(f"❌ Error: {e}")
-
-@bot.command(name="force_sync")
-async def force_sync_cmd(ctx):
-    await ctx.send("🔥 Force syncing...")
-    try:
-        data = await scraper.scrape_all()
-        matches = data.get("matches", [])
-        for match in matches:
-            parsed = scraper._convert_match(match, [])
-            if parsed:
+class ProClubsTrackerScraper:
+    BASE_URL = "https://proclubstracker.com"
+    
+    def __init__(self, club_id: str, platform: str = "common-gen5", division: str = "6"):
+        self.club_id = str(club_id)
+        self.platform = platform
+        self.division = division
+        self.club_url = f"{self.BASE_URL}/club/{self.club_id}?platform={self.platform}&div={self.division}"
+    
+    def _ensure_browsers(self) -> bool:
+        home = os.path.expanduser("~")
+        paths = [
+            os.path.join(home, ".cache", "ms-playwright", "chromium-1223", "chrome-linux", "chrome"),
+            "/opt/render/.cache/ms-playwright/chromium-1223/chrome-linux/chrome",
+        ]
+        for path in paths:
+            if os.path.exists(path):
+                return True
+        
+        try:
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], 
+                         capture_output=True, timeout=180)
+            return True
+        except:
+            return False
+    
+    async def scrape_all(self) -> Dict[str, Any]:
+        if not self._ensure_browsers():
+            return {"matches": [], "players": [], "error": "No browsers"}
+        
+        try:
+            from playwright.async_api import async_playwright
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+                context = await browser.new_context(viewport={'width': 1920, 'height': 1080})
+                page = await context.new_page()
+                
+                await page.goto(self.club_url, wait_until="networkidle", timeout=30000)
+                await asyncio.sleep(5)
+                
+                tables = await page.query_selector_all('table')
+                all_matches = []
+                all_players = []
+                
+                for table in tables:
+                    rows = await table.query_selector_all('tr')
+                    for row in rows:
+                        cells = await row.query_selector_all('td')
+                        if len(cells) >= 2:
+                            row_dict = {f"col_{i}": (await cell.inner_text()).strip() for i, cell in enumerate(cells)}
+                            # Classify
+                            text = " ".join(row_dict.values()).lower()
+                            if any(w in text for w in ["opponent", "vs", "win", "loss", "score"]):
+                                all_matches.append(row_dict)
+                            elif any(w in text for w in ["player", "goals", "assists", "rating"]):
+                                all_players.append(row_dict)
+                
+                await browser.close()
+                return {"matches": all_matches, "players": all_players}
+        except Exception as e:
+            return {"matches": [], "players": [], "error": str(e)}
+    
+    def _parse_score(self, score_str: str) -> Tuple[int, int]:
+        try:
+            clean = score_str.replace(" ", "").replace("–", "-")
+            if "-" in clean:
+                parts = clean.split("-")
+                return int(parts[0]), int(parts[1])
+        except:
+            pass
+        return 0, 0
+    
+    def _convert_match(self, raw: Dict, players: List[Dict]) -> Optional[Dict]:
+        try:
+            vals = list(raw.values())
+            opponent = vals[1] if len(vals) > 1 else "Unknown"
+            score_str = next((v for v in vals if "-" in v and any(c.isdigit() for c in v)), "0-0")
+            team_goals, opp_goals = self._parse_score(score_str)
+            result = "win" if team_goals > opp_goals else "loss" if team_goals < opp_goals else "draw"
+            
+            return {
+                "match_id": f"pct_{hash(str(raw)) % 10000000}",
+                "timestamp": int(datetime.now().timestamp()),
+                "match_time": datetime.now().isoformat(),
+                "opponent": opponent,
+                "team_goals": team_goals,
+                "opponent_goals": opp_goals,
+                "result": result,
+                "match_type": "gameType9",
+                "player_stats": {},
+            }
+        except:
+            return None
+    
+    async def sync_to_stats_engine(self, stats_engine, count: int = 10) -> int:
+        data = await self.scrape_all()
+        if data.get("error"):
+            return 0
+        
+        added = 0
+        for match in data.get("matches", [])[:count]:
+            parsed = self._convert_match(match, data.get("players", []))
+            if parsed and not stats_engine.match_exists(parsed["match_id"]):
                 stats_engine.add_match(parsed)
-        await ctx.send(f"✅ Synced {len(matches)} matches!")
-    except Exception as e:
-        await ctx.send(f"❌ Error: {e}")
+                added += 1
+        
+        return added
+    
+    async def check_new_match(self) -> Optional[Dict]:
+        data = await self.scrape_all()
+        matches = data.get("matches", [])
+        if matches:
+            return self._convert_match(matches[0], data.get("players", []))
+        return None
 
-@bot.command(name="lastmatch")
-async def lastmatch_cmd(ctx):
-    match = stats_engine.get_last_match()
-    if not match:
-        await ctx.send("z3ma... last match? walo. chi m3a9ed. safi.")
-        return
-    await ctx.send(f"Last match: {match.team_goals}-{match.opponent_goals} vs {match.opponent}")
 
-@bot.command(name="clubinfo")
-async def clubinfo_cmd(ctx):
-    team_stats = stats_engine.get_team_stats(20)
-    if not team_stats:
-        await ctx.send("z3ma... club info? walo. chi m3a9ed. safi.")
-        return
-    await ctx.send(f"Matches: {team_stats['matches']} | Wins: {team_stats['wins']}")
-
-@bot.command(name="help")
-async def help_cmd(ctx):
-    await ctx.send("Commands: !ping, !sync, !force_sync, !lastmatch, !clubinfo, !help")
-
-# Health server
-async def start_health_server():
-    from aiohttp import web
-    app = web.Application()
-    app.router.add_get("/", lambda r: web.Response(text="OK"))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-
-async def main():
-    await start_health_server()
-    await asyncio.sleep(1)
-    await bot.start(DISCORD_TOKEN)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+def get_scraper(club_id: str, platform: str = "common-gen5", division: str = "6"):
+    return ProClubsTrackerScraper(club_id, platform, division)
