@@ -20,6 +20,20 @@ from stats_engine import get_stats_engine
 from image_gen import get_image_generator
 from scraper import get_scraper
 
+# Auto-install Playwright browsers if missing
+import subprocess
+import sys
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    print("[Startup] Installing Playwright...")
+    subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True)
+    print("[Startup] Installing Chromium...")
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    print("[Startup] Playwright ready!")
+
+
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
