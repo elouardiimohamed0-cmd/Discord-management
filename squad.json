@@ -1,0 +1,192 @@
+{
+  "dictator": {
+    "name": "Dictator",
+    "psn": "A999ESCANOR",
+    "position": "CM",
+    "number": 8,
+    "nickname": "Dictator",
+    "nationality": "MA",
+    "style": "Crasher",
+    "level": 95,
+    "image": "assets/dictator.png",
+    "stats_on_card": {
+      "COM": 93,
+      "VIS": 90,
+      "BAC": 92,
+      "LPA": 90,
+      "TOTAL": 365
+    },
+    "bio": "Level 95 Crasher, COM 93, Mabaghich nglss ela orangina lah ybarek f 3mer sidi"
+  },
+  "shark": {
+    "name": "Shark",
+    "psn": "A999SHARK",
+    "position": "ST",
+    "number": 9,
+    "nickname": "Shark",
+    "nationality": "MA",
+    "style": "Invader",
+    "level": 95,
+    "image": "assets/shark.png",
+    "stats_on_card": {
+      "ACC": 95,
+      "BAL": 91,
+      "FIN": 89,
+      "CRV": 90,
+      "TOTAL": 365
+    },
+    "bio": "Level 95 Invader, ACC 95, Weld lprivé k7el terma kayban khfif, t3tih touche ybrosseh"
+  },
+  "moul_l7anot": {
+    "name": "Moul L7anot",
+    "psn": "Amine_bambo",
+    "position": "CAM",
+    "number": 10,
+    "nickname": "Moul L7anot",
+    "nationality": "FR",
+    "style": "Magician",
+    "level": 75,
+    "image": "assets/moul_l7anot.png",
+    "stats_on_card": {
+      "ACC": 89,
+      "BAL": 84,
+      "FIN": 86,
+      "CRV": 81,
+      "TOTAL": 340
+    },
+    "bio": "Level 75 Magician, FIN 86, Abou-lkouroum"
+  },
+  "qahba_south_africa": {
+    "name": "9ahba South Africa",
+    "psn": "haytanox2",
+    "position": "LW",
+    "number": 11,
+    "nickname": "9ahba SA",
+    "nationality": "ZA",
+    "style": "Athlete",
+    "level": 45,
+    "image": "assets/qahba_south_africa.png",
+    "stats_on_card": {
+      "SPD": 86,
+      "STA": 82,
+      "CRO": 78,
+      "SLT": 78,
+      "TOTAL": 324
+    },
+    "bio": "Level 45 Athlete, SPD 86, Dima kaytm3ch9 mea jamahir aka 3achi9 modarajat"
+  },
+  "kira": {
+    "name": "Kira",
+    "psn": "A999KIRA",
+    "position": "ST",
+    "number": 99,
+    "nickname": "Kira",
+    "nationality": "US",
+    "style": "Target",
+    "level": 87,
+    "image": "assets/kira.png",
+    "stats_on_card": {
+      "JMP": 90,
+      "STR": 89,
+      "HEA": 90,
+      "SHO": 99,
+      "TOTAL": 368
+    },
+    "bio": "Level 87 Target, SHO 99, Wakha yban lik mzian f tiran 3rf sensla rah dima m7lola"
+  },
+  "le7ya": {
+    "name": "Le7ya",
+    "psn": "brown-base7",
+    "position": "ST",
+    "number": 7,
+    "nickname": "Le7ya",
+    "nationality": "MA",
+    "style": "Finisher",
+    "level": 78,
+    "image": "assets/le7ya.png",
+    "stats_on_card": {
+      "REA": 81,
+      "COM": 81,
+      "FIN": 83,
+      "VOL": 83,
+      "TOTAL": 328
+    },
+    "bio": "Level 78 Finisher, FIN 83, Ansm7o l kolchi ila l9ehba d khuk li jabk lina"
+  },
+  "marrakchi": {
+    "name": "Marrakchi",
+    "psn": "Taha1direction",
+    "position": "CM",
+    "number": 6,
+    "nickname": "Marrakchi",
+    "nationality": "MA",
+    "style": "Maestro",
+    "level": 45,
+    "image": "assets/marrakchi.png",
+    "stats_on_card": {
+      "COM": 75,
+      "VIS": 80,
+      "BAC": 75,
+      "LPA": 75,
+      "TOTAL": 305
+    },
+    "bio": "Level 45 Maestro, VIS 80, Yarbi ymchi y9wd l valorant"
+  },
+  "brave": {
+    "name": "Brave",
+    "psn": "brave-Youness95",
+    "position": "CDM",
+    "number": 8,
+    "nickname": "Brave",
+    "nationality": "EN",
+    "style": "Thief",
+    "level": 78,
+    "image": "assets/brave.png",
+    "stats_on_card": {
+      "STR": 84,
+      "INT": 90,
+      "DFA": 90,
+      "LSH": 75,
+      "TOTAL": 339
+    },
+    "bio": "Level 78 Thief, INT 90, Dima kay9lb ela opportonitiz fin ykwik wesst lmatch"
+  },
+  "modamir": {
+    "name": "Modamir",
+    "psn": "Yasskillz88",
+    "position": "ST",
+    "number": 94,
+    "nickname": "Modamir",
+    "nationality": "MA",
+    "style": "Finisher",
+    "level": 95,
+    "image": "assets/modamir.png",
+    "stats_on_card": {
+      "REA": 94,
+      "COM": 90,
+      "FIN": 96,
+      "VOL": 86,
+      "TOTAL": 366
+    },
+    "bio": "Level 95 Finisher, FIN 96, Camel akbar zegal mterem w mbezel"
+  },
+  "shawarmista": {
+    "name": "Shawarmista",
+    "psn": "Hessaidi",
+    "position": "CAM",
+    "number": 8,
+    "nickname": "Shawarmista",
+    "nationality": "FR",
+    "style": "Creator+",
+    "level": 95,
+    "image": "assets/shawarmista.png",
+    "stats_on_card": {
+      "VIS": 95,
+      "SPA": 75,
+      "LSH": 94,
+      "CRV": 93,
+      "TOTAL": 357
+    },
+    "bio": "Level 95 Creator+, VIS 95, Peage kola hejma douz mn 3ndo"
+  }
+}
