@@ -1,6 +1,6 @@
 """
-Rachad L3ERGONI Bot - Main Discord Bot v2
-Live EA FC26 Stats | Real Photos | Native Darija | 95% Roast
+Rachad L3ERGONI Bot - Main Discord Bot v3
+ProClubsTracker.com Scraper | Real Photos | Native Darija | 95% Roast
 """
 
 import os
@@ -26,14 +26,14 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 MATCH_CHANNEL_ID = int(os.getenv("MATCH_CHANNEL_ID", "0"))
 LEADERBOARD_CHANNEL_ID = int(os.getenv("LEADERBOARD_CHANNEL_ID", "0"))
 GENERAL_CHANNEL_ID = int(os.getenv("GENERAL_CHANNEL_ID", "0"))
-CLUB_ID = os.getenv("CLUB_ID", "")
-PLATFORM = os.getenv("PLATFORM", "common-gen5")
+CLUB_NAME = os.getenv("CLUB_NAME", "Rachad L3ERGONI")  # Club NAME for proclubstracker.com
+PLATFORM = os.getenv("PLATFORM", "ps5")  # ps5, ps4, xbox, switch
 PORT = int(os.getenv("PORT", "10000"))
 
 darija = get_engine("squad.json")
 stats_engine = get_stats_engine("match_data.json")
 image_gen = get_image_generator("assets")
-scraper = get_scraper(CLUB_ID, PLATFORM)
+scraper = get_scraper(CLUB_NAME, PLATFORM)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -64,6 +64,7 @@ class L3ERGONIBot(commands.Bot):
     async def on_ready(self):
         print(f"Rachad L3ERGONI Bot logged in as {self.user}")
         print(f"Connected to {len(self.guilds)} guilds")
+        print(f"Club: {CLUB_NAME} | Platform: {PLATFORM}")
         await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Rachad L3ERGONI | !help"))
 
     @tasks.loop(hours=24)
@@ -91,9 +92,11 @@ class L3ERGONIBot(commands.Bot):
                     await self._post_match_result(channel)
             else:
                 # Also sync any missed matches
-                added = await self.scraper.sync_recent_matches(self.stats, count=3)
-                if added > 0 and channel:
-                    await self._post_match_result(channel)
+                added = await self.scraper.sync_to_stats_engine(self.stats, count=3)
+                if added > 0:
+                    channel = self.get_channel(MATCH_CHANNEL_ID)
+                    if channel:
+                        await self._post_match_result(channel)
         except Exception as e:
             print(f"[Auto Check Error] {e}")
 
@@ -153,7 +156,7 @@ class L3ERGONIBot(commands.Bot):
 
 
 bot = L3ERGONIBot()
-bot.remove_command('help')  # FIX #1: Remove discord.py's built-in help command so our custom !help works
+bot.remove_command('help')  # Remove discord.py built-in help
 
 @bot.command(name="roast")
 async def roast_cmd(ctx):
@@ -467,14 +470,39 @@ async def personality_cmd(ctx, mode: str):
 
 @bot.command(name="sync")
 async def sync_cmd(ctx):
+    await ctx.send("z3ma... syncing from ProClubsTracker.com...")
     try:
-        added = await bot.scraper.sync_recent_matches(bot.stats, count=10)
+        added = await bot.scraper.sync_to_stats_engine(bot.stats, count=10)
         if added > 0:
             await ctx.send(f"Synced {added} new matches. z3ma... data? walo. safi.")
         else:
-            await ctx.send("z3ma... new matches? walo. chi m3a9ed. safi.")
+            await ctx.send("z3ma... new matches? walo. chi m3a9ed. safi.\nTry: !force_sync to scrape fresh data")
     except Exception as e:
         await ctx.send(f"z3ma... sync? walo. Error: {e}")
+
+@bot.command(name="force_sync")
+async def force_sync_cmd(ctx):
+    """Force a full scrape from proclubstracker.com regardless of duplicates"""
+    await ctx.send("🔥 Force syncing ALL data from ProClubsTracker.com...")
+    try:
+        all_data = await bot.scraper.scrape_all()
+        if not all_data:
+            await ctx.send("z3ma... scrape failed? walo. chi m3a9ed. safi.")
+            return
+
+        matches = all_data.get("matches", [])
+        players = all_data.get("players", [])
+
+        added = 0
+        for match in matches:
+            parsed = bot.scraper._convert_match_to_bot_format(match, players)
+            if parsed:
+                bot.stats.add_match(parsed)
+                added += 1
+
+        await ctx.send(f"🔥 Force synced {added} matches! z3ma... data? walo. safi.")
+    except Exception as e:
+        await ctx.send(f"z3ma... force sync? walo. Error: {e}")
 
 @bot.command(name="help")
 async def help_cmd(ctx):
@@ -507,14 +535,15 @@ async def help_cmd(ctx):
         ("!ghost_detector", "Detect inactive players"),
         ("!pass_the_ball <name>", "Call out ball hog"),
         ("!personality <mode>", "Switch personality (casablanca/analyst/toxic/coach/commentator/cafeteria)"),
-        ("!sync", "Manual sync from EA FC26 API"),
+        ("!sync", "Sync from ProClubsTracker.com (skips duplicates)"),
+        ("!force_sync", "Force full scrape from ProClubsTracker.com"),
         ("!help", "This message")
     ]
 
     for cmd, desc in commands_list:
         embed.add_field(name=cmd, value=desc, inline=False)
 
-    embed.set_footer(text="Rachad L3ERGONI Pro Clubs | Live EA FC26 Stats | Made with 🔥 for the squad")
+    embed.set_footer(text="Rachad L3ERGONI Pro Clubs | ProClubsTracker.com Scraper | Made with 🔥 for the squad")
     await ctx.send(embed=embed)
 
 # Slash commands
@@ -567,9 +596,7 @@ async def start_health_server():
     print(f"[Health] Server running on port {PORT}")
 
 async def main():
-    # FIX #2: Start health server FIRST, wait for it to bind, then start bot
     await start_health_server()
-    # Give Render's port scanner a moment to detect the open port
     await asyncio.sleep(1)
     await bot.start(DISCORD_TOKEN)
 
