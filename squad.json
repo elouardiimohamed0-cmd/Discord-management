@@ -8,7 +8,7 @@
     "nationality": "MA",
     "style": "Crasher",
     "level": 95,
-    "image": "assets/dictator.png",
+    "image": "assets/DICTATOR.jpeg",
     "stats_on_card": {
       "COM": 93,
       "VIS": 90,
@@ -16,7 +16,7 @@
       "LPA": 90,
       "TOTAL": 365
     },
-    "bio": "Level 95 Crasher, COM 93, Mabaghich nglss ela orangina lah ybarek f 3mer sidi"
+    "bio": "Level 95 Crasher, COM 93, m3a9ed l3ba"
   },
   "shark": {
     "name": "Shark",
@@ -27,7 +27,7 @@
     "nationality": "MA",
     "style": "Invader",
     "level": 95,
-    "image": "assets/shark.png",
+    "image": "assets/SHARK.jpeg",
     "stats_on_card": {
       "ACC": 95,
       "BAL": 91,
@@ -35,7 +35,7 @@
       "CRV": 90,
       "TOTAL": 365
     },
-    "bio": "Level 95 Invader, ACC 95, Weld lprivé k7el terma kayban khfif, t3tih touche ybrosseh"
+    "bio": "Level 95 Invader, ACC 95, striker dial lferrari"
   },
   "moul_l7anot": {
     "name": "Moul L7anot",
@@ -46,7 +46,7 @@
     "nationality": "FR",
     "style": "Magician",
     "level": 75,
-    "image": "assets/moul_l7anot.png",
+    "image": "assets/MOUL L7ANOT.jpeg",
     "stats_on_card": {
       "ACC": 89,
       "BAL": 84,
@@ -54,7 +54,7 @@
       "CRV": 81,
       "TOTAL": 340
     },
-    "bio": "Level 75 Magician, FIN 86, Abou-lkouroum"
+    "bio": "Level 75 Magician, FIN 86, playmaker khawya"
   },
   "qahba_south_africa": {
     "name": "9ahba South Africa",
@@ -65,7 +65,7 @@
     "nationality": "ZA",
     "style": "Athlete",
     "level": 45,
-    "image": "assets/qahba_south_africa.png",
+    "image": "assets/9HBA SOUTH AFRICA.jpeg",
     "stats_on_card": {
       "SPD": 86,
       "STA": 82,
@@ -73,7 +73,7 @@
       "SLT": 78,
       "TOTAL": 324
     },
-    "bio": "Level 45 Athlete, SPD 86, Dima kaytm3ch9 mea jamahir aka 3achi9 modarajat"
+    "bio": "Level 45 Athlete, SPD 86, winger sri3 b7al chi 9ahba"
   },
   "kira": {
     "name": "Kira",
@@ -84,7 +84,7 @@
     "nationality": "US",
     "style": "Target",
     "level": 87,
-    "image": "assets/kira.png",
+    "image": "assets/KIRA.jpeg",
     "stats_on_card": {
       "JMP": 90,
       "STR": 89,
@@ -92,7 +92,7 @@
       "SHO": 99,
       "TOTAL": 368
     },
-    "bio": "Level 87 Target, SHO 99, Wakha yban lik mzian f tiran 3rf sensla rah dima m7lola"
+    "bio": "Level 87 Target, SHO 99, 9ahba dial l3ba"
   },
   "le7ya": {
     "name": "Le7ya",
@@ -103,7 +103,7 @@
     "nationality": "MA",
     "style": "Finisher",
     "level": 78,
-    "image": "assets/le7ya.png",
+    "image": "assets/LE7YA.jpeg",
     "stats_on_card": {
       "REA": 81,
       "COM": 81,
@@ -111,7 +111,7 @@
       "VOL": 83,
       "TOTAL": 328
     },
-    "bio": "Level 78 Finisher, FIN 83, Ansm7o l kolchi ila l9ehba d khuk li jabk lina"
+    "bio": "Level 78 Finisher, FIN 83, striker b7al chi le7ya"
   },
   "marrakchi": {
     "name": "Marrakchi",
@@ -122,7 +122,7 @@
     "nationality": "MA",
     "style": "Maestro",
     "level": 45,
-    "image": "assets/marrakchi.png",
+    "image": "assets/MARRAKCHI.jpeg",
     "stats_on_card": {
       "COM": 75,
       "VIS": 80,
@@ -130,7 +130,7 @@
       "LPA": 75,
       "TOTAL": 305
     },
-    "bio": "Level 45 Maestro, VIS 80, Yarbi ymchi y9wd l valorant"
+    "bio": "Level 45 Maestro, VIS 80, midfielder dial l7wayej"
   },
   "brave": {
     "name": "Brave",
@@ -141,7 +141,7 @@
     "nationality": "EN",
     "style": "Thief",
     "level": 78,
-    "image": "assets/brave.png",
+    "image": "assets/BRAVE.jpeg",
     "stats_on_card": {
       "STR": 84,
       "INT": 90,
@@ -149,7 +149,7 @@
       "LSH": 75,
       "TOTAL": 339
     },
-    "bio": "Level 78 Thief, INT 90, Dima kay9lb ela opportonitiz fin ykwik wesst lmatch"
+    "bio": "Level 78 Thief, INT 90, destroyer dial l3ba"
   },
   "modamir": {
     "name": "Modamir",
@@ -160,7 +160,7 @@
     "nationality": "MA",
     "style": "Finisher",
     "level": 95,
-    "image": "assets/modamir.png",
+    "image": "assets/MODAMIR.jpeg",
     "stats_on_card": {
       "REA": 94,
       "COM": 90,
@@ -168,7 +168,7 @@
       "VOL": 86,
       "TOTAL": 366
     },
-    "bio": "Level 95 Finisher, FIN 96, Camel akbar zegal mterem w mbezel"
+    "bio": "Level 95 Finisher, FIN 96, 9ahba lkbira"
   },
   "shawarmista": {
     "name": "Shawarmista",
@@ -179,7 +179,7 @@
     "nationality": "FR",
     "style": "Creator+",
     "level": 95,
-    "image": "assets/shawarmista.png",
+    "image": "assets/SHAWARMISTA.jpeg",
     "stats_on_card": {
       "VIS": 95,
       "SPA": 75,
@@ -187,6 +187,6 @@
       "CRV": 93,
       "TOTAL": 357
     },
-    "bio": "Level 95 Creator+, VIS 95, Peage kola hejma douz mn 3ndo"
+    "bio": "Level 95 Creator+, VIS 95, shawarma b darija"
   }
 }
