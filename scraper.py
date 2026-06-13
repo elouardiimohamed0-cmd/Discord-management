@@ -1,301 +1,699 @@
 """
-Rachad L3ERGONI Bot - EA FC26 API Scraper v4
-Based on fc-clubs-api by carlos-menezes
-Direct EA API calls with browser headers + Playwright fallback
+Rachad L3ERGONI Bot - ProClubsTracker.com FULL Scraper v6
+Playwright-based scraper that drills through EVERY tab:
+- Overview (club stats, division, skill rating)
+- Players (individual stats, ratings, per-game averages)
+- Matches (full match history with per-game breakdowns)
+- Form (form graphs, recent results)
+- Chemistry (player combos, partnerships)
+- Head to Head (player comparisons)
+- Roasts (memes, banter)
+Extracts ALL data and converts to bot format.
 """
 
 import os
 import json
 import asyncio
+import re
 from datetime import datetime
-from typing import Optional, List, Dict, Any
-import httpx
+from typing import Optional, List, Dict, Any, Tuple
 
 
-class FC26Scraper:
+class ProClubsTrackerScraper:
     """
-    EA FC26 Pro Clubs API Scraper
-    Uses the same endpoints as fc-clubs-api with proper browser headers
+    Full Playwright scraper for proclubstracker.com
+    Drills through all tabs and extracts complete data
     """
 
-    BASE_URL = "https://proclubs.ea.com/fc26/api"
+    BASE_URL = "https://proclubstracker.com"
 
-    # Match types from EA API
-    MATCH_TYPES = {
-        "gameType9": "league",
-        "gameType13": "playoff", 
-        "gameType5": "friendly"
-    }
-
-    def __init__(self, club_id: str, platform: str = "common-gen5"):
-        self.club_id = str(club_id)
-        self.platform = platform
-
-        # Browser headers that bypass EA's blocking
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Origin": "https://www.ea.com",
-            "Referer": "https://www.ea.com/",
-            "Connection": "keep-alive",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-site",
-            "Cache-Control": "no-cache",
-        }
-
-        self.client = httpx.AsyncClient(
-            timeout=30.0,
-            follow_redirects=True,
-            headers=self.headers,
-            http2=True,  # HTTP/2 helps bypass some detection
-        )
-
+    def __init__(self, club_name: str, platform: str = "ps5"):
+        self.club_name = club_name
+        self.platform = platform  # ps5, ps4, xbox, switch
         self.playwright_available = False
         try:
             from playwright.async_api import async_playwright
             self.playwright_available = True
         except ImportError:
-            pass
+            print("[Scraper] Playwright not installed. Install: pip install playwright && playwright install chromium")
 
-    async def _get(self, endpoint: str, params: Dict = None) -> Optional[Any]:
-        """Make API request with retry logic"""
-        url = f"{self.BASE_URL}/{endpoint}"
-        params = params or {}
-        params["platform"] = self.platform
+    async def _init_browser(self):
+        """Initialize Playwright browser with stealth settings"""
+        from playwright.async_api import async_playwright
+        self.playwright = await async_playwright().start()
 
-        # Add clubId only if not already in params (some endpoints use different param names)
-        if "clubId" not in params and "clubIds" not in params:
-            params["clubId"] = self.club_id
+        self.browser = await self.playwright.chromium.launch(
+            headless=True,
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
+                '--window-size=1920,1080',
+                '--disable-blink-features=AutomationControlled',
+            ]
+        )
 
+        self.context = await self.browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            locale='en-US',
+            timezone_id='Europe/London',
+        )
+
+        # Add stealth script to hide Playwright
+        await self.context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            window.chrome = { runtime: {} };
+        """)
+
+        self.page = await self.context.new_page()
+
+        # Block unnecessary resources for speed
+        await self.page.route("**/*.{png,jpg,jpeg,gif,svg,css,woff,woff2,ico}", lambda route: route.abort())
+
+    async def _close_browser(self):
+        """Close browser"""
+        if hasattr(self, 'context'):
+            await self.context.close()
+        if hasattr(self, 'browser'):
+            await self.browser.close()
+        if hasattr(self, 'playwright'):
+            await self.playwright.stop()
+
+    async def _goto(self, url: str, wait_for: str = None, timeout: int = 30000):
+        """Navigate to page with optional wait selector"""
+        await self.page.goto(url, wait_until="networkidle", timeout=timeout)
+        if wait_for:
+            await self.page.wait_for_selector(wait_for, timeout=10000)
+        await asyncio.sleep(2)  # Extra wait for JS rendering
+
+    async def _click_tab(self, tab_text: str) -> bool:
+        """Click a tab by partial text match"""
         try:
-            response = await self.client.get(url, params=params)
+            # Try multiple selectors
+            selectors = [
+                f'button:has-text("{tab_text}")',
+                f'a:has-text("{tab_text}")',
+                f'[role="tab"]:has-text("{tab_text}")',
+                f'.tab:has-text("{tab_text}")',
+                f'[data-testid*="{tab_text.lower()}"]',
+                f'nav button:has-text("{tab_text}")',
+                f'nav a:has-text("{tab_text}")',
+            ]
 
-            if response.status_code == 200:
-                return response.json()
-            elif response.status_code in [403, 429, 503]:
-                print(f"[API] Blocked ({response.status_code}), trying Playwright fallback...")
-                return await self._get_playwright(endpoint, params)
-            else:
-                print(f"[API] HTTP {response.status_code} from {endpoint}")
-                return None
+            for selector in selectors:
+                try:
+                    tab = await self.page.query_selector(selector)
+                    if tab:
+                        await tab.click()
+                        await asyncio.sleep(3)  # Wait for content to load
+                        return True
+                except:
+                    continue
 
-        except httpx.TimeoutException:
-            print(f"[API] Timeout on {endpoint}, trying Playwright fallback...")
-            return await self._get_playwright(endpoint, params)
+            # Fallback: try all buttons and links
+            elements = await self.page.query_selector_all('button, a, [role="tab"]')
+            for el in elements:
+                try:
+                    text = await el.inner_text()
+                    if tab_text.lower() in text.lower():
+                        await el.click()
+                        await asyncio.sleep(3)
+                        return True
+                except:
+                    continue
+
+            print(f"[Scraper] Tab not found: {tab_text}")
+            return False
+
         except Exception as e:
-            print(f"[API] Error on {endpoint}: {e}")
-            return None
+            print(f"[Scraper] Tab click error: {e}")
+            return False
 
-    async def _get_playwright(self, endpoint: str, params: Dict) -> Optional[Any]:
-        """Playwright fallback for blocked requests"""
-        if not self.playwright_available:
-            return None
-
-        url = f"{self.BASE_URL}/{endpoint}"
-        query = "&".join([f"{k}={v}" for k, v in params.items()])
-        full_url = f"{url}?{query}"
-
+    async def _extract_text(self, selector: str) -> str:
+        """Extract text from element"""
         try:
-            from playwright.async_api import async_playwright
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context(
-                    viewport={'width': 1920, 'height': 1080},
-                    user_agent=self.headers["User-Agent"],
-                    extra_http_headers={
-                        "Accept": self.headers["Accept"],
-                        "Accept-Language": self.headers["Accept-Language"],
-                        "Origin": self.headers["Origin"],
-                        "Referer": self.headers["Referer"],
-                    }
-                )
-                page = await context.new_page()
+            el = await self.page.query_selector(selector)
+            if el:
+                return (await el.inner_text()).strip()
+            return ""
+        except:
+            return ""
 
-                response = await page.goto(full_url, wait_until="networkidle", timeout=30000)
-
-                if response and response.status == 200:
-                    text = await page.inner_text("body")
-                    try:
-                        data = json.loads(text)
-                        await browser.close()
-                        return data
-                    except:
-                        pre = await page.query_selector("pre")
-                        if pre:
-                            text = await pre.inner_text()
-                            data = json.loads(text)
-                            await browser.close()
-                            return data
-                        await browser.close()
-                        return None
-                else:
-                    await browser.close()
-                    return None
-        except Exception as e:
-            print(f"[Playwright] Error: {e}")
-            return None
-
-    # === EA API ENDPOINTS (from fc-clubs-api) ===
-
-    async def search_club(self, club_name: str) -> Optional[List[Dict]]:
-        """Search for club by name - returns list of matching clubs"""
-        data = await self._get("clubs/search", {"clubName": club_name})
-        if data and isinstance(data, list):
-            return data
-        return None
-
-    async def get_club_info(self) -> Optional[Dict]:
-        """Get club basic info"""
-        return await self._get("club/info")
-
-    async def get_overall_stats(self) -> Optional[List[Dict]]:
-        """Get club overall stats (wins, losses, draws, etc.)"""
-        return await self._get("clubs/overallStats", {"clubIds": self.club_id})
-
-    async def get_member_career_stats(self) -> Optional[List[Dict]]:
-        """Get all members' career stats (all-time)"""
-        return await self._get("clubs/memberCareerStats", {"clubId": self.club_id})
-
-    async def get_member_stats(self) -> Optional[List[Dict]]:
-        """Get all members' current season stats"""
-        return await self._get("clubs/memberStats", {"clubId": self.club_id})
-
-    async def get_match_history(self, match_type: str = "gameType9") -> List[Dict]:
-        """Get match history for a specific match type"""
-        data = await self._get("club/matchHistory", {"matchType": match_type})
-        if not data:
+    async def _extract_all_text(self, selector: str) -> List[str]:
+        """Extract text from all matching elements"""
+        try:
+            elements = await self.page.query_selector_all(selector)
+            texts = []
+            for el in elements:
+                text = (await el.inner_text()).strip()
+                if text:
+                    texts.append(text)
+            return texts
+        except:
             return []
-        if isinstance(data, list):
-            return data
-        elif isinstance(data, dict):
-            return data.get("raw", []) or data.get("matches", []) or []
-        return []
 
-    async def get_matches_stats(self) -> Optional[List[Dict]]:
-        """Get detailed match stats (from fc-clubs-api matchesStats endpoint)"""
-        return await self._get("clubs/matches", {"clubId": self.club_id})
-
-    async def get_all_matches(self, count: int = 10) -> List[Dict]:
-        """Get matches from all types combined"""
-        all_matches = []
-
-        for match_type in self.MATCH_TYPES.keys():
-            matches = await self.get_match_history(match_type)
-            for match in matches:
-                match["_matchType"] = match_type
-                match["_matchTypeName"] = self.MATCH_TYPES[match_type]
-                all_matches.append(match)
-
-        # Sort by timestamp (newest first)
-        all_matches.sort(key=lambda x: int(x.get("timestamp", x.get("match_timestamp", 0))), reverse=True)
-        return all_matches[:count]
-
-    def _parse_match(self, raw_match: Dict) -> Optional[Dict]:
-        """Convert raw EA match to bot format"""
+    async def _extract_table(self, table_selector: str = 'table') -> List[Dict[str, str]]:
+        """Extract complete table data"""
+        data = []
         try:
-            # Handle both old and new API formats
-            match_id = raw_match.get("matchId", raw_match.get("match_id", f"ea_{datetime.now().timestamp()}"))
-            timestamp = int(raw_match.get("timestamp", raw_match.get("match_timestamp", 0)))
-            match_time = datetime.fromtimestamp(timestamp).isoformat() if timestamp else datetime.now().isoformat()
+            tables = await self.page.query_selector_all(table_selector)
+            for table in tables:
+                # Get headers
+                headers = []
+                header_cells = await table.query_selector_all('thead th, thead td, tr:first-child th, tr:first-child td')
+                for cell in header_cells:
+                    headers.append((await cell.inner_text()).strip())
 
-            # Clubs data
-            clubs = raw_match.get("clubs", {})
-            teams = raw_match.get("teams", {})
+                # Get data rows
+                rows = await table.query_selector_all('tbody tr, tr:not(:first-child)')
+                for row in rows:
+                    cells = await row.query_selector_all('td')
+                    if len(cells) > 0:
+                        row_data = {}
+                        for i, cell in enumerate(cells):
+                            if i < len(headers):
+                                row_data[headers[i]] = (await cell.inner_text()).strip()
+                            else:
+                                row_data[f"col_{i}"] = (await cell.inner_text()).strip()
+                        if row_data:
+                            data.append(row_data)
+        except Exception as e:
+            print(f"[Table Extract] Error: {e}")
+        return data
 
-            # Use whichever format is present
-            club_data = clubs if clubs else teams
+    async def _extract_cards(self) -> Dict[str, str]:
+        """Extract stat cards (label + value pairs)"""
+        stats = {}
+        try:
+            # Common card selectors
+            card_selectors = [
+                '[data-testid="stat-card"]',
+                '.stat-card',
+                '.stats-card',
+                '.card',
+                '.stat-box',
+                '.metric-card',
+            ]
 
-            our_club_id = str(self.club_id)
-            opponent_club_id = None
-            opponent_name = "Unknown"
+            for selector in card_selectors:
+                cards = await self.page.query_selector_all(selector)
+                for card in cards:
+                    try:
+                        label = await card.query_selector('.label, .title, .name, h3, h4, .stat-name')
+                        value = await card.query_selector('.value, .number, .stat, .data, .stat-value')
+                        if label and value:
+                            label_text = (await label.inner_text()).strip()
+                            value_text = (await value.inner_text()).strip()
+                            if label_text and value_text:
+                                stats[label_text] = value_text
+                    except:
+                        continue
+        except Exception as e:
+            print(f"[Card Extract] Error: {e}")
+        return stats
 
-            for cid, cdata in club_data.items():
-                if str(cid) != our_club_id:
-                    opponent_club_id = cid
-                    opponent_name = cdata.get("name", "Unknown")
-                    break
+    async def _extract_roasts(self) -> List[str]:
+        """Extract roast/meme text from page"""
+        roasts = []
+        try:
+            # Look for roast containers
+            roast_selectors = [
+                '.roast',
+                '.banter',
+                '.meme',
+                '.trash-talk',
+                '.commentary',
+                '[data-testid="roast"]',
+                '.funny',
+                '.joke',
+            ]
 
-            our_data = club_data.get(our_club_id, {})
-            opp_data = club_data.get(str(opponent_club_id), {}) if opponent_club_id else {}
+            for selector in roast_selectors:
+                elements = await self.page.query_selector_all(selector)
+                for el in elements:
+                    text = (await el.inner_text()).strip()
+                    if text and len(text) > 10:
+                        roasts.append(text)
 
-            team_goals = int(our_data.get("goals", 0))
-            opponent_goals = int(opp_data.get("goals", 0)) if opponent_club_id else 0
+            # Also look for paragraphs that might be roasts
+            paragraphs = await self.page.query_selector_all('p')
+            for p in paragraphs:
+                text = (await p.inner_text()).strip()
+                if any(word in text.lower() for word in ['roast', 'banter', 'trash', 'garbage', 'clown', 'fraud', 'sold']):
+                    if text not in roasts and len(text) > 10:
+                        roasts.append(text)
+        except:
+            pass
+        return roasts
 
-            result = "win" if team_goals > opponent_goals else "loss" if team_goals < opponent_goals else "draw"
+    # === NAVIGATION ===
 
-            # Player stats
+    async def navigate_to_club(self) -> bool:
+        """Search for club and navigate to its page"""
+        try:
+            print(f"[Scraper] Navigating to proclubstracker.com...")
+            await self._goto(self.BASE_URL, wait_for='input', timeout=30000)
+
+            # Find and fill search input
+            search_input = await self.page.query_selector('input[type="search"], input[placeholder*="Search"], input[placeholder*="search"]')
+            if not search_input:
+                # Try any input
+                inputs = await self.page.query_selector_all('input')
+                for inp in inputs:
+                    input_type = await inp.get_attribute('type')
+                    if input_type in ['text', 'search', None]:
+                        search_input = inp
+                        break
+
+            if not search_input:
+                print("[Scraper] Search input not found")
+                return False
+
+            await search_input.fill(self.club_name)
+            await search_input.press("Enter")
+            await asyncio.sleep(4)  # Wait for search results
+
+            # Click on club result
+            # Try to find platform-specific result first
+            platform_map = {
+                "ps5": "PS5",
+                "ps4": "PS4",
+                "xbox": "Xbox",
+                "switch": "Switch"
+            }
+            platform_label = platform_map.get(self.platform.lower(), "PS5")
+
+            # Try to find club link with platform
+            club_links = await self.page.query_selector_all('a')
+            clicked = False
+            for link in club_links:
+                try:
+                    text = await link.inner_text()
+                    href = await link.get_attribute('href')
+                    if self.club_name.lower() in text.lower():
+                        # Check if platform matches
+                        parent = await link.query_selector('xpath=..')
+                        if parent:
+                            parent_text = await parent.inner_text()
+                            if platform_label.lower() in parent_text.lower() or self.platform.lower() in parent_text.lower():
+                                await link.click()
+                                clicked = True
+                                break
+
+                        # If no platform match, click anyway
+                        if not clicked:
+                            await link.click()
+                            clicked = True
+                            break
+                except:
+                    continue
+
+            if not clicked:
+                print("[Scraper] Could not click club result")
+                return False
+
+            await self.page.wait_for_load_state("networkidle")
+            await asyncio.sleep(3)
+
+            print(f"[Scraper] Club page loaded: {self.page.url}")
+            return True
+
+        except Exception as e:
+            print(f"[Scraper] Navigation error: {e}")
+            return False
+
+    # === TAB SCRAPERS ===
+
+    async def scrape_overview(self) -> Dict[str, Any]:
+        """Scrape Overview tab - club stats, division, skill rating"""
+        print("[Scraper] Scraping Overview...")
+        await self._click_tab("Overview")
+
+        overview = {
+            "club_name": self.club_name,
+            "platform": self.platform,
+            "scraped_at": datetime.now().isoformat(),
+        }
+
+        # Extract stat cards
+        cards = await self._extract_cards()
+        overview.update(cards)
+
+        # Extract any tables
+        tables = await self._extract_table()
+        if tables:
+            overview["players_summary"] = tables
+
+        # Extract division/skill rating from text
+        page_text = await self.page.inner_text("body")
+
+        # Try to extract division
+        division_match = re.search(r'Division\s+(\d+)', page_text, re.IGNORECASE)
+        if division_match:
+            overview["division"] = division_match.group(1)
+
+        # Try to extract skill rating
+        skill_match = re.search(r'Skill Rating[:\s]+(\d+)', page_text, re.IGNORECASE)
+        if skill_match:
+            overview["skill_rating"] = int(skill_match.group(1))
+
+        # Extract wins/losses/draws if not in cards
+        wins_match = re.search(r'(\d+)\s*Wins?', page_text, re.IGNORECASE)
+        if wins_match and "wins" not in overview:
+            overview["wins"] = int(wins_match.group(1))
+
+        losses_match = re.search(r'(\d+)\s*Loss(?:es)?', page_text, re.IGNORECASE)
+        if losses_match and "losses" not in overview:
+            overview["losses"] = int(losses_match.group(1))
+
+        draws_match = re.search(r'(\d+)\s*Draws?', page_text, re.IGNORECASE)
+        if draws_match and "draws" not in overview:
+            overview["draws"] = int(draws_match.group(1))
+
+        return overview
+
+    async def scrape_players(self) -> List[Dict[str, str]]:
+        """Scrape Players tab - detailed individual stats"""
+        print("[Scraper] Scraping Players...")
+        await self._click_tab("Players")
+
+        players = await self._extract_table()
+
+        # Also extract any additional player cards
+        cards = await self._extract_cards()
+        if cards and not players:
+            # Convert cards to table format if no table found
+            players = [cards]
+
+        return players
+
+    async def scrape_matches(self) -> List[Dict[str, str]]:
+        """Scrape Matches tab - full match history"""
+        print("[Scraper] Scraping Matches...")
+        await self._click_tab("Matches")
+
+        matches = await self._extract_table()
+
+        # If no table, try to extract from other structures
+        if not matches:
+            # Try to find match cards/containers
+            match_containers = await self.page.query_selector_all('.match, .match-card, [data-testid*="match"]')
+            for container in match_containers:
+                try:
+                    match_data = {}
+                    # Extract opponent
+                    opp = await container.query_selector('.opponent, .team-name, h3, h4')
+                    if opp:
+                        match_data["Opponent"] = (await opp.inner_text()).strip()
+
+                    # Extract score
+                    score = await container.query_selector('.score, .result')
+                    if score:
+                        match_data["Score"] = (await score.inner_text()).strip()
+
+                    # Extract result
+                    result = await container.query_selector('.win, .loss, .draw, .result-badge')
+                    if result:
+                        result_text = (await result.inner_text()).strip()
+                        match_data["Result"] = result_text
+
+                    # Extract date
+                    date = await container.query_selector('.date, time, .timestamp')
+                    if date:
+                        match_data["Date"] = (await date.inner_text()).strip()
+
+                    if match_data:
+                        matches.append(match_data)
+                except:
+                    continue
+
+        return matches
+
+    async def scrape_form(self) -> Dict[str, Any]:
+        """Scrape Form tab - recent form, streaks, graphs"""
+        print("[Scraper] Scraping Form...")
+        await self._click_tab("Form")
+
+        form_data = {
+            "recent_form": [],
+            "streaks": {},
+            "graphs": []
+        }
+
+        # Extract form string (W L D W W L...)
+        form_text = await self._extract_text('.form-string, .form-display, .recent-form')
+        if form_text:
+            form_data["recent_form_string"] = form_text
+
+        # Extract streak info
+        streak_text = await self._extract_text('.streak, .current-streak')
+        if streak_text:
+            form_data["streaks"]["current"] = streak_text
+
+        # Extract form table if exists
+        form_table = await self._extract_table()
+        if form_table:
+            form_data["match_form"] = form_table
+
+        # Extract any cards
+        cards = await self._extract_cards()
+        if cards:
+            form_data["stats"] = cards
+
+        return form_data
+
+    async def scrape_chemistry(self) -> Dict[str, Any]:
+        """Scrape Chemistry tab - player partnerships, combos"""
+        print("[Scraper] Scraping Chemistry...")
+        await self._click_tab("Chemistry")
+
+        chemistry = {
+            "combos": [],
+            "partnerships": [],
+            "stats": {}
+        }
+
+        # Extract chemistry tables
+        tables = await self._extract_table()
+        if tables:
+            chemistry["combos"] = tables
+
+        # Extract cards
+        cards = await self._extract_cards()
+        if cards:
+            chemistry["stats"] = cards
+
+        return chemistry
+
+    async def scrape_head_to_head(self) -> Dict[str, Any]:
+        """Scrape Head to Head tab - player comparisons"""
+        print("[Scraper] Scraping Head to Head...")
+        await self._click_tab("Head")
+
+        h2h = {
+            "comparisons": [],
+            "stats": {}
+        }
+
+        tables = await self._extract_table()
+        if tables:
+            h2h["comparisons"] = tables
+
+        cards = await self._extract_cards()
+        if cards:
+            h2h["stats"] = cards
+
+        return h2h
+
+    async def scrape_roasts_memes(self) -> List[str]:
+        """Scrape any roast/meme content from the page"""
+        print("[Scraper] Scraping roasts/memes...")
+
+        roasts = await self._extract_roasts()
+
+        # Also check if there's a dedicated roast/meme section
+        # Try clicking on any roast-related tabs
+        for tab_name in ["Roasts", "Memes", "Banter", "Trash Talk"]:
+            if await self._click_tab(tab_name):
+                tab_roasts = await self._extract_roasts()
+                roasts.extend(tab_roasts)
+
+        return roasts
+
+    # === MAIN SCRAPE ===
+
+    async def scrape_all(self) -> Dict[str, Any]:
+        """Scrape ALL tabs and return complete data"""
+        if not self.playwright_available:
+            print("[Scraper] Playwright not available!")
+            return {}
+
+        await self._init_browser()
+
+        try:
+            # Navigate to club page
+            if not await self.navigate_to_club():
+                await self._close_browser()
+                return {}
+
+            all_data = {
+                "club_name": self.club_name,
+                "platform": self.platform,
+                "scraped_at": datetime.now().isoformat(),
+                "url": self.page.url,
+            }
+
+            # Scrape each tab
+            all_data["overview"] = await self.scrape_overview()
+            all_data["players"] = await self.scrape_players()
+            all_data["matches"] = await self.scrape_matches()
+            all_data["form"] = await self.scrape_form()
+            all_data["chemistry"] = await self.scrape_chemistry()
+            all_data["head_to_head"] = await self.scrape_head_to_head()
+            all_data["roasts_memes"] = await self.scrape_roasts_memes()
+
+            print(f"[Scraper] Complete! Scraped:")
+            print(f"  - Overview: {len(all_data['overview'])} stats")
+            print(f"  - Players: {len(all_data['players'])} players")
+            print(f"  - Matches: {len(all_data['matches'])} matches")
+            print(f"  - Form: {len(all_data['form'].get('recent_form', []))} form entries")
+            print(f"  - Chemistry: {len(all_data['chemistry'].get('combos', []))} combos")
+            print(f"  - H2H: {len(all_data['head_to_head'].get('comparisons', []))} comparisons")
+            print(f"  - Roasts: {len(all_data['roasts_memes'])} roasts/memes")
+
+            return all_data
+
+        except Exception as e:
+            print(f"[Scraper] Fatal error: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}
+
+        finally:
+            await self._close_browser()
+
+    # === CONVERSION TO BOT FORMAT ===
+
+    def _parse_score(self, score_str: str) -> Tuple[int, int]:
+        """Parse score string like '3-1' or '2 - 2'"""
+        try:
+            # Remove spaces and split
+            score_clean = score_str.replace(" ", "")
+            if "-" in score_clean:
+                parts = score_clean.split("-")
+                return int(parts[0]), int(parts[1])
+            elif ":" in score_clean:
+                parts = score_clean.split(":")
+                return int(parts[0]), int(parts[1])
+        except:
+            pass
+        return 0, 0
+
+    def _convert_match(self, raw_match: Dict, players_data: List[Dict]) -> Optional[Dict]:
+        """Convert proclubstracker match to bot format"""
+        try:
+            # Extract opponent
+            opponent = raw_match.get("Opponent", raw_match.get("opponent", raw_match.get("Team", "Unknown")))
+
+            # Extract score
+            score_str = raw_match.get("Score", raw_match.get("score", raw_match.get("Result", "0-0")))
+            team_goals, opponent_goals = self._parse_score(score_str)
+
+            # Extract result
+            result_str = raw_match.get("Result", raw_match.get("result", "")).lower()
+            if "w" in result_str or "win" in result_str:
+                result = "win"
+            elif "l" in result_str or "loss" in result_str:
+                result = "loss"
+            else:
+                result = "win" if team_goals > opponent_goals else "loss" if team_goals < opponent_goals else "draw"
+
+            # Extract date
+            date_str = raw_match.get("Date", raw_match.get("date", raw_match.get("Time", datetime.now().isoformat())))
+
+            # Build player stats from players_data (if available)
             player_stats = {}
-            players = raw_match.get("players", {})
-            our_players = players.get(our_club_id, {})
 
-            for player_id, p_data in our_players.items():
-                player_name = p_data.get("playername", "Unknown")
-                clean_name = player_name.lower().strip()
+            # Try to match players from the match row
+            for key, value in raw_match.items():
+                if key not in ["Opponent", "Score", "Result", "Date", "Time", "Match"] and isinstance(value, str):
+                    # Check if this looks like a player name with stats
+                    if any(stat in value.lower() for stat in ["goal", "assist", "rating"]):
+                        # This might be a player stat string
+                        pass
 
-                passes_attempted = int(p_data.get("passattempts", 0))
-                passes_made = int(p_data.get("passesmade", 0))
+            # If we have detailed players data, use it
+            for player in players_data:
+                player_name = player.get("Player", player.get("Name", player.get("player", ""))).lower().strip()
+                if not player_name:
+                    continue
 
-                player_stats[clean_name] = {
-                    "goals": int(p_data.get("goals", 0)),
-                    "assists": int(p_data.get("assists", 0)),
-                    "shots": int(p_data.get("shots", 0)),
+                def parse_num(val, default=0):
+                    if val is None:
+                        return default
+                    val_str = str(val).replace("%", "").replace(",", "").strip()
+                    try:
+                        return float(val_str) if "." in val_str else int(val_str)
+                    except:
+                        return default
+
+                passes_attempted = parse_num(player.get("Passes", player.get("Pass Attempts", 0)))
+                passes_made = parse_num(player.get("Passes Made", player.get("Pass Completion", 0)))
+
+                player_stats[player_name] = {
+                    "goals": parse_num(player.get("Goals", 0)),
+                    "assists": parse_num(player.get("Assists", 0)),
+                    "shots": parse_num(player.get("Shots", 0)),
                     "passes_attempted": passes_attempted,
                     "passes_made": passes_made,
                     "pass_accuracy": round((passes_made / max(passes_attempted, 1)) * 100, 1),
-                    "key_passes": int(p_data.get("key_passes", 0)),
-                    "tackles": int(p_data.get("tacklesmade", p_data.get("tackles", 0))),
-                    "tackle_attempts": int(p_data.get("tackleattempts", 0)),
-                    "interceptions": int(p_data.get("interceptions", 0)),
-                    "possession_losses": int(p_data.get("possession_losses", passes_attempted - passes_made)),
-                    "dribbles_attempted": int(p_data.get("dribbleattempts", p_data.get("dribbles_attempted", 0))),
-                    "dribbles_completed": int(p_data.get("dribbles_completed", 0)),
-                    "fouls": int(p_data.get("fouls", 0)),
-                    "yellow_cards": int(p_data.get("yellowcards", p_data.get("yellow_cards", 0))),
-                    "red_cards": int(p_data.get("redcards", p_data.get("red_cards", 0))),
-                    "rating": float(p_data.get("rating", 6.0)),
-                    "motm": str(p_data.get("man_of_the_match", "0")).lower() in ["1", "true", "yes"],
-                    "position": p_data.get("pos", "unknown"),
-                    "minutes_played": int(int(p_data.get("secondsPlayed", 7200)) / 60),
-                    "saves": int(p_data.get("saves", 0)),
-                    "goals_conceded": int(p_data.get("goalsconceded", 0)),
+                    "key_passes": parse_num(player.get("Key Passes", 0)),
+                    "tackles": parse_num(player.get("Tackles", 0)),
+                    "interceptions": parse_num(player.get("Interceptions", 0)),
+                    "possession_losses": parse_num(player.get("Possession Losses", passes_attempted - passes_made)),
+                    "dribbles_attempted": parse_num(player.get("Dribbles", 0)),
+                    "dribbles_completed": parse_num(player.get("Dribbles Completed", 0)),
+                    "fouls": parse_num(player.get("Fouls", 0)),
+                    "yellow_cards": parse_num(player.get("Yellow Cards", 0)),
+                    "red_cards": parse_num(player.get("Red Cards", 0)),
+                    "rating": parse_num(player.get("Rating", player.get("Match Rating", 6.0)), 6.0),
+                    "motm": str(player.get("MOTM", player.get("Man of the Match", ""))).lower() in ["yes", "1", "true", "✓", "⭐"],
+                    "position": player.get("Position", "unknown"),
+                    "minutes_played": parse_num(player.get("Minutes", 90)),
                 }
 
             return {
-                "match_id": str(match_id),
-                "timestamp": timestamp,
-                "match_time": match_time,
-                "opponent": opponent_name,
+                "match_id": raw_match.get("Match ID", raw_match.get("match_id", f"pct_{datetime.now().timestamp()}")),
+                "timestamp": int(datetime.now().timestamp()),
+                "match_time": date_str if isinstance(date_str, str) else datetime.now().isoformat(),
+                "opponent": opponent,
                 "team_goals": team_goals,
                 "opponent_goals": opponent_goals,
                 "result": result,
-                "match_type": raw_match.get("_matchType", "gameType9"),
-                "match_type_name": raw_match.get("_matchTypeName", "league"),
+                "match_type": "gameType9",
                 "player_stats": player_stats,
             }
 
         except Exception as e:
-            print(f"[Parse Error] {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"[Convert Match] Error: {e}")
             return None
 
-    async def check_new_match(self) -> Optional[Dict]:
-        """Check for most recent match"""
-        matches = await self.get_all_matches(count=1)
-        if matches:
-            return self._parse_match(matches[0])
-        return None
+    async def sync_to_stats_engine(self, stats_engine, count: int = 10) -> int:
+        """Sync scraped matches to stats engine"""
+        all_data = await self.scrape_all()
+        if not all_data:
+            return 0
 
-    async def sync_recent_matches(self, stats_engine, count: int = 10) -> int:
-        """Sync matches to stats engine"""
-        raw_matches = await self.get_all_matches(count=count)
         added = 0
+        matches = all_data.get("matches", [])
+        players = all_data.get("players", [])
 
-        for raw in raw_matches:
-            parsed = self._parse_match(raw)
+        for match in matches[:count]:
+            parsed = self._convert_match(match, players)
             if parsed:
                 if not stats_engine.match_exists(parsed["match_id"]):
                     stats_engine.add_match(parsed)
@@ -303,52 +701,20 @@ class FC26Scraper:
                     print(f"[Sync] Added: {parsed['match_time']} vs {parsed['opponent']} ({parsed['result']})")
 
         if added == 0:
-            print(f"[Sync] No new matches (checked {len(raw_matches)})")
+            print(f"[Sync] No new matches (checked {len(matches)} from proclubstracker)")
 
         return added
 
-    async def close(self):
-        """Close client"""
-        await self.client.aclose()
+    async def check_new_match(self) -> Optional[Dict]:
+        """Check for most recent match"""
+        all_data = await self.scrape_all()
+        matches = all_data.get("matches", [])
+        players = all_data.get("players", [])
+
+        if matches:
+            return self._convert_match(matches[0], players)
+        return None
 
 
-def get_scraper(club_id: str, platform: str = "common-gen5") -> FC26Scraper:
-    return FC26Scraper(club_id, platform)
-
-
-# === TEST ===
-if __name__ == "__main__":
-    async def test():
-        scraper = FC26Scraper(club_id="1427607", platform="common-gen5")
-
-        print("Testing EA API with fc-clubs-api approach...")
-
-        # Test 1: Club info
-        print("\n1. Club Info:")
-        info = await scraper.get_club_info()
-        print(json.dumps(info, indent=2) if info else "Failed")
-
-        # Test 2: Overall stats
-        print("\n2. Overall Stats:")
-        stats = await scraper.get_overall_stats()
-        print(json.dumps(stats, indent=2) if stats else "Failed")
-
-        # Test 3: Member stats
-        print("\n3. Member Stats:")
-        members = await scraper.get_member_stats()
-        print(f"Found {len(members) if members else 0} members")
-        if members:
-            print(json.dumps(members[0], indent=2))
-
-        # Test 4: Match history
-        print("\n4. Match History:")
-        matches = await scraper.get_all_matches(count=5)
-        print(f"Found {len(matches)} matches")
-        for m in matches[:3]:
-            parsed = scraper._parse_match(m)
-            if parsed:
-                print(f"  {parsed['match_time']}: {parsed['team_goals']}-{parsed['opponent_goals']} vs {parsed['opponent']}")
-
-        await scraper.close()
-
-    asyncio.run(test())
+def get_scraper(club_name: str, platform: str = "ps5") -> ProClubsTrackerScraper:
+    return ProClubsTrackerScraper(club_name, platform)
