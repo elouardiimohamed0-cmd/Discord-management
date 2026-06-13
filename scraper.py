@@ -1,7 +1,10 @@
 """
-Rachad L3ERGONI Bot - Hybrid Scraper v3
-Primary: EA FC Pro Clubs API (direct, fast, official)
-Fallback: ProClubsTracker.com (Playwright with proper waiting)
+Rachad L3ERGONI Bot - Ultimate Hybrid Scraper v4
+Strategy:
+  1. ProClubsTracker window.__NEXT_DATA__ (instant, no DOM scraping)
+  2. ProClubsTracker DOM scrape after React renders
+  3. EA API fallback
+  4. Manual match entry via Discord commands
 """
 
 import os
@@ -18,14 +21,61 @@ EA_BASE = "https://proclubs.ea.com/api/fc"
 PCT_BASE = "https://proclubstracker.com"
 
 
-class EAFCAPIClient:
-    """Direct client for EA's public Pro Clubs API. No browser needed."""
+class UltimateScraper:
+    """
+    Multi-strategy scraper:
+    - Primary: ProClubsTracker Next.js internal data
+    - Secondary: ProClubsTracker DOM after React render
+    - Tertiary: EA API
+    """
 
-    def __init__(self, club_id: str, platform: str = "common-gen5"):
+    def __init__(self, club_id: str, platform: str = "common-gen5", division: str = "6"):
         self.club_id = str(club_id)
         self.platform = platform
+        self.division = division
+        self.club_url = f"{PCT_BASE}/club/{club_id}?platform={platform}&div={division}"
         self._client: Optional[httpx.AsyncClient] = None
-        self._club_info: Optional[dict] = None
+        self._playwright_available = None
+
+    def _ensure_playwright(self) -> bool:
+        if self._playwright_available is not None:
+            return self._playwright_available
+        try:
+            import playwright
+            self._playwright_available = True
+            return True
+        except ImportError:
+            self._playwright_available = False
+            return False
+
+    def _install_browsers(self) -> bool:
+        try:
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
+                         capture_output=True, timeout=180)
+            return True
+        except:
+            return False
+
+    def _load_squad(self) -> Dict[str, dict]:
+        try:
+            with open("squad.json", "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return {}
+
+    def _find_squad_key(self, ea_name: str, squad_map: Dict[str, dict]) -> Optional[str]:
+        ea_lower = ea_name.lower().strip()
+        for key, info in squad_map.items():
+            if info.get("name", "").lower().strip() == ea_lower: return key
+            if info.get("psn", "").lower().strip() == ea_lower: return key
+            if info.get("nickname", "").lower().strip() == ea_lower: return key
+            name = info.get("name", "").lower().strip()
+            nick = info.get("nickname", "").lower().strip()
+            if name in ea_lower or ea_lower in name: return key
+            if nick in ea_lower or ea_lower in nick: return key
+        return None
+
+    # ===================== EA API =====================
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -53,92 +103,196 @@ class EAFCAPIClient:
                 elif resp.status_code == 429:
                     await asyncio.sleep(2 ** attempt)
                 else:
-                    print(f"[EA API] {endpoint} -> HTTP {resp.status_code}")
                     return None
             except Exception as e:
-                print(f"[EA API] {endpoint} attempt {attempt+1}: {e}")
                 if attempt < 2:
                     await asyncio.sleep(2 ** attempt)
         return None
 
-    async def get_club_info(self) -> Optional[dict]:
-        if self._club_info:
-            return self._club_info
-        data = await self._api_get("clubs/info", {"platform": self.platform, "clubIds": self.club_id})
-        if data and isinstance(data, dict):
-            self._club_info = data.get(self.club_id, data)
-            return self._club_info
-        return None
-
-    async def get_matches(self, match_type: str = "gameType9", count: int = 20) -> List[dict]:
+    async def _ea_get_matches(self, count: int = 20) -> List[dict]:
         data = await self._api_get("clubs/matches", {
-            "matchType": match_type, "platform": self.platform,
+            "matchType": "gameType9", "platform": self.platform,
             "clubIds": self.club_id, "maxResultCount": count
         })
         return data if isinstance(data, list) else []
 
-    async def get_member_stats(self) -> List[dict]:
-        data = await self._api_get("members/stats", {"platform": self.platform, "clubId": self.club_id})
-        return data if isinstance(data, list) else []
-
-    async def get_member_career_stats(self) -> List[dict]:
-        data = await self._api_get("members/careerStats", {"platform": self.platform, "clubId": self.club_id})
-        return data if isinstance(data, list) else []
-
-    async def get_all_data(self, match_count: int = 20) -> Dict[str, Any]:
-        club_info, matches, members, career = await asyncio.gather(
-            self.get_club_info(), self.get_matches("gameType9", match_count),
-            self.get_member_stats(), self.get_member_career_stats(),
+    async def _ea_get_all(self, match_count: int = 20) -> Dict[str, Any]:
+        club_info, matches = await asyncio.gather(
+            self._api_get("clubs/info", {"platform": self.platform, "clubIds": self.club_id}),
+            self._ea_get_matches(match_count),
             return_exceptions=True
         )
         return {
             "overview": club_info if isinstance(club_info, dict) else {},
             "matches": matches if isinstance(matches, list) else [],
-            "players": members if isinstance(members, list) else [],
-            "career": career if isinstance(career, list) else [],
             "timestamp": datetime.now().isoformat()
         }
 
-    def _build_match_id(self, match: dict) -> str:
-        ts = match.get("match_timestamp", "")
-        mid = match.get("match_id", "")
-        raw = f"{mid}_{ts}_{self.club_id}"
-        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+    # ===================== ProClubsTracker =====================
 
-    def _find_opponent_name(self, match: dict) -> str:
-        teams = match.get("teams", {})
-        for cid, team in teams.items():
-            if str(cid) != str(self.club_id):
-                return team.get("name", "Unknown")
-        return "Unknown"
-
-    def _load_squad(self) -> Dict[str, dict]:
-        try:
-            with open("squad.json", "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
+    async def _scrape_pct_nextjs(self) -> Dict[str, Any]:
+        """
+        PRIMARY METHOD: Extract Next.js internal data from window.__NEXT_DATA__
+        This is how Next.js apps work - all data is embedded in the HTML initially
+        or loaded via JS and stored in window.__NEXT_DATA__
+        """
+        if not self._ensure_playwright():
             return {}
 
-    def _find_squad_key(self, ea_name: str, squad_map: Dict[str, dict]) -> Optional[str]:
-        ea_lower = ea_name.lower().strip()
-        for key, info in squad_map.items():
-            if info.get("name", "").lower().strip() == ea_lower: return key
-            if info.get("psn", "").lower().strip() == ea_lower: return key
-            if info.get("nickname", "").lower().strip() == ea_lower: return key
-            name = info.get("name", "").lower().strip()
-            nick = info.get("nickname", "").lower().strip()
-            if name in ea_lower or ea_lower in name: return key
-            if nick in ea_lower or ea_lower in nick: return key
-        return None
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return {}
+
+        print(f"[PCT] Scraping via Next.js internal data: {self.club_url}")
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+                )
+                context = await browser.new_context(viewport={'width': 1920, 'height': 1080})
+                page = await context.new_page()
+
+                # Navigate
+                await page.goto(self.club_url, wait_until="networkidle", timeout=45000)
+                await asyncio.sleep(2)  # Let React hydrate
+
+                # METHOD 1: Try window.__NEXT_DATA__
+                next_data = await page.evaluate("() => { try { return window.__NEXT_DATA__; } catch(e) { return null; } }")
+                if next_data:
+                    print(f"[PCT] Found window.__NEXT_DATA__!")
+                    # Extract matches from Next.js data structure
+                    props = next_data.get("props", {})
+                    page_props = props.get("pageProps", {}) if isinstance(props, dict) else {}
+
+                    # Try different possible data structures
+                    matches = []
+                    if "matches" in page_props:
+                        matches = page_props["matches"]
+                    elif "data" in page_props and isinstance(page_props["data"], dict):
+                        matches = page_props["data"].get("matches", [])
+                    elif "club" in page_props and isinstance(page_props["club"], dict):
+                        matches = page_props["club"].get("matches", [])
+
+                    players = []
+                    if "players" in page_props:
+                        players = page_props["players"]
+                    elif "data" in page_props and isinstance(page_props["data"], dict):
+                        players = page_props["data"].get("players", [])
+
+                    await browser.close()
+                    return {
+                        "matches": matches,
+                        "players": players,
+                        "source": "nextjs_internal",
+                        "timestamp": datetime.now().isoformat()
+                    }
+
+                # METHOD 2: Scrape rendered DOM
+                print("[PCT] No __NEXT_DATA__, scraping rendered DOM...")
+
+                # Wait for loading to finish
+                for _ in range(10):
+                    loading = await page.query_selector("text=Loading club data...")
+                    if not loading:
+                        break
+                    await asyncio.sleep(1)
+
+                await asyncio.sleep(2)  # Extra wait for React render
+
+                # Extract all text content that looks like match data
+                page_text = await page.evaluate("""() => {
+                    const data = [];
+                    // Look for any elements containing match-like patterns
+                    const allElements = document.querySelectorAll('*');
+                    for (const el of allElements) {
+                        const text = el.innerText || el.textContent || '';
+                        if (text.includes('vs') || text.includes('-')) {
+                            if (/\d+\s*[-–]\s*\d+/.test(text)) {
+                                data.push({
+                                    text: text.trim(),
+                                    tag: el.tagName,
+                                    class: el.className
+                                });
+                            }
+                        }
+                    }
+                    return data;
+                }""")
+
+                # Also try to find table data
+                tables = await page.query_selector_all('table, [class*="table"], [class*="match"]')
+                table_data = []
+                for table in tables:
+                    rows = await table.query_selector_all('tr, [class*="row"]')
+                    for row in rows:
+                        cells = await row.query_selector_all('td, th, [class*="cell"]')
+                        if len(cells) >= 2:
+                            row_text = " | ".join([(await c.inner_text()).strip() for c in cells])
+                            if any(c.isdigit() for c in row_text):
+                                table_data.append(row_text)
+
+                await browser.close()
+
+                return {
+                    "dom_elements": page_text[:50],  # Limit
+                    "table_rows": table_data[:20],
+                    "source": "dom_scrape",
+                    "timestamp": datetime.now().isoformat()
+                }
+        except Exception as e:
+            print(f"[PCT] Scraping failed: {e}")
+            return {}
+
+    # ===================== Parsing =====================
+
+    def _parse_pct_match(self, raw_text: str, squad_map: Dict[str, dict]) -> Optional[dict]:
+        """Parse a match from ProClubsTracker text format"""
+        try:
+            # Look for score pattern like "3 - 2" or "3-2"
+            import re
+            score_match = re.search(r'(\d+)\s*[-–]\s*(\d+)', raw_text)
+            if not score_match:
+                return None
+
+            team_goals = int(score_match.group(1))
+            opponent_goals = int(score_match.group(2))
+            result = "win" if team_goals > opponent_goals else "loss" if team_goals < opponent_goals else "draw"
+
+            # Try to extract opponent name (text before or after score)
+            opponent = "Unknown"
+            parts = raw_text.split(score_match.group(0))
+            if parts:
+                for part in parts:
+                    clean = part.strip().replace("vs", "").replace("VS", "").strip()
+                    if clean and len(clean) > 2 and not clean.isdigit():
+                        opponent = clean
+                        break
+
+            match_id = f"pct_{hash(raw_text) % 10000000}"
+            return {
+                "match_id": match_id, "date": datetime.now().isoformat(),
+                "opponent": opponent, "team_goals": team_goals,
+                "opponent_goals": opponent_goals, "result": result,
+                "match_type": "gameType9", "player_stats": {}
+            }
+        except Exception as e:
+            return None
 
     def _parse_ea_match(self, match: dict, squad_map: Dict[str, dict]) -> Optional[dict]:
+        """Parse EA API match format"""
         try:
-            match_id = self._build_match_id(match)
             ts = match.get("match_timestamp", "")
             match_time = datetime.fromtimestamp(int(ts)).isoformat() if str(ts).isdigit() else datetime.now().isoformat()
             teams = match.get("teams", {})
             our_team = teams.get(self.club_id, {})
-            opponent_name = self._find_opponent_name(match)
+
+            opponent_name = "Unknown"
+            for cid, team in teams.items():
+                if str(cid) != str(self.club_id):
+                    opponent_name = team.get("name", "Unknown")
+
             team_goals = int(our_team.get("goals", 0))
             opponent_goals = int(our_team.get("goalsAgainst", 0))
 
@@ -180,7 +334,8 @@ class EAFCAPIClient:
                 }
 
             return {
-                "match_id": match_id, "date": match_time, "opponent": opponent_name,
+                "match_id": hashlib.sha256(f"{match.get('match_id', '')}_{ts}_{self.club_id}".encode()).hexdigest()[:16],
+                "date": match_time, "opponent": opponent_name,
                 "team_goals": team_goals, "opponent_goals": opponent_goals,
                 "team_possession": 50.0, "opponent_possession": 50.0,
                 "team_shots": team_goals * 3, "opponent_shots": opponent_goals * 3,
@@ -193,28 +348,90 @@ class EAFCAPIClient:
                 "player_stats": player_stats
             }
         except Exception as e:
-            print(f"[Parse Match Error] {e}")
+            print(f"[Parse EA Match Error] {e}")
             return None
 
+    # ===================== Public API =====================
+
+    async def scrape_all(self) -> Dict[str, Any]:
+        """Try all methods and return the best data"""
+        # Method 1: ProClubsTracker Next.js
+        pct_data = await self._scrape_pct_nextjs()
+        if pct_data.get("matches") and len(pct_data["matches"]) > 0:
+            print(f"[scrape_all] ProClubsTracker returned {len(pct_data['matches'])} matches")
+            return pct_data
+
+        # Method 2: EA API
+        ea_data = await self._ea_get_all(20)
+        if ea_data.get("matches") and len(ea_data["matches"]) > 0:
+            print(f"[scrape_all] EA API returned {len(ea_data['matches'])} matches")
+            return ea_data
+
+        # Method 3: Return whatever PCT DOM scrape found
+        if pct_data.get("dom_elements") or pct_data.get("table_rows"):
+            print(f"[scrape_all] PCT DOM scrape found {len(pct_data.get('table_rows', []))} rows")
+            return pct_data
+
+        return {"matches": [], "players": [], "error": "No data from any source"}
+
     async def sync_to_stats_engine(self, stats_engine, count: int = 10) -> int:
-        """Sync matches to stats engine. Loads squad.json internally."""
+        """Sync matches to stats engine using best available source"""
         squad = self._load_squad()
-        matches = await self.get_matches("gameType9", count)
         added = 0
-        for match in matches:
+
+        # Try ProClubsTracker first
+        pct_data = await self._scrape_pct_nextjs()
+        if pct_data.get("matches") and len(pct_data["matches"]) > 0:
+            for match in pct_data["matches"][:count]:
+                if isinstance(match, dict):
+                    parsed = self._parse_ea_match(match, squad) if "teams" in match else self._parse_pct_match(str(match), squad)
+                else:
+                    parsed = self._parse_pct_match(str(match), squad)
+                if parsed and not stats_engine.match_exists(parsed["match_id"]):
+                    stats_engine.add_match(parsed)
+                    added += 1
+            if added > 0:
+                print(f"[Sync] Added {added} matches from ProClubsTracker")
+                return added
+
+        # Try EA API
+        ea_matches = await self._ea_get_matches(count)
+        for match in ea_matches:
             parsed = self._parse_ea_match(match, squad)
             if parsed and not stats_engine.match_exists(parsed["match_id"]):
                 stats_engine.add_match(parsed)
                 added += 1
-        print(f"[EA API] Synced {added} new matches")
+
+        if added > 0:
+            print(f"[Sync] Added {added} matches from EA API")
+        else:
+            print("[Sync] No new matches found from any source")
         return added
 
     async def check_new_match(self) -> Optional[dict]:
-        """Check for most recent match."""
+        """Check for most recent match"""
         squad = self._load_squad()
-        matches = await self.get_matches("gameType9", 1)
-        if matches:
-            return self._parse_ea_match(matches[0], squad)
+
+        # Try ProClubsTracker
+        pct_data = await self._scrape_pct_nextjs()
+        if pct_data.get("matches") and len(pct_data["matches"]) > 0:
+            match = pct_data["matches"][0]
+            if isinstance(match, dict) and "teams" in match:
+                return self._parse_ea_match(match, squad)
+            return self._parse_pct_match(str(match), squad)
+
+        # Try EA API
+        ea_matches = await self._ea_get_matches(1)
+        if ea_matches:
+            return self._parse_ea_match(ea_matches[0], squad)
+
+        return None
+
+    async def get_club_info(self) -> Optional[dict]:
+        """Get club info from EA API"""
+        data = await self._api_get("clubs/info", {"platform": self.platform, "clubIds": self.club_id})
+        if data and isinstance(data, dict):
+            return data.get(self.club_id, data)
         return None
 
     async def close(self):
@@ -222,190 +439,9 @@ class EAFCAPIClient:
             await self._client.aclose()
 
 
-class ProClubsTrackerScraper(EAFCAPIClient):
-    """
-    Hybrid scraper: tries EA API first, falls back to ProClubsTracker Playwright scrape.
-    Backward-compatible with the original bot.py calling conventions.
-    """
-
-    def __init__(self, club_id: str, platform: str = "common-gen5", division: str = "6"):
-        super().__init__(club_id, platform)
-        self.division = division
-        self.club_url = f"{PCT_BASE}/club/{club_id}?platform={platform}&div={division}"
-        self._playwright_available = None
-
-    def _ensure_playwright(self) -> bool:
-        if self._playwright_available is not None:
-            return self._playwright_available
-        try:
-            import playwright
-            self._playwright_available = True
-            return True
-        except ImportError:
-            self._playwright_available = False
-            return False
-
-    def _install_browsers(self) -> bool:
-        try:
-            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
-                         capture_output=True, timeout=180)
-            return True
-        except:
-            return False
-
-    async def _scrape_pct_fallback(self) -> Dict[str, Any]:
-        """Fallback: scrape ProClubsTracker with proper Playwright waiting."""
-        if not self._ensure_playwright():
-            print("[Fallback] Playwright not installed, cannot scrape ProClubsTracker")
-            return {}
-
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError:
-            return {}
-
-        print(f"[Fallback] Scraping ProClubsTracker: {self.club_url}")
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-                )
-                context = await browser.new_context(viewport={'width': 1920, 'height': 1080})
-                page = await context.new_page()
-
-                # Navigate and wait for content to load
-                await page.goto(self.club_url, wait_until="domcontentloaded", timeout=30000)
-
-                # Wait for loading to finish - look for actual data or absence of loading text
-                try:
-                    await page.wait_for_selector("text=Loading club data...", state="detached", timeout=15000)
-                except:
-                    pass  # Loading text might not exist
-
-                # Give extra time for JS to render
-                await asyncio.sleep(3)
-
-                # Try multiple selectors that might contain match data
-                selectors = [
-                    'table tbody tr',
-                    '[class*="match"]',
-                    '[class*="game"]',
-                    'div:has-text("vs")',
-                    'div:has-text("-")',
-                ]
-
-                all_matches = []
-                all_players = []
-
-                for selector in selectors:
-                    try:
-                        elements = await page.query_selector_all(selector)
-                        for el in elements:
-                            text = await el.inner_text()
-                            text_lower = text.lower()
-                            # Detect match rows by looking for score patterns or opponent names
-                            if any(c in text for c in ["-", "vs", "win", "loss", "draw"]):
-                                if any(c.isdigit() for c in text):
-                                    cells = await el.query_selector_all('td, div[class*="cell"]')
-                                    if cells:
-                                        row_dict = {f"col_{i}": (await c.inner_text()).strip() for i, c in enumerate(cells)}
-                                        all_matches.append(row_dict)
-                            # Detect player rows
-                            if any(w in text_lower for w in ["goals", "assists", "rating", "passes"]):
-                                cells = await el.query_selector_all('td, div[class*="cell"]')
-                                if cells:
-                                    row_dict = {f"col_{i}": (await c.inner_text()).strip() for i, c in enumerate(cells)}
-                                    all_players.append(row_dict)
-                    except:
-                        continue
-
-                # Also try to extract from page text as last resort
-                page_text = await page.content()
-
-                await browser.close()
-
-                print(f"[Fallback] Found {len(all_matches)} match rows, {len(all_players)} player rows")
-                return {"matches": all_matches, "players": all_players, "source": "proclubstracker_fallback"}
-        except Exception as e:
-            print(f"[Fallback] ProClubsTracker scrape failed: {e}")
-            return {}
-
-    def _parse_fallback_match(self, raw: Dict, squad_map: Dict[str, dict]) -> Optional[dict]:
-        """Parse a match row from ProClubsTracker fallback scrape."""
-        try:
-            vals = list(raw.values())
-            opponent = vals[1] if len(vals) > 1 else "Unknown"
-            score_str = next((v for v in vals if "-" in v and any(c.isdigit() for c in v)), "0-0")
-            clean = score_str.replace(" ", "").replace("–", "-")
-            parts = clean.split("-")
-            team_goals = int(parts[0]) if parts[0].isdigit() else 0
-            opponent_goals = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-            result = "win" if team_goals > opponent_goals else "loss" if team_goals < opponent_goals else "draw"
-            match_id = f"pct_{hash(str(raw)) % 10000000}"
-            return {
-                "match_id": match_id, "date": datetime.now().isoformat(),
-                "opponent": opponent, "team_goals": team_goals,
-                "opponent_goals": opponent_goals, "result": result,
-                "match_type": "gameType9", "player_stats": {}
-            }
-        except:
-            return None
-
-    async def scrape_all(self) -> Dict[str, Any]:
-        """Legacy method: try EA API first, fallback to ProClubsTracker."""
-        # Try EA API first
-        ea_data = await self.get_all_data(match_count=20)
-        if ea_data.get("matches"):
-            print(f"[scrape_all] EA API returned {len(ea_data['matches'])} matches")
-            return ea_data
-
-        # Fallback to ProClubsTracker
-        print("[scrape_all] EA API empty, trying ProClubsTracker fallback...")
-        fallback = await self._scrape_pct_fallback()
-        if fallback.get("matches"):
-            return {
-                "overview": {}, "matches": fallback.get("matches", []),
-                "players": fallback.get("players", []), "career": [],
-                "timestamp": datetime.now().isoformat(), "source": "fallback"
-            }
-
-        return {"matches": [], "players": [], "error": "No data from any source"}
-
-    async def sync_to_stats_engine(self, stats_engine, count: int = 10) -> int:
-        """Legacy-compatible: sync matches using EA API (primary) or fallback."""
-        # Try EA API first
-        ea_added = await super().sync_to_stats_engine(stats_engine, count)
-        if ea_added > 0:
-            return ea_added
-
-        # Fallback
-        print("[sync_to_stats_engine] EA API returned 0, trying fallback...")
-        fallback = await self._scrape_pct_fallback()
-        squad = self._load_squad()
-        matches = fallback.get("matches", [])[:count]
-        added = 0
-        for match in matches:
-            parsed = self._parse_fallback_match(match, squad)
-            if parsed and not stats_engine.match_exists(parsed["match_id"]):
-                stats_engine.add_match(parsed)
-                added += 1
-        return added
-
-    async def check_new_match(self) -> Optional[dict]:
-        """Legacy-compatible: check for new match."""
-        # Try EA API first
-        result = await super().check_new_match()
-        if result:
-            return result
-
-        # Fallback
-        fallback = await self._scrape_pct_fallback()
-        matches = fallback.get("matches", [])
-        if matches:
-            squad = self._load_squad()
-            return self._parse_fallback_match(matches[0], squad)
-        return None
+# Legacy class name for backward compatibility
+class ProClubsTrackerScraper(UltimateScraper):
+    pass
 
 
 def get_scraper(club_id: str, platform: str = "common-gen5", division: str = "6"):
