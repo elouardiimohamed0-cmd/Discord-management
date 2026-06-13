@@ -26,14 +26,14 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 MATCH_CHANNEL_ID = int(os.getenv("MATCH_CHANNEL_ID", "0"))
 LEADERBOARD_CHANNEL_ID = int(os.getenv("LEADERBOARD_CHANNEL_ID", "0"))
 GENERAL_CHANNEL_ID = int(os.getenv("GENERAL_CHANNEL_ID", "0"))
-CLUB_NAME = os.getenv("CLUB_NAME", "Rachad L3ERGONI")  # Club NAME for proclubstracker.com
-PLATFORM = os.getenv("PLATFORM", "ps5")  # ps5, ps4, xbox, switch
+CLUB_ID = os.getenv("CLUB_ID", "1427607")  # Numeric club ID for direct URL
+PLATFORM = os.getenv("PLATFORM", "common-gen5")  # common-gen5 (PS5/Xbox/PC) or common-gen4 (PS4/Xbox One)
 PORT = int(os.getenv("PORT", "10000"))
 
 darija = get_engine("squad.json")
 stats_engine = get_stats_engine("match_data.json")
 image_gen = get_image_generator("assets")
-scraper = get_scraper(CLUB_NAME, PLATFORM)
+scraper = get_scraper(CLUB_ID, PLATFORM)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -65,7 +65,7 @@ class L3ERGONIBot(commands.Bot):
     async def on_ready(self):
         print(f"Rachad L3ERGONI Bot logged in as {self.user}")
         print(f"Connected to {len(self.guilds)} guilds")
-        print(f"Club: {CLUB_NAME} | Platform: {PLATFORM}")
+        print(f"Club ID: {CLUB_ID} | Platform: {PLATFORM}")
         print(f"Scraper: ProClubsTracker.com with Playwright")
         await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Rachad L3ERGONI | !help"))
 
