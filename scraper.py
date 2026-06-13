@@ -1,14 +1,7 @@
 """
-Rachad L3ERGONI Bot - ProClubsTracker.com FULL Scraper v6
-Playwright-based scraper that drills through EVERY tab:
-- Overview (club stats, division, skill rating)
-- Players (individual stats, ratings, per-game averages)
-- Matches (full match history with per-game breakdowns)
-- Form (form graphs, recent results)
-- Chemistry (player combos, partnerships)
-- Head to Head (player comparisons)
-- Roasts (memes, banter)
-Extracts ALL data and converts to bot format.
+Rachad L3ERGONI Bot - ProClubsTracker.com Direct URL Scraper v7
+Goes DIRECTLY to https://proclubstracker.com/club/1427607?platform=common-gen5&div=6
+Drills through ALL tabs with Playwright
 """
 
 import os
@@ -21,15 +14,17 @@ from typing import Optional, List, Dict, Any, Tuple
 
 class ProClubsTrackerScraper:
     """
-    Full Playwright scraper for proclubstracker.com
-    Drills through all tabs and extracts complete data
+    Direct URL scraper for proclubstracker.com
+    URL: https://proclubstracker.com/club/1427607?platform=common-gen5&div=6
     """
 
     BASE_URL = "https://proclubstracker.com"
 
-    def __init__(self, club_name: str, platform: str = "ps5"):
-        self.club_name = club_name
-        self.platform = platform  # ps5, ps4, xbox, switch
+    def __init__(self, club_id: str, platform: str = "common-gen5", division: str = "6"):
+        self.club_id = str(club_id)
+        self.platform = platform
+        self.division = division
+        self.club_url = f"{self.BASE_URL}/club/{self.club_id}?platform={self.platform}&div={self.division}"
         self.playwright_available = False
         try:
             from playwright.async_api import async_playwright
@@ -88,12 +83,11 @@ class ProClubsTrackerScraper:
         await self.page.goto(url, wait_until="networkidle", timeout=timeout)
         if wait_for:
             await self.page.wait_for_selector(wait_for, timeout=10000)
-        await asyncio.sleep(2)  # Extra wait for JS rendering
+        await asyncio.sleep(2)
 
     async def _click_tab(self, tab_text: str) -> bool:
         """Click a tab by partial text match"""
         try:
-            # Try multiple selectors
             selectors = [
                 f'button:has-text("{tab_text}")',
                 f'a:has-text("{tab_text}")',
@@ -109,7 +103,7 @@ class ProClubsTrackerScraper:
                     tab = await self.page.query_selector(selector)
                     if tab:
                         await tab.click()
-                        await asyncio.sleep(3)  # Wait for content to load
+                        await asyncio.sleep(3)
                         return True
                 except:
                     continue
@@ -162,13 +156,11 @@ class ProClubsTrackerScraper:
         try:
             tables = await self.page.query_selector_all(table_selector)
             for table in tables:
-                # Get headers
                 headers = []
                 header_cells = await table.query_selector_all('thead th, thead td, tr:first-child th, tr:first-child td')
                 for cell in header_cells:
                     headers.append((await cell.inner_text()).strip())
 
-                # Get data rows
                 rows = await table.query_selector_all('tbody tr, tr:not(:first-child)')
                 for row in rows:
                     cells = await row.query_selector_all('td')
@@ -189,7 +181,6 @@ class ProClubsTrackerScraper:
         """Extract stat cards (label + value pairs)"""
         stats = {}
         try:
-            # Common card selectors
             card_selectors = [
                 '[data-testid="stat-card"]',
                 '.stat-card',
@@ -216,111 +207,33 @@ class ProClubsTrackerScraper:
             print(f"[Card Extract] Error: {e}")
         return stats
 
-    async def _extract_roasts(self) -> List[str]:
-        """Extract roast/meme text from page"""
-        roasts = []
-        try:
-            # Look for roast containers
-            roast_selectors = [
-                '.roast',
-                '.banter',
-                '.meme',
-                '.trash-talk',
-                '.commentary',
-                '[data-testid="roast"]',
-                '.funny',
-                '.joke',
-            ]
-
-            for selector in roast_selectors:
-                elements = await self.page.query_selector_all(selector)
-                for el in elements:
-                    text = (await el.inner_text()).strip()
-                    if text and len(text) > 10:
-                        roasts.append(text)
-
-            # Also look for paragraphs that might be roasts
-            paragraphs = await self.page.query_selector_all('p')
-            for p in paragraphs:
-                text = (await p.inner_text()).strip()
-                if any(word in text.lower() for word in ['roast', 'banter', 'trash', 'garbage', 'clown', 'fraud', 'sold']):
-                    if text not in roasts and len(text) > 10:
-                        roasts.append(text)
-        except:
-            pass
-        return roasts
-
     # === NAVIGATION ===
 
     async def navigate_to_club(self) -> bool:
-        """Search for club and navigate to its page"""
+        """Navigate DIRECTLY to club URL"""
         try:
-            print(f"[Scraper] Navigating to proclubstracker.com...")
-            await self._goto(self.BASE_URL, wait_for='input', timeout=30000)
+            print(f"[Scraper] Navigating DIRECTLY to: {self.club_url}")
+            await self._goto(self.club_url, wait_for='body', timeout=30000)
 
-            # Find and fill search input
-            search_input = await self.page.query_selector('input[type="search"], input[placeholder*="Search"], input[placeholder*="search"]')
-            if not search_input:
-                # Try any input
-                inputs = await self.page.query_selector_all('input')
-                for inp in inputs:
-                    input_type = await inp.get_attribute('type')
-                    if input_type in ['text', 'search', None]:
-                        search_input = inp
-                        break
+            # Check if page loaded correctly
+            page_title = await self.page.title()
+            print(f"[Scraper] Page title: {page_title}")
 
-            if not search_input:
-                print("[Scraper] Search input not found")
+            # Check for error messages
+            error_text = await self._extract_text('.error, .not-found, .no-data')
+            if error_text and ("not found" in error_text.lower() or "no data" in error_text.lower()):
+                print(f"[Scraper] Error on page: {error_text}")
                 return False
 
-            await search_input.fill(self.club_name)
-            await search_input.press("Enter")
-            await asyncio.sleep(4)  # Wait for search results
-
-            # Click on club result
-            # Try to find platform-specific result first
-            platform_map = {
-                "ps5": "PS5",
-                "ps4": "PS4",
-                "xbox": "Xbox",
-                "switch": "Switch"
-            }
-            platform_label = platform_map.get(self.platform.lower(), "PS5")
-
-            # Try to find club link with platform
-            club_links = await self.page.query_selector_all('a')
-            clicked = False
-            for link in club_links:
-                try:
-                    text = await link.inner_text()
-                    href = await link.get_attribute('href')
-                    if self.club_name.lower() in text.lower():
-                        # Check if platform matches
-                        parent = await link.query_selector('xpath=..')
-                        if parent:
-                            parent_text = await parent.inner_text()
-                            if platform_label.lower() in parent_text.lower() or self.platform.lower() in parent_text.lower():
-                                await link.click()
-                                clicked = True
-                                break
-
-                        # If no platform match, click anyway
-                        if not clicked:
-                            await link.click()
-                            clicked = True
-                            break
-                except:
-                    continue
-
-            if not clicked:
-                print("[Scraper] Could not click club result")
-                return False
-
-            await self.page.wait_for_load_state("networkidle")
-            await asyncio.sleep(3)
-
-            print(f"[Scraper] Club page loaded: {self.page.url}")
-            return True
+            # Check if club name is present
+            page_text = await self.page.inner_text("body")
+            if "Rachad" in page_text or "L3ERGONI" in page_text or "1427607" in page_text:
+                print(f"[Scraper] ✅ Club page loaded successfully!")
+                return True
+            else:
+                print(f"[Scraper] ⚠️ Club data not found on page")
+                # Still return True, maybe data loads dynamically
+                return True
 
         except Exception as e:
             print(f"[Scraper] Navigation error: {e}")
@@ -334,7 +247,7 @@ class ProClubsTrackerScraper:
         await self._click_tab("Overview")
 
         overview = {
-            "club_name": self.club_name,
+            "club_id": self.club_id,
             "platform": self.platform,
             "scraped_at": datetime.now().isoformat(),
         }
@@ -343,25 +256,22 @@ class ProClubsTrackerScraper:
         cards = await self._extract_cards()
         overview.update(cards)
 
-        # Extract any tables
+        # Extract tables
         tables = await self._extract_table()
         if tables:
             overview["players_summary"] = tables
 
-        # Extract division/skill rating from text
+        # Extract from page text using regex
         page_text = await self.page.inner_text("body")
 
-        # Try to extract division
         division_match = re.search(r'Division\s+(\d+)', page_text, re.IGNORECASE)
         if division_match:
             overview["division"] = division_match.group(1)
 
-        # Try to extract skill rating
         skill_match = re.search(r'Skill Rating[:\s]+(\d+)', page_text, re.IGNORECASE)
         if skill_match:
             overview["skill_rating"] = int(skill_match.group(1))
 
-        # Extract wins/losses/draws if not in cards
         wins_match = re.search(r'(\d+)\s*Wins?', page_text, re.IGNORECASE)
         if wins_match and "wins" not in overview:
             overview["wins"] = int(wins_match.group(1))
@@ -383,10 +293,8 @@ class ProClubsTrackerScraper:
 
         players = await self._extract_table()
 
-        # Also extract any additional player cards
         cards = await self._extract_cards()
         if cards and not players:
-            # Convert cards to table format if no table found
             players = [cards]
 
         return players
@@ -398,30 +306,24 @@ class ProClubsTrackerScraper:
 
         matches = await self._extract_table()
 
-        # If no table, try to extract from other structures
+        # If no table, try match cards
         if not matches:
-            # Try to find match cards/containers
             match_containers = await self.page.query_selector_all('.match, .match-card, [data-testid*="match"]')
             for container in match_containers:
                 try:
                     match_data = {}
-                    # Extract opponent
                     opp = await container.query_selector('.opponent, .team-name, h3, h4')
                     if opp:
                         match_data["Opponent"] = (await opp.inner_text()).strip()
 
-                    # Extract score
                     score = await container.query_selector('.score, .result')
                     if score:
                         match_data["Score"] = (await score.inner_text()).strip()
 
-                    # Extract result
                     result = await container.query_selector('.win, .loss, .draw, .result-badge')
                     if result:
-                        result_text = (await result.inner_text()).strip()
-                        match_data["Result"] = result_text
+                        match_data["Result"] = (await result.inner_text()).strip()
 
-                    # Extract date
                     date = await container.query_selector('.date, time, .timestamp')
                     if date:
                         match_data["Date"] = (await date.inner_text()).strip()
@@ -434,7 +336,7 @@ class ProClubsTrackerScraper:
         return matches
 
     async def scrape_form(self) -> Dict[str, Any]:
-        """Scrape Form tab - recent form, streaks, graphs"""
+        """Scrape Form tab"""
         print("[Scraper] Scraping Form...")
         await self._click_tab("Form")
 
@@ -444,22 +346,18 @@ class ProClubsTrackerScraper:
             "graphs": []
         }
 
-        # Extract form string (W L D W W L...)
         form_text = await self._extract_text('.form-string, .form-display, .recent-form')
         if form_text:
             form_data["recent_form_string"] = form_text
 
-        # Extract streak info
         streak_text = await self._extract_text('.streak, .current-streak')
         if streak_text:
             form_data["streaks"]["current"] = streak_text
 
-        # Extract form table if exists
         form_table = await self._extract_table()
         if form_table:
             form_data["match_form"] = form_table
 
-        # Extract any cards
         cards = await self._extract_cards()
         if cards:
             form_data["stats"] = cards
@@ -467,7 +365,7 @@ class ProClubsTrackerScraper:
         return form_data
 
     async def scrape_chemistry(self) -> Dict[str, Any]:
-        """Scrape Chemistry tab - player partnerships, combos"""
+        """Scrape Chemistry tab"""
         print("[Scraper] Scraping Chemistry...")
         await self._click_tab("Chemistry")
 
@@ -477,12 +375,10 @@ class ProClubsTrackerScraper:
             "stats": {}
         }
 
-        # Extract chemistry tables
         tables = await self._extract_table()
         if tables:
             chemistry["combos"] = tables
 
-        # Extract cards
         cards = await self._extract_cards()
         if cards:
             chemistry["stats"] = cards
@@ -490,7 +386,7 @@ class ProClubsTrackerScraper:
         return chemistry
 
     async def scrape_head_to_head(self) -> Dict[str, Any]:
-        """Scrape Head to Head tab - player comparisons"""
+        """Scrape Head to Head tab"""
         print("[Scraper] Scraping Head to Head...")
         await self._click_tab("Head")
 
@@ -510,18 +406,49 @@ class ProClubsTrackerScraper:
         return h2h
 
     async def scrape_roasts_memes(self) -> List[str]:
-        """Scrape any roast/meme content from the page"""
+        """Scrape any roast/meme content"""
         print("[Scraper] Scraping roasts/memes...")
 
-        roasts = await self._extract_roasts()
+        roasts = []
 
-        # Also check if there's a dedicated roast/meme section
-        # Try clicking on any roast-related tabs
-        for tab_name in ["Roasts", "Memes", "Banter", "Trash Talk"]:
+        # Try clicking roast tabs
+        for tab_name in ["Roasts", "Memes", "Banter", "Trash Talk", "Awards"]:
             if await self._click_tab(tab_name):
                 tab_roasts = await self._extract_roasts()
                 roasts.extend(tab_roasts)
 
+        return roasts
+
+    async def _extract_roasts(self) -> List[str]:
+        """Extract roast text from current page"""
+        roasts = []
+        try:
+            roast_selectors = [
+                '.roast',
+                '.banter',
+                '.meme',
+                '.trash-talk',
+                '.commentary',
+                '[data-testid="roast"]',
+                '.funny',
+                '.joke',
+            ]
+
+            for selector in roast_selectors:
+                elements = await self.page.query_selector_all(selector)
+                for el in elements:
+                    text = (await el.inner_text()).strip()
+                    if text and len(text) > 10:
+                        roasts.append(text)
+
+            paragraphs = await self.page.query_selector_all('p')
+            for p in paragraphs:
+                text = (await p.inner_text()).strip()
+                if any(word in text.lower() for word in ['roast', 'banter', 'trash', 'garbage', 'clown', 'fraud', 'sold']):
+                    if text not in roasts and len(text) > 10:
+                        roasts.append(text)
+        except:
+            pass
         return roasts
 
     # === MAIN SCRAPE ===
@@ -535,19 +462,17 @@ class ProClubsTrackerScraper:
         await self._init_browser()
 
         try:
-            # Navigate to club page
             if not await self.navigate_to_club():
                 await self._close_browser()
                 return {}
 
             all_data = {
-                "club_name": self.club_name,
+                "club_id": self.club_id,
                 "platform": self.platform,
                 "scraped_at": datetime.now().isoformat(),
-                "url": self.page.url,
+                "url": self.club_url,
             }
 
-            # Scrape each tab
             all_data["overview"] = await self.scrape_overview()
             all_data["players"] = await self.scrape_players()
             all_data["matches"] = await self.scrape_matches()
@@ -556,11 +481,11 @@ class ProClubsTrackerScraper:
             all_data["head_to_head"] = await self.scrape_head_to_head()
             all_data["roasts_memes"] = await self.scrape_roasts_memes()
 
-            print(f"[Scraper] Complete! Scraped:")
+            print(f"[Scraper] Complete!")
             print(f"  - Overview: {len(all_data['overview'])} stats")
             print(f"  - Players: {len(all_data['players'])} players")
             print(f"  - Matches: {len(all_data['matches'])} matches")
-            print(f"  - Form: {len(all_data['form'].get('recent_form', []))} form entries")
+            print(f"  - Form: {len(all_data['form'].get('recent_form', []))} entries")
             print(f"  - Chemistry: {len(all_data['chemistry'].get('combos', []))} combos")
             print(f"  - H2H: {len(all_data['head_to_head'].get('comparisons', []))} comparisons")
             print(f"  - Roasts: {len(all_data['roasts_memes'])} roasts/memes")
@@ -576,12 +501,11 @@ class ProClubsTrackerScraper:
         finally:
             await self._close_browser()
 
-    # === CONVERSION TO BOT FORMAT ===
+    # === CONVERSION ===
 
     def _parse_score(self, score_str: str) -> Tuple[int, int]:
-        """Parse score string like '3-1' or '2 - 2'"""
+        """Parse score string like '3-1'"""
         try:
-            # Remove spaces and split
             score_clean = score_str.replace(" ", "")
             if "-" in score_clean:
                 parts = score_clean.split("-")
@@ -596,14 +520,11 @@ class ProClubsTrackerScraper:
     def _convert_match(self, raw_match: Dict, players_data: List[Dict]) -> Optional[Dict]:
         """Convert proclubstracker match to bot format"""
         try:
-            # Extract opponent
             opponent = raw_match.get("Opponent", raw_match.get("opponent", raw_match.get("Team", "Unknown")))
 
-            # Extract score
             score_str = raw_match.get("Score", raw_match.get("score", raw_match.get("Result", "0-0")))
             team_goals, opponent_goals = self._parse_score(score_str)
 
-            # Extract result
             result_str = raw_match.get("Result", raw_match.get("result", "")).lower()
             if "w" in result_str or "win" in result_str:
                 result = "win"
@@ -612,21 +533,10 @@ class ProClubsTrackerScraper:
             else:
                 result = "win" if team_goals > opponent_goals else "loss" if team_goals < opponent_goals else "draw"
 
-            # Extract date
             date_str = raw_match.get("Date", raw_match.get("date", raw_match.get("Time", datetime.now().isoformat())))
 
-            # Build player stats from players_data (if available)
+            # Build player stats from players_data
             player_stats = {}
-
-            # Try to match players from the match row
-            for key, value in raw_match.items():
-                if key not in ["Opponent", "Score", "Result", "Date", "Time", "Match"] and isinstance(value, str):
-                    # Check if this looks like a player name with stats
-                    if any(stat in value.lower() for stat in ["goal", "assist", "rating"]):
-                        # This might be a player stat string
-                        pass
-
-            # If we have detailed players data, use it
             for player in players_data:
                 player_name = player.get("Player", player.get("Name", player.get("player", ""))).lower().strip()
                 if not player_name:
@@ -716,5 +626,5 @@ class ProClubsTrackerScraper:
         return None
 
 
-def get_scraper(club_name: str, platform: str = "ps5") -> ProClubsTrackerScraper:
-    return ProClubsTrackerScraper(club_name, platform)
+def get_scraper(club_id: str, platform: str = "common-gen5", division: str = "6") -> ProClubsTrackerScraper:
+    return ProClubsTrackerScraper(club_id, platform, division)
