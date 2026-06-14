@@ -16,7 +16,8 @@ from ea_api import EAPlayerMatch, EAMatch
 
 @dataclass
 class PlayerMatchStats:
-    name: str
+    """ALL fields have defaults for Python 3.14 compatibility."""
+    name: str = ""
     position: str = "CM"
     goals: int = 0
     assists: int = 0
@@ -88,9 +89,9 @@ class PlayerMatchStats:
 
 @dataclass
 class MatchResult:
-    match_id: str
-    date: str
-    opponent: str
+    match_id: str = ""
+    date: str = ""
+    opponent: str = ""
     team_goals: int = 0
     opponent_goals: int = 0
     match_type: str = "friendlyMatch"
@@ -339,7 +340,6 @@ class StatsEngine:
         )
 
         # Clutch: close games (GD <= 1)
-        # We need match GD from the matches table
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             match_ids = [r["match_id"] for r in rows]
