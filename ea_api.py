@@ -8,9 +8,8 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
-from pathlib import Path
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 import httpx
 import aiosqlite
@@ -36,27 +35,28 @@ MATCH_TYPES = ["leagueMatch", "playoffMatch", "friendlyMatch"]
 
 @dataclass
 class EAPlayerMatch:
-    name: str
-    position: str
-    goals: int
-    assists: int
-    shots: int
+    """Complete stats for a single match — ALL fields have defaults for Python 3.14 compatibility."""
+    name: str = ""
+    position: str = "CM"
+    goals: int = 0
+    assists: int = 0
+    shots: int = 0
     shots_on_target: int = 0
-    passes_attempted: int
-    passes_completed: int
+    passes_attempted: int = 0
+    passes_completed: int = 0
     key_passes: int = 0
-    tackles: int
+    tackles: int = 0
     tackles_attempted: int = 0
-    interceptions: int
+    interceptions: int = 0
     possession_losses: int = 0
     dribbles_attempted: int = 0
     dribbles_completed: int = 0
     fouls: int = 0
-    yellow_cards: int
-    red_cards: int
-    rating: float
-    motm: bool
-    minutes_played: int
+    yellow_cards: int = 0
+    red_cards: int = 0
+    rating: float = 6.0
+    motm: bool = False
+    minutes_played: int = 90
     saves: int = 0
     clean_sheets_gk: int = 0
     own_goals: int = 0
@@ -110,14 +110,14 @@ class EAPlayerMatch:
 
 @dataclass
 class EAMatch:
-    match_id: str
-    timestamp: int
-    date_iso: str
-    opponent_name: str
-    opponent_id: str
-    team_goals: int
-    opponent_goals: int
-    match_type: str
+    match_id: str = ""
+    timestamp: int = 0
+    date_iso: str = ""
+    opponent_name: str = ""
+    opponent_id: str = ""
+    team_goals: int = 0
+    opponent_goals: int = 0
+    match_type: str = "friendlyMatch"
     player_stats: Dict[str, EAPlayerMatch] = field(default_factory=dict)
     raw: dict = field(default_factory=dict, repr=False)
 
