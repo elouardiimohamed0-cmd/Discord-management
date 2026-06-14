@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  bot:
+    build: .
+    container_name: l3ergoni-bot
+    env_file: .env
+    volumes:
+      - ./assets:/app/assets
+      - ./bot_data.db:/app/bot_data.db
+      - ./bot_cache.db:/app/bot_cache.db
+      - ./squad_memory.json:/app/squad_memory.json
+      - ./darija_memory.json:/app/darija_memory.json
+    restart: unless-stopped
+    ports:
+      - "10000:10000"
