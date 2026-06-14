@@ -1,7 +1,7 @@
 """
-Rachad L3ERGONI Bot — ProClubsTracker Scraper v8
-Extracts Next.js __NEXT_DATA__ JSON from PCT pages.
-This is the ACTUAL data structure the React app uses.
+Rachad L3ERGONI Bot — ProClubsTracker Scraper v9
+Defensive: tries Next.js JSON, then HTTP API, then Playwright.
+Logs everything. Stores whatever data is available.
 """
 
 import asyncio
@@ -55,373 +55,335 @@ class ProClubsTrackerScraper:
                 return key
         return None
 
-    # ── PRIMARY: Extract Next.js __NEXT_DATA__ from HTML ─────────────────────
+    # ── Method 1: Next.js __NEXT_DATA__ extraction ─────────────────────────
 
-    async def _extract_next_data(self, url: str) -> Optional[dict]:
-        """Fetch PCT page and extract the Next.js data payload."""
+    async def _extract_nextjs(self, url: str) -> Optional[dict]:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
         }
         try:
             async with httpx.AsyncClient(headers=headers, timeout=30, follow_redirects=True) as client:
                 resp = await client.get(url)
                 if resp.status_code != 200:
-                    logger.warning("PCT HTTP %s for %s", resp.status_code, url)
                     return None
 
-                html = resp.text
-
-                # Find __NEXT_DATA__ script tag
-                # Pattern: <script id="__NEXT_DATA__" type="application/json">...</script>
-                next_data_match = re.search(
-                    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
-                    html,
-                    re.DOTALL
-                )
-
-                if not next_data_match:
-                    logger.warning("No __NEXT_DATA__ found in PCT HTML")
+                match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', resp.text, re.DOTALL)
+                if not match:
                     return None
 
-                raw_json = next_data_match.group(1)
-                data = json.loads(raw_json)
-
-                logger.info("✅ Extracted Next.js data from PCT | keys: %s", list(data.keys()))
-                return data
-
+                return json.loads(match.group(1))
         except Exception as e:
-            logger.error("Extract Next.js data error: %s", e)
+            logger.error("Next.js extract error: %s", e)
             return None
 
-    def _parse_nextjs_matches(self, next_data: dict) -> List[dict]:
-        """Parse match data from Next.js payload."""
+    def _parse_matches_from_nextjs(self, next_data: dict) -> List[dict]:
+        """Extract matches from any possible location in Next.js data."""
         matches = []
-        try:
-            # Next.js data structure: props.pageProps has all the data
-            page_props = next_data.get("props", {}).get("pageProps", {})
+        page_props = next_data.get("props", {}).get("pageProps", {})
 
-            # Try different possible data locations
-            matches_data = (
-                page_props.get("matches") or
-                page_props.get("clubData", {}).get("matches") or
-                page_props.get("data", {}).get("matches") or
-                []
-            )
+        # Try multiple possible locations for matches
+        possible_keys = [
+            "matches", "matchData", "games", "matchHistory",
+            "clubData", "club", "data", "initialData", "pageData"
+        ]
 
-            if not isinstance(matches_data, list):
-                matches_data = []
+        raw_matches = None
+        for key in possible_keys:
+            if key in page_props:
+                val = page_props[key]
+                if isinstance(val, list):
+                    raw_matches = val
+                    logger.info("Found matches in pageProps['%s'] — %d items", key, len(val))
+                    break
+                elif isinstance(val, dict):
+                    # Could be nested
+                    for subkey in ["matches", "games", "history", "data"]:
+                        if subkey in val and isinstance(val[subkey], list):
+                            raw_matches = val[subkey]
+                            logger.info("Found matches in pageProps['%s']['%s'] — %d items", key, subkey, len(val[subkey]))
+                            break
+                    if raw_matches:
+                        break
 
-            logger.info("Found %d matches in Next.js data", len(matches_data))
+        if not raw_matches:
+            logger.warning("No matches found in any known Next.js location")
+            # Log all keys for debugging
+            logger.info("Available pageProps keys: %s", list(page_props.keys()))
+            return []
 
-            for raw in matches_data[:50]:  # limit to 50
-                if not isinstance(raw, dict):
-                    continue
-
-                try:
-                    # Extract score
-                    our_goals = int(raw.get("goals", 0) or raw.get("teamGoals", 0) or 0)
-                    opp_goals = int(raw.get("goalsAgainst", 0) or raw.get("opponentGoals", 0) or 0)
-
-                    # Extract opponent
-                    opponent = "Unknown"
-                    opp_data = raw.get("opponent") or raw.get("opponentClub") or {}
-                    if isinstance(opp_data, dict):
-                        opponent = opp_data.get("name", "Unknown") or opp_data.get("clubName", "Unknown")
-                    elif isinstance(opp_data, str):
-                        opponent = opp_data
-
-                    # Also try from clubs object
-                    clubs = raw.get("clubs", {})
-                    if isinstance(clubs, dict):
-                        for cid, cdata in clubs.items():
-                            if str(cid) != str(self.club_id):
-                                opp_name = cdata.get("details", {}).get("name") if isinstance(cdata, dict) else None
-                                if opp_name:
-                                    opponent = opp_name
-
-                    # Match type
-                    mtype = raw.get("matchType", "friendlyMatch")
-                    if isinstance(mtype, str):
-                        if "league" in mtype.lower():
-                            match_type = "leagueMatch"
-                        elif "playoff" in mtype.lower():
-                            match_type = "playoffMatch"
-                        else:
-                            match_type = "friendlyMatch"
-                    else:
-                        match_type = "friendlyMatch"
-
-                    # Timestamp
-                    ts = raw.get("timestamp") or raw.get("matchTimestamp") or int(time.time())
-                    if isinstance(ts, (int, float)):
-                        date_iso = datetime.utcfromtimestamp(int(ts)).isoformat()
-                    else:
-                        date_iso = str(ts)
-
-                    # Match ID
-                    match_id = str(raw.get("matchId") or raw.get("id") or f"pct_{ts}_{len(matches)}")
-
-                    # Player stats
-                    player_stats = {}
-                    players_raw = raw.get("players", {})
-                    if isinstance(players_raw, dict):
-                        our_players = players_raw.get(str(self.club_id), {})
-                        if isinstance(our_players, dict):
-                            for pid, p in our_players.items():
-                                if not isinstance(p, dict):
-                                    continue
-                                ea_name = p.get("playername", f"Player_{pid}")
-                                squad = self._load_squad()
-                                squad_key = self._find_squad_key(ea_name, squad)
-                                display_name = squad_key if squad_key else ea_name
-
-                                seconds = int(p.get("secondsPlayed", 0))
-                                minutes = seconds // 60
-                                passes_att = int(p.get("passattempts", 0))
-                                passes_comp = int(p.get("passesmade", 0))
-
-                                pos = p.get("pos", "midfielder").upper()
-                                pos_map = {
-                                    "GOALKEEPER": "GK", "DEFENDER": "CB", "MIDFIELDER": "CM",
-                                    "FORWARD": "ST", "STRIKER": "ST", "WING": "LW",
-                                }
-                                position = pos_map.get(pos, pos)
-
-                                player_stats[display_name] = {
-                                    "name": display_name,
-                                    "position": position,
-                                    "goals": int(p.get("goals", 0)),
-                                    "assists": int(p.get("assists", 0)),
-                                    "shots": int(p.get("shots", 0)),
-                                    "shots_on_target": int(p.get("shots", 0)),
-                                    "passes_attempted": passes_att,
-                                    "passes_completed": passes_comp,
-                                    "pass_accuracy": round(passes_comp / max(passes_att, 1) * 100, 1) if passes_att > 0 else 0,
-                                    "key_passes": int(p.get("assists", 0)) * 2,
-                                    "tackles": int(p.get("tacklesmade", 0)),
-                                    "interceptions": int(p.get("interceptions", 0)),
-                                    "possession_losses": passes_att - passes_comp,
-                                    "dribbles_attempted": 0,
-                                    "dribbles_completed": 0,
-                                    "fouls": 0,
-                                    "yellow_cards": int(p.get("yellowcards", 0)),
-                                    "red_cards": int(p.get("redcards", 0)),
-                                    "rating": float(p.get("rating", "6.0") or "6.0"),
-                                    "motm": str(p.get("man_of_the_match", "0")) == "1",
-                                    "minutes_played": minutes,
-                                    "saves": int(p.get("saves", 0)),
-                                    "clean_sheets_gk": int(p.get("cleansheetsgk", 0)),
-                                    "own_goals": int(p.get("owngoals", 0)),
-                                    "longshots": int(p.get("longshots", 0)),
-                                    "chances_created": int(p.get("chancescreated", 0)),
-                                }
-
-                    matches.append({
-                        "match_id": match_id,
-                        "date": date_iso,
-                        "opponent": opponent,
-                        "team_goals": our_goals,
-                        "opponent_goals": opp_goals,
-                        "match_type": match_type,
-                        "player_stats": player_stats,
-                        "raw": raw,
-                    })
-
-                except Exception as e:
-                    logger.error("Parse individual match error: %s", e)
-                    continue
-
-        except Exception as e:
-            logger.error("Parse Next.js matches error: %s", e)
+        for raw in raw_matches[:50]:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                match = self._parse_single_match(raw)
+                if match:
+                    matches.append(match)
+            except Exception as e:
+                logger.error("Parse single match error: %s", e)
+                continue
 
         return matches
 
-    def _parse_nextjs_club_info(self, next_data: dict) -> dict:
-        """Parse club info from Next.js payload."""
+    def _parse_single_match(self, raw: dict) -> Optional[dict]:
+        """Parse a single match dict from any format."""
         try:
-            page_props = next_data.get("props", {}).get("pageProps", {})
-            club_data = (
-                page_props.get("club") or
-                page_props.get("clubData") or
-                page_props.get("data", {}).get("club") or
-                {}
-            )
+            # Score
+            our_goals = int(raw.get("goals", 0) or raw.get("teamGoals", 0) or 0)
+            opp_goals = int(raw.get("goalsAgainst", 0) or raw.get("opponentGoals", 0) or 0)
 
-            if not isinstance(club_data, dict):
-                return {}
+            # Opponent name — try every possible location
+            opponent = "Unknown"
+            for key in ["opponent", "opponentClub", "enemy", "awayClub", "homeClub"]:
+                val = raw.get(key)
+                if isinstance(val, dict):
+                    opponent = val.get("name") or val.get("clubName") or "Unknown"
+                elif isinstance(val, str):
+                    opponent = val
+                if opponent != "Unknown":
+                    break
+
+            # Try clubs dict
+            if opponent == "Unknown":
+                clubs = raw.get("clubs", {})
+                if isinstance(clubs, dict):
+                    for cid, cdata in clubs.items():
+                        if str(cid) != str(self.club_id) and isinstance(cdata, dict):
+                            opp_name = cdata.get("details", {}).get("name")
+                            if opp_name:
+                                opponent = opp_name
+                                break
+
+            # Match type
+            mtype = raw.get("matchType", "")
+            if isinstance(mtype, str):
+                if "league" in mtype.lower():
+                    match_type = "leagueMatch"
+                elif "playoff" in mtype.lower():
+                    match_type = "playoffMatch"
+                else:
+                    match_type = "friendlyMatch"
+            else:
+                match_type = "friendlyMatch"
+
+            # Timestamp
+            ts = raw.get("timestamp") or raw.get("matchTimestamp") or int(time.time())
+            if isinstance(ts, (int, float)):
+                date_iso = datetime.utcfromtimestamp(int(ts)).isoformat()
+            else:
+                date_iso = str(ts)
+
+            match_id = str(raw.get("matchId") or raw.get("id") or f"pct_{ts}")
+
+            # Player stats — CRITICAL: try every possible location
+            player_stats = {}
+            players_sources = [
+                raw.get("players"),
+                raw.get("playerStats"),
+                raw.get("memberStats"),
+                raw.get("matchPlayers"),
+            ]
+
+            for players_raw in players_sources:
+                if not isinstance(players_raw, dict):
+                    continue
+                # Could be keyed by club ID
+                our_players = players_raw.get(str(self.club_id))
+                if not isinstance(our_players, dict):
+                    our_players = players_raw  # maybe flat dict
+
+                if isinstance(our_players, dict):
+                    for pid, p in our_players.items():
+                        if not isinstance(p, dict):
+                            continue
+                        ea_name = p.get("playername") or p.get("name") or p.get("playerName") or f"Player_{pid}"
+                        squad = self._load_squad()
+                        squad_key = self._find_squad_key(ea_name, squad)
+                        display_name = squad_key if squad_key else ea_name
+
+                        seconds = int(p.get("secondsPlayed", 0) or p.get("minutes", 0) * 60 or 0)
+                        minutes = seconds // 60 if seconds else (int(p.get("minutes", 0)) or 90)
+                        passes_att = int(p.get("passattempts", 0) or p.get("passesAttempted", 0) or 0)
+                        passes_comp = int(p.get("passesmade", 0) or p.get("passesCompleted", 0) or 0)
+
+                        pos = (p.get("pos") or p.get("position") or "midfielder").upper()
+                        pos_map = {
+                            "GOALKEEPER": "GK", "DEFENDER": "CB", "MIDFIELDER": "CM",
+                            "FORWARD": "ST", "STRIKER": "ST", "WING": "LW",
+                        }
+                        position = pos_map.get(pos, pos)
+
+                        player_stats[display_name] = {
+                            "name": display_name,
+                            "position": position,
+                            "goals": int(p.get("goals", 0) or p.get("goalsScored", 0) or 0),
+                            "assists": int(p.get("assists", 0) or p.get("assistsMade", 0) or 0),
+                            "shots": int(p.get("shots", 0) or 0),
+                            "shots_on_target": int(p.get("shots", 0) or 0),
+                            "passes_attempted": passes_att,
+                            "passes_completed": passes_comp,
+                            "pass_accuracy": round(passes_comp / max(passes_att, 1) * 100, 1) if passes_att else 0,
+                            "key_passes": int(p.get("assists", 0) or 0) * 2,
+                            "tackles": int(p.get("tacklesmade", 0) or p.get("tackles", 0) or 0),
+                            "interceptions": int(p.get("interceptions", 0) or 0),
+                            "possession_losses": passes_att - passes_comp,
+                            "dribbles_attempted": 0,
+                            "dribbles_completed": 0,
+                            "fouls": int(p.get("fouls", 0) or 0),
+                            "yellow_cards": int(p.get("yellowcards", 0) or p.get("yellowCards", 0) or 0),
+                            "red_cards": int(p.get("redcards", 0) or p.get("redCards", 0) or 0),
+                            "rating": float(p.get("rating", 0) or p.get("matchRating", 0) or 6.0),
+                            "motm": str(p.get("man_of_the_match", 0) or p.get("motm", 0) or "0") == "1",
+                            "minutes_played": minutes,
+                            "saves": int(p.get("saves", 0) or 0),
+                            "clean_sheets_gk": int(p.get("cleansheetsgk", 0) or p.get("cleanSheets", 0) or 0),
+                            "own_goals": int(p.get("owngoals", 0) or p.get("ownGoals", 0) or 0),
+                            "longshots": int(p.get("longshots", 0) or p.get("longShots", 0) or 0),
+                            "chances_created": int(p.get("chancescreated", 0) or p.get("chancesCreated", 0) or 0),
+                        }
+
+            # If no player stats found, log the raw keys for debugging
+            if not player_stats:
+                logger.warning("No player stats for match %s. Raw keys: %s", match_id, list(raw.keys()))
 
             return {
-                "name": club_data.get("name", "Rachad L3ERGONI"),
-                "division": club_data.get("division", "N/A"),
-                "skillRating": club_data.get("skillRating", club_data.get("skill_rating", "?")),
-                "wins": club_data.get("wins", "?"),
-                "losses": club_data.get("losses", "?"),
-                "ties": club_data.get("ties", club_data.get("draws", "?")),
-                "goals": club_data.get("goals", "?"),
-                "goalsAgainst": club_data.get("goalsAgainst", club_data.get("goals_against", "?")),
-                "gamesPlayed": club_data.get("gamesPlayed", club_data.get("games_played", "?")),
-                "bestDivision": club_data.get("bestDivision", club_data.get("best_division", "?")),
-                "wstreak": club_data.get("wstreak", club_data.get("win_streak", "?")),
+                "match_id": match_id,
+                "date": date_iso,
+                "opponent": opponent,
+                "team_goals": our_goals,
+                "opponent_goals": opp_goals,
+                "match_type": match_type,
+                "player_stats": player_stats,
+                "raw": raw,
             }
+
         except Exception as e:
-            logger.error("Parse club info error: %s", e)
-            return {}
+            logger.error("Parse single match error: %s", e)
+            return None
 
-    def _parse_nextjs_members(self, next_data: dict) -> List[dict]:
-        """Parse member list from Next.js payload."""
-        try:
-            page_props = next_data.get("props", {}).get("pageProps", {})
-            members = (
-                page_props.get("members") or
-                page_props.get("clubData", {}).get("members") or
-                page_props.get("data", {}).get("members") or
-                []
-            )
-            if isinstance(members, list):
-                return members
-            return []
-        except Exception as e:
-            logger.error("Parse members error: %s", e)
-            return []
+    # ── Method 2: Playwright DOM extraction ────────────────────────────────
 
-    # ── FALLBACK: Playwright with network interception ──────────────────────
-
-    async def _playwright_with_intercept(self, max_matches: int = 20) -> dict:
-        """Use Playwright to render page and intercept API calls."""
+    async def _playwright_scrape(self, max_matches: int = 20) -> dict:
         if not PLAYWRIGHT_AVAILABLE:
             raise RuntimeError("Playwright not installed")
 
         from playwright.async_api import async_playwright
 
-        intercepted_data = {}
-
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(
                 headless=True,
-                args=[
-                    "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-                    "--disable-setuid-sandbox", "--no-zygote",
-                ],
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-setuid-sandbox"],
             )
-
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 viewport={"width": 1920, "height": 1080},
             )
-
             page = await context.new_page()
-
-            # Intercept network responses
-            async def handle_route(route, request):
-                url = request.url
-                if "api" in url or "json" in url:
-                    try:
-                        response = await route.fetch()
-                        body = await response.text()
-                        try:
-                            data = json.loads(body)
-                            intercepted_data[url] = data
-                            logger.info("Intercepted API: %s", url[:60])
-                        except:
-                            pass
-                    except:
-                        pass
-                await route.continue_()
-
-            await page.route("**/*", handle_route)
 
             try:
                 await page.goto(self.pct_url, wait_until="networkidle", timeout=60_000)
-                await asyncio.sleep(5)  # Wait for XHR
-            except Exception as e:
-                logger.warning("Page load warning: %s", e)
+                await asyncio.sleep(3)
 
-            # Also try to get __NEXT_DATA__ from rendered DOM
-            try:
-                next_data_script = await page.query_selector('script[id="__NEXT_DATA__"]')
-                if next_data_script:
-                    text = await next_data_script.text_content()
+                # Try to find __NEXT_DATA__ in rendered DOM
+                next_script = await page.query_selector('script[id="__NEXT_DATA__"]')
+                if next_script:
+                    text = await next_script.text_content()
                     data = json.loads(text)
-                    intercepted_data["__NEXT_DATA__"] = data
-            except:
-                pass
+                    await browser.close()
+                    return {
+                        "matches": self._parse_matches_from_nextjs(data),
+                        "club_info": {},
+                        "members": [],
+                        "club_stats": {},
+                        "source": "playwright_nextjs",
+                    }
 
-            await browser.close()
+                # Fallback: try to read match cards from DOM
+                matches = []
+                cards = await page.query_selector_all("[class*='match']")
+                for i, card in enumerate(cards[:max_matches]):
+                    text = await card.text_content() or ""
+                    score_m = re.search(r'(\d+)\s*[-–]\s*(\d+)', text)
+                    if score_m:
+                        g1, g2 = int(score_m.group(1)), int(score_m.group(2))
+                        matches.append({
+                            "match_id": f"dom_{g1}_{g2}_{i}",
+                            "date": "—",
+                            "opponent": "Unknown",
+                            "team_goals": g1,
+                            "opponent_goals": g2,
+                            "match_type": "friendlyMatch",
+                            "player_stats": {},
+                        })
 
-        # Process intercepted data
-        if "__NEXT_DATA__" in intercepted_data:
-            next_data = intercepted_data["__NEXT_DATA__"]
-            matches = self._parse_nextjs_matches(next_data)
-            club_info = self._parse_nextjs_club_info(next_data)
-            members = self._parse_nextjs_members(next_data)
-            return {
-                "matches": matches,
-                "members": members,
-                "club_info": club_info,
-                "club_stats": club_info,
-            }
-
-        # If we intercepted API responses directly
-        for url, data in intercepted_data.items():
-            if isinstance(data, dict) and "matches" in data:
+                await browser.close()
                 return {
-                    "matches": data.get("matches", []),
-                    "members": data.get("members", []),
-                    "club_info": data.get("club", {}),
-                    "club_stats": data.get("club", {}),
+                    "matches": matches,
+                    "club_info": {},
+                    "members": [],
+                    "club_stats": {},
+                    "source": "playwright_dom",
                 }
 
-        return {"matches": [], "members": [], "club_info": {}, "club_stats": {}}
+            except Exception as e:
+                await browser.close()
+                raise
 
     # ── Public API ───────────────────────────────────────────────────────────
 
     async def scrape_all(self, max_matches: int = 20, force: bool = False) -> dict:
-        """Fetch all data from PCT using best available method."""
-        # Method 1: Direct Next.js data extraction (fastest, no browser)
-        logger.info("Trying Next.js data extraction...")
-        next_data = await self._extract_next_data(self.pct_url)
-        if next_data:
-            matches = self._parse_nextjs_matches(next_data)
-            if matches:
-                club_info = self._parse_nextjs_club_info(next_data)
-                members = self._parse_nextjs_members(next_data)
-                logger.info("✅ Next.js extraction: %d matches, %d members", len(matches), len(members))
-                return {
-                    "matches": matches,
-                    "members": members,
-                    "club_info": club_info,
-                    "club_stats": club_info,
-                }
+        """Try all methods, return best result."""
+        logger.info("Starting scrape for club %s", self.club_id)
 
-        # Method 2: Try matches page specifically
-        logger.info("Trying matches page...")
-        next_data_matches = await self._extract_next_data(self.matches_url)
-        if next_data_matches:
-            matches = self._parse_nextjs_matches(next_data_matches)
-            if matches:
-                club_info = self._parse_nextjs_club_info(next_data_matches)
-                members = self._parse_nextjs_members(next_data_matches)
-                return {
-                    "matches": matches,
-                    "members": members,
-                    "club_info": club_info,
-                    "club_stats": club_info,
-                }
+        # Method 1: Next.js from main page
+        try:
+            data = await self._extract_nextjs(self.pct_url)
+            if data:
+                matches = self._parse_matches_from_nextjs(data)
+                if matches:
+                    logger.info("✅ Method 1 (Next.js main): %d matches", len(matches))
+                    return {
+                        "matches": matches,
+                        "members": [],
+                        "club_info": {},
+                        "club_stats": {},
+                        "source": "nextjs_main",
+                    }
+        except Exception as e:
+            logger.warning("Method 1 failed: %s", e)
 
-        # Method 3: Playwright fallback
+        # Method 2: Next.js from matches page
+        try:
+            data = await self._extract_nextjs(self.matches_url)
+            if data:
+                matches = self._parse_matches_from_nextjs(data)
+                if matches:
+                    logger.info("✅ Method 2 (Next.js matches): %d matches", len(matches))
+                    return {
+                        "matches": matches,
+                        "members": [],
+                        "club_info": {},
+                        "club_stats": {},
+                        "source": "nextjs_matches",
+                    }
+        except Exception as e:
+            logger.warning("Method 2 failed: %s", e)
+
+        # Method 3: Playwright
         if PLAYWRIGHT_AVAILABLE:
-            logger.info("Falling back to Playwright...")
             try:
-                return await self._playwright_with_intercept(max_matches)
+                result = await self._playwright_scrape(max_matches)
+                if result.get("matches"):
+                    logger.info("✅ Method 3 (Playwright): %d matches", len(result["matches"]))
+                    return result
             except Exception as e:
-                logger.error("Playwright fallback failed: %s", e)
+                logger.warning("Method 3 failed: %s", e)
 
-        return {"matches": [], "members": [], "club_info": {}, "club_stats": {}}
+        logger.error("All methods failed")
+        return {"matches": [], "members": [], "club_info": {}, "club_stats": {}, "source": "failed"}
 
     async def sync_to_stats_engine(self, stats_engine, count: int = 20) -> int:
-        """Sync PCT matches to stats engine."""
+        """Sync matches to stats engine with full player data."""
         from ea_api import EAMatch, EAPlayerMatch
 
         data = await self.scrape_all(max_matches=count, force=True)
@@ -432,7 +394,6 @@ class ProClubsTrackerScraper:
             if not match or stats_engine.match_exists(match["match_id"]):
                 continue
 
-            # Convert to EAMatch
             em = EAMatch(
                 match_id=match["match_id"],
                 date_iso=match.get("date", "—"),
@@ -442,7 +403,6 @@ class ProClubsTrackerScraper:
                 match_type=match.get("match_type", "friendlyMatch"),
             )
 
-            # Convert player stats
             for pname, ps in match.get("player_stats", {}).items():
                 em.player_stats[pname] = EAPlayerMatch(
                     name=ps.get("name", pname),
@@ -475,19 +435,15 @@ class ProClubsTrackerScraper:
             stats_engine.add_match(em)
             added += 1
 
-        logger.info("[Sync] Added %d new matches from PCT", added)
+        logger.info("[Sync] Added %d matches (source: %s)", added, data.get("source", "unknown"))
         return added
 
     async def check_new_match(self) -> Optional[dict]:
-        """Check for most recent match on PCT."""
         data = await self.scrape_all(max_matches=1, force=True)
         matches = data.get("matches", [])
-        if matches:
-            return matches[0]
-        return None
+        return matches[0] if matches else None
 
     async def get_club_info(self) -> Optional[dict]:
-        """Get club info from PCT."""
         data = await self.scrape_all(max_matches=1, force=True)
         return data.get("club_info")
 
