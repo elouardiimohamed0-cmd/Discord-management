@@ -1,6 +1,6 @@
 """
-Rachad L3ERGONI Bot — Main Discord Bot v13
-Sync EA API wrapped safely in threads. Fixed !help.
+Rachad L3ERGONI Bot — Main Discord Bot v14
+ProClubsTracker as primary data source. Playwright rendering.
 """
 
 import asyncio
@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from darija_engine import get_engine, PERSONALITIES
 from stats_engine import get_stats_engine
 from image_gen import get_image_generator
-from ea_api import get_ea_api
+from scraper import get_scraper
 from memory import get_memory
 
 load_dotenv()
@@ -34,7 +34,7 @@ PORT = int(os.getenv("PORT", "10000"))
 darija = get_engine("squad.json")
 stats_engine = get_stats_engine("bot_data.db")
 image_gen = get_image_generator("assets")
-ea_api = get_ea_api(CLUB_ID, PLATFORM)
+scraper = get_scraper(CLUB_ID, PLATFORM)
 memory = get_memory("squad_memory.json")
 
 intents = discord.Intents.default()
@@ -51,7 +51,7 @@ class L3ERGONIBot(commands.Bot):
         self.darija = darija
         self.stats = stats_engine
         self.images = image_gen
-        self.ea = ea_api
+        self.scraper = scraper
         self.memory = memory
         self.squad = self._load_squad()
         self.session_active = False
@@ -111,14 +111,24 @@ class L3ERGONIBot(commands.Bot):
         if not self.session_active:
             return
         try:
-            matches = await asyncio.to_thread(self.ea.get_all_matches, max_per_type=5)
+            data = await self.scraper.scrape_all(max_matches=5)
+            matches = data.get("matches", [])
             added = 0
-            for m in matches:
-                if not self.stats.match_exists(m.match_id):
-                    self.stats.add_match(m)
+            for match in matches:
+                if not self.stats.match_exists(match["match_id"]):
+                    from ea_api import EAMatch
+                    em = EAMatch(
+                        match_id=match["match_id"],
+                        date_iso=match.get("date", "—"),
+                        opponent_name=match.get("opponent", "Unknown"),
+                        team_goals=match.get("team_goals", 0),
+                        opponent_goals=match.get("opponent_goals", 0),
+                        match_type=match.get("match_type", "friendlyMatch"),
+                    )
+                    self.stats.add_match(em)
                     added += 1
             if added > 0:
-                logger.info("Auto-sync: added %d new matches", added)
+                logger.info("Auto-sync: added %d new matches from PCT", added)
                 channel = self.get_channel(MATCH_CHANNEL_ID)
                 if channel:
                     await self._post_match_result(channel)
@@ -313,32 +323,19 @@ async def predict_cmd(ctx, *, opponent: str):
 @bot.command(name="clubinfo")
 async def clubinfo_cmd(ctx):
     try:
-        info = await asyncio.to_thread(bot.ea.get_club_info)
-        members = await asyncio.to_thread(bot.ea.get_member_stats)
+        info = await bot.scraper.get_club_info()
     except Exception as e:
-        await ctx.send(f"z3ma... club info? walo. API error: {e}")
+        await ctx.send(f"z3ma... club info? walo. Scraper error: {e}")
         return
 
     if not info:
         await ctx.send("z3ma... club info? walo. chi m3a9ed. safi.")
         return
 
-    club = info[0] if isinstance(info, list) else info
-    embed = discord.Embed(title="Rachad L3ERGONI — Club Info", description="z3ma... club? walo. chi m3a9ed l3ba.", color=0xFF6B35)
+    embed = discord.Embed(title="Rachad L3ERGONI — Club Info (PCT)", description="z3ma... club? walo. chi m3a9ed l3ba.", color=0xFF6B35)
 
-    details = club.get("details", {})
-    embed.add_field(name="Name", value=details.get("name", "Rachad L3ERGONI"), inline=True)
-    embed.add_field(name="Division", value=details.get("division", "N/A"), inline=True)
-    embed.add_field(name="Skill Rating", value=club.get("skillRating", "?"), inline=True)
-    embed.add_field(name="Wins", value=club.get("wins", "?"), inline=True)
-    embed.add_field(name="Losses", value=club.get("losses", "?"), inline=True)
-    embed.add_field(name="Ties", value=club.get("ties", "?"), inline=True)
-    embed.add_field(name="Goals", value=club.get("goals", "?"), inline=True)
-    embed.add_field(name="Goals Against", value=club.get("goalsAgainst", "?"), inline=True)
-    embed.add_field(name="Games Played", value=club.get("gamesPlayed", "?"), inline=True)
-    embed.add_field(name="Best Division", value=club.get("bestDivision", "?"), inline=True)
-    embed.add_field(name="Win Streak", value=club.get("wstreak", "?"), inline=True)
-    embed.add_field(name="Members", value=str(len(members)) if isinstance(members, list) else "?", inline=True)
+    for key, val in info.items():
+        embed.add_field(name=key.replace("_", " ").title(), value=str(val), inline=True)
 
     await ctx.send(embed=embed)
 
@@ -489,17 +486,12 @@ async def personality_cmd(ctx, mode: str):
 
 
 @bot.command(name="sync")
-async def sync_cmd(ctx, count: int = 15):
-    await ctx.send("🔥 Syncing from EA servers directly...")
+async def sync_cmd(ctx, count: int = 20):
+    await ctx.send("🔥 Syncing from ProClubsTracker...")
     try:
-        matches = await asyncio.to_thread(bot.ea.get_all_matches, max_per_type=count)
-        added = 0
-        for m in matches:
-            if not bot.stats.match_exists(m.match_id):
-                bot.stats.add_match(m)
-                added += 1
+        added = await bot.scraper.sync_to_stats_engine(bot.stats, count=count)
         if added > 0:
-            await ctx.send(f"Synced {added} new matches from EA. z3ma... data? walo. safi.")
+            await ctx.send(f"Synced {added} new matches from PCT. z3ma... data? walo. safi.")
         else:
             await ctx.send("z3ma... new matches? walo. kolchi up-to-date. safi.")
     except Exception as e:
@@ -508,44 +500,54 @@ async def sync_cmd(ctx, count: int = 15):
 
 @bot.command(name="force_sync")
 async def force_sync_cmd(ctx):
-    await ctx.send("🔥 Drilling EA API for ALL match types...")
+    await ctx.send("🔥 Drilling ProClubsTracker for ALL matches...")
     try:
-        matches = await asyncio.to_thread(bot.ea.get_all_matches, max_per_type=50)
+        data = await bot.scraper.scrape_all(max_matches=50, force=True)
+        matches = data.get("matches", [])
         added = 0
-        for m in matches:
-            if not bot.stats.match_exists(m.match_id):
-                bot.stats.add_match(m)
+        for match in matches:
+            if not bot.stats.match_exists(match["match_id"]):
+                from ea_api import EAMatch
+                em = EAMatch(
+                    match_id=match["match_id"],
+                    date_iso=match.get("date", "—"),
+                    opponent_name=match.get("opponent", "Unknown"),
+                    team_goals=match.get("team_goals", 0),
+                    opponent_goals=match.get("opponent_goals", 0),
+                    match_type=match.get("match_type", "friendlyMatch"),
+                )
+                bot.stats.add_match(em)
                 added += 1
-        await ctx.send(f"🔥 Force synced {added} new matches from EA API!")
+        await ctx.send(f"🔥 Force synced {added} new matches from PCT!")
     except Exception as e:
         await ctx.send(f"z3ma... force sync? walo. Error: {e}")
 
 
 @bot.command(name="test_api")
 async def test_api_cmd(ctx):
-    await ctx.send("Testing EA API connection...")
+    await ctx.send("Testing ProClubsTracker connection...")
     try:
-        info = await asyncio.to_thread(bot.ea.get_club_info)
-        members = await asyncio.to_thread(bot.ea.get_member_stats)
-        matches = await asyncio.to_thread(bot.ea.get_matches, "friendlyMatch", 1)
+        data = await bot.scraper.scrape_all(max_matches=5, force=True)
+        matches = data.get("matches", [])
+        club_info = data.get("club_info", {})
         status = [
-            f"✅ Club Info: {len(info) if isinstance(info, (list, dict)) else 'N/A'} fields",
-            f"✅ Members: {len(members) if isinstance(members, list) else 'N/A'}",
-            f"✅ Friendly Matches: {len(matches)}",
+            f"✅ Source: ProClubsTracker (Playwright)",
+            f"✅ Matches found: {len(matches)}",
+            f"✅ Club info fields: {len(club_info)}",
         ]
         if matches:
             m = matches[0]
-            status.append(f"✅ Latest: {m.team_goals}-{m.opponent_goals} vs {m.opponent_name}")
+            status.append(f"✅ Latest: {m.get('team_goals', 0)}-{m.get('opponent_goals', 0)} vs {m.get('opponent', 'Unknown')}")
         await ctx.send("\n".join(status))
     except Exception as e:
-        await ctx.send(f"❌ EA API test failed: {e}")
+        await ctx.send(f"❌ PCT test failed: {e}")
 
 
 @bot.command(name="help")
 async def help_cmd(ctx):
     embed = discord.Embed(
         title="Rachad L3ERGONI Bot — Commands",
-        description="95% roast mode | Native Darija | Direct EA API | Real Photos | Premium Visuals",
+        description="95% roast mode | Native Darija | ProClubsTracker | Real Photos | Premium Visuals",
         color=0xFF6B35,
     )
     categories = {
@@ -557,7 +559,7 @@ async def help_cmd(ctx):
     }
     for cat, cmds in categories.items():
         embed.add_field(name=cat, value=cmds, inline=False)
-    embed.set_footer(text="Rachad L3ERGONI Pro Clubs | Direct EA API | Made with 🔥 for the squad")
+    embed.set_footer(text="Rachad L3ERGONI Pro Clubs | ProClubsTracker | Made with 🔥 for the squad")
     await ctx.send(embed=embed)
 
 
