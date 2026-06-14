@@ -1,6 +1,6 @@
 """
-Rachad L3ERGONI Bot — Main Discord Bot v12
-Direct EA API. SQLite stats. Native Darija. Premium visuals.
+Rachad L3ERGONI Bot — Main Discord Bot v13
+Sync EA API wrapped safely in threads. Fixed !help.
 """
 
 import asyncio
@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 class L3ERGONIBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix="!", intents=intents)
+        super().__init__(command_prefix="!", intents=intents, help_command=None)
         self.darija = darija
         self.stats = stats_engine
         self.images = image_gen
@@ -111,7 +111,7 @@ class L3ERGONIBot(commands.Bot):
         if not self.session_active:
             return
         try:
-            matches = await self.ea.get_all_matches(max_per_type=5)
+            matches = await asyncio.to_thread(self.ea.get_all_matches, max_per_type=5)
             added = 0
             for m in matches:
                 if not self.stats.match_exists(m.match_id):
@@ -175,7 +175,6 @@ class L3ERGONIBot(commands.Bot):
 
 
 bot = L3ERGONIBot()
-bot.remove_command("help")
 
 
 @bot.command(name="roast")
@@ -314,8 +313,8 @@ async def predict_cmd(ctx, *, opponent: str):
 @bot.command(name="clubinfo")
 async def clubinfo_cmd(ctx):
     try:
-        info = await bot.ea.get_club_info()
-        members = await bot.ea.get_member_stats()
+        info = await asyncio.to_thread(bot.ea.get_club_info)
+        members = await asyncio.to_thread(bot.ea.get_member_stats)
     except Exception as e:
         await ctx.send(f"z3ma... club info? walo. API error: {e}")
         return
@@ -324,7 +323,6 @@ async def clubinfo_cmd(ctx):
         await ctx.send("z3ma... club info? walo. chi m3a9ed. safi.")
         return
 
-    # EA returns a list with one dict usually
     club = info[0] if isinstance(info, list) else info
     embed = discord.Embed(title="Rachad L3ERGONI — Club Info", description="z3ma... club? walo. chi m3a9ed l3ba.", color=0xFF6B35)
 
@@ -494,7 +492,7 @@ async def personality_cmd(ctx, mode: str):
 async def sync_cmd(ctx, count: int = 15):
     await ctx.send("🔥 Syncing from EA servers directly...")
     try:
-        matches = await bot.ea.get_all_matches(max_per_type=count)
+        matches = await asyncio.to_thread(bot.ea.get_all_matches, max_per_type=count)
         added = 0
         for m in matches:
             if not bot.stats.match_exists(m.match_id):
@@ -512,7 +510,7 @@ async def sync_cmd(ctx, count: int = 15):
 async def force_sync_cmd(ctx):
     await ctx.send("🔥 Drilling EA API for ALL match types...")
     try:
-        matches = await bot.ea.get_all_matches(max_per_type=50)
+        matches = await asyncio.to_thread(bot.ea.get_all_matches, max_per_type=50)
         added = 0
         for m in matches:
             if not bot.stats.match_exists(m.match_id):
@@ -527,11 +525,11 @@ async def force_sync_cmd(ctx):
 async def test_api_cmd(ctx):
     await ctx.send("Testing EA API connection...")
     try:
-        info = await bot.ea.get_club_info()
-        members = await bot.ea.get_member_stats()
-        matches = await bot.ea.get_matches("friendlyMatch", 1)
+        info = await asyncio.to_thread(bot.ea.get_club_info)
+        members = await asyncio.to_thread(bot.ea.get_member_stats)
+        matches = await asyncio.to_thread(bot.ea.get_matches, "friendlyMatch", 1)
         status = [
-            f"✅ Club Info: {len(info)} fields",
+            f"✅ Club Info: {len(info) if isinstance(info, (list, dict)) else 'N/A'} fields",
             f"✅ Members: {len(members) if isinstance(members, list) else 'N/A'}",
             f"✅ Friendly Matches: {len(matches)}",
         ]
@@ -550,36 +548,15 @@ async def help_cmd(ctx):
         description="95% roast mode | Native Darija | Direct EA API | Real Photos | Premium Visuals",
         color=0xFF6B35,
     )
-    cmds = [
-        ("!roast", "Start session monitoring (10min auto-checks)"),
-        ("!stop", "Stop session"),
-        ("!lastmatch", "Last match + premium card"),
-        ("!stats <player>", "Player stats + premium card with REAL photo"),
-        ("!roastplayer <player>", "Roast specific player with live data"),
-        ("!mvp", "MVP of last 5 matches + gold card"),
-        ("!compare <p1> <p2>", "1v1 comparison + side-by-side card"),
-        ("!leaderboard <period>", "Leaderboard (day/week/month/all) + card"),
-        ("!banter", "Football trash talk"),
-        ("!drama", "Drama/polemique"),
-        ("!meme", "Meme b Darija"),
-        ("!transfer", "Transfer rumor (humour)"),
-        ("!predict <opponent>", "Match prediction"),
-        ("!clubinfo", "Club info with live stats from EA API"),
-        ("!worst", "Worst player of the week"),
-        ("!who_sold", "Who sold the match"),
-        ("!carry_detector", "Who is carrying the team"),
-        ("!fraud_check <player>", "Check if player is fraud"),
-        ("!ballon_dor", "Ballon d'Or of the squad"),
-        ("!ghost_detector", "Detect inactive players"),
-        ("!pass_the_ball <player>", "Call out ball hog"),
-        ("!personality <mode>", "Switch personality (casablanca/analyst/toxic/coach/commentator/cafeteria)"),
-        ("!sync [count]", "Sync from EA API (skips duplicates)"),
-        ("!force_sync", "🔥 Drill ALL data from EA API"),
-        ("!test_api", "Test EA API connection"),
-        ("!help", "This message"),
-    ]
-    for cmd, desc in cmds:
-        embed.add_field(name=cmd, value=desc, inline=False)
+    categories = {
+        "Core 📊": "!stats <player>, !mvp, !compare <p1> <p2>, !leaderboard <period>",
+        "Match ⚽": "!sync, !lastmatch, !clubinfo, !test_api",
+        "Roast 🔥": "!roastplayer <player>, !worst, !who_sold, !carry_detector, !fraud_check <player>, !ghost_detector, !pass_the_ball <player>",
+        "Fun 😂": "!banter, !drama, !meme, !transfer, !predict <opponent>, !ballon_dor",
+        "Session 🎮": "!roast, !stop, !personality <mode>",
+    }
+    for cat, cmds in categories.items():
+        embed.add_field(name=cat, value=cmds, inline=False)
     embed.set_footer(text="Rachad L3ERGONI Pro Clubs | Direct EA API | Made with 🔥 for the squad")
     await ctx.send(embed=embed)
 
