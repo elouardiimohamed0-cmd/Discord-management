@@ -1,18 +1,17 @@
 """
-Rachad L3ERGONI Bot — EA FC Pro Clubs Direct API Client
-Hits proclubs.ea.com directly. No scraper middlemen.
+Rachad L3ERGONI Bot — EA FC Pro Clubs Direct API Client (SYNC VERSION)
+Hits proclubs.ea.com directly. No async threading. No aiosqlite.
 """
 
-import asyncio
 import json
 import logging
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import httpx
-import aiosqlite
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +29,10 @@ EA_HEADERS = {
     ),
 }
 
-MATCH_TYPES = ["leagueMatch", "playoffMatch", "friendlyMatch"]
-
 
 @dataclass
 class EAPlayerMatch:
-    """Complete stats for a single match — ALL fields have defaults for Python 3.14 compatibility."""
+    """All fields have defaults for Python 3.14 compatibility."""
     name: str = ""
     position: str = "CM"
     goals: int = 0
@@ -144,76 +141,52 @@ class EAMatch:
 
 class EAProClubsAPI:
     """
-    Direct client for EA's public Pro Clubs API.
-    Uses SQLite for persistent caching to respect rate limits.
+    Sync client for EA's public Pro Clubs API.
+    Uses sqlite3 for persistent caching (sync, no threads).
     """
 
     def __init__(self, club_id: str, platform: str = "common-gen5", db_path: str = "bot_cache.db"):
         self.club_id = str(club_id)
         self.platform = platform
         self.db_path = db_path
-        self._client: Optional[httpx.AsyncClient] = None
-        self._lock = asyncio.Lock()
+        self._client = httpx.Client(headers=EA_HEADERS, timeout=20, follow_redirects=True)
+        self._init_db()
 
-    async def _get_db(self) -> aiosqlite.Connection:
-        db = await aiosqlite.connect(self.db_path)
-        db.row_factory = aiosqlite.Row
-        return db
-
-    async def _init_db(self):
-        async with await self._get_db() as db:
-            await db.execute("""
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS cache (
                     key TEXT PRIMARY KEY,
                     data TEXT,
                     ts INTEGER
                 )
             """)
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS matches (
-                    match_id TEXT PRIMARY KEY,
-                    match_type TEXT,
-                    ts INTEGER,
-                    json TEXT
-                )
-            """)
-            await db.commit()
+            conn.commit()
 
-    async def _cached_get(self, key: str, ttl_seconds: int, fetch_fn) -> Any:
-        await self._init_db()
-        async with await self._get_db() as db:
-            row = await db.execute(
-                "SELECT data, ts FROM cache WHERE key = ?", (key,)
-            )
-            row = await row.fetchone()
-            if row and (time.time() - row["ts"]) < ttl_seconds:
-                return json.loads(row["data"])
+    def _cached_get(self, key: str, ttl_seconds: int, fetch_fn) -> Any:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute("SELECT data, ts FROM cache WHERE key = ?", (key,)).fetchone()
+            if row and (time.time() - row[1]) < ttl_seconds:
+                return json.loads(row[0])
 
-        data = await fetch_fn()
+        data = fetch_fn()
 
-        async with await self._get_db() as db:
-            await db.execute(
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
                 "INSERT OR REPLACE INTO cache (key, data, ts) VALUES (?, ?, ?)",
                 (key, json.dumps(data, ensure_ascii=False), int(time.time())),
             )
-            await db.commit()
+            conn.commit()
         return data
 
-    async def _ea_get(self, endpoint: str, params: Optional[dict] = None) -> Any:
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                headers=EA_HEADERS,
-                timeout=20.0,
-                follow_redirects=True,
-                http2=False,
-            )
+    def _ea_get(self, endpoint: str, params: Optional[dict] = None) -> Any:
         url = f"{BASE_URL}{endpoint}"
         try:
-            resp = await self._client.get(url, params=params)
+            resp = self._client.get(url, params=params)
             if resp.status_code == 429:
                 logger.warning("EA API rate limited. Sleeping 30s...")
-                await asyncio.sleep(30)
-                resp = await self._client.get(url, params=params)
+                time.sleep(30)
+                resp = self._client.get(url, params=params)
             resp.raise_for_status()
             return resp.json()
         except httpx.TimeoutException:
@@ -225,69 +198,66 @@ class EAProClubsAPI:
 
     # ── Public API ─────────────────────────────────────────────────────
 
-    async def get_club_info(self) -> dict:
-        """Fetch club info from EA."""
-        key = f"club_info:{self.club_id}:{self.platform}"
-        return await self._cached_get(
-            key,
-            ttl_seconds=300,
-            fetch_fn=lambda: self._ea_get(
-                "/clubs/info", {"platform": self.platform, "clubIds": self.club_id}
-            ),
-        )
+    def get_club_info(self) -> dict:
+        try:
+            key = f"club_info:{self.club_id}:{self.platform}"
+            return self._cached_get(
+                key, 300,
+                lambda: self._ea_get("/clubs/info", {"platform": self.platform, "clubIds": self.club_id})
+            )
+        except Exception as e:
+            logger.error("get_club_info error: %s", e)
+            return {}
 
-    async def get_member_stats(self) -> List[dict]:
-        """Fetch live member stats for current club."""
-        key = f"member_stats:{self.club_id}:{self.platform}"
-        return await self._cached_get(
-            key,
-            ttl_seconds=180,
-            fetch_fn=lambda: self._ea_get(
-                "/members/stats", {"platform": self.platform, "clubId": self.club_id}
-            ),
-        )
+    def get_member_stats(self) -> List[dict]:
+        try:
+            key = f"member_stats:{self.club_id}:{self.platform}"
+            return self._cached_get(
+                key, 180,
+                lambda: self._ea_get("/members/stats", {"platform": self.platform, "clubId": self.club_id})
+            )
+        except Exception as e:
+            logger.error("get_member_stats error: %s", e)
+            return []
 
-    async def get_member_career(self) -> List[dict]:
-        """Fetch career stats across all clubs."""
-        key = f"member_career:{self.club_id}:{self.platform}"
-        return await self._cached_get(
-            key,
-            ttl_seconds=600,
-            fetch_fn=lambda: self._ea_get(
-                "/members/careerStats", {"platform": self.platform, "clubId": self.club_id}
-            ),
-        )
+    def get_member_career(self) -> List[dict]:
+        try:
+            key = f"member_career:{self.club_id}:{self.platform}"
+            return self._cached_get(
+                key, 600,
+                lambda: self._ea_get("/members/careerStats", {"platform": self.platform, "clubId": self.club_id})
+            )
+        except Exception as e:
+            logger.error("get_member_career error: %s", e)
+            return []
 
-    async def get_matches(self, match_type: str = "friendlyMatch", max_results: int = 20) -> List[EAMatch]:
-        """Fetch raw matches from EA and parse them."""
-        key = f"matches:{self.club_id}:{self.platform}:{match_type}:{max_results}"
-        raw = await self._cached_get(
-            key,
-            ttl_seconds=300,
-            fetch_fn=lambda: self._ea_get(
-                "/clubs/matches",
-                {
+    def get_matches(self, match_type: str = "friendlyMatch", max_results: int = 20) -> List[EAMatch]:
+        try:
+            key = f"matches:{self.club_id}:{self.platform}:{match_type}:{max_results}"
+            raw = self._cached_get(
+                key, 300,
+                lambda: self._ea_get("/clubs/matches", {
                     "platform": self.platform,
                     "clubIds": self.club_id,
                     "matchType": match_type,
                     "maxResultCount": max_results,
-                },
-            ),
-        )
-        if not isinstance(raw, list):
+                })
+            )
+            if not isinstance(raw, list):
+                return []
+            return [self._parse_match(m, match_type) for m in raw if m]
+        except Exception as e:
+            logger.error("get_matches error: %s", e)
             return []
-        return [self._parse_match(m, match_type) for m in raw if m]
 
-    async def get_all_matches(self, max_per_type: int = 15) -> List[EAMatch]:
-        """Aggregate league + playoff + friendly matches."""
-        all_matches: List[EAMatch] = []
-        for mtype in MATCH_TYPES:
+    def get_all_matches(self, max_per_type: int = 15) -> List[EAMatch]:
+        all_matches = []
+        for mtype in ["leagueMatch", "playoffMatch", "friendlyMatch"]:
             try:
-                matches = await self.get_matches(mtype, max_per_type)
+                matches = self.get_matches(mtype, max_per_type)
                 all_matches.extend(matches)
             except Exception as e:
                 logger.error("Failed fetching %s: %s", mtype, e)
-        # Sort by timestamp desc, dedupe by match_id
         seen = set()
         unique = []
         for m in sorted(all_matches, key=lambda x: x.timestamp, reverse=True):
@@ -296,11 +266,12 @@ class EAProClubsAPI:
                 unique.append(m)
         return unique
 
-    async def search_club(self, name: str) -> List[dict]:
-        return await self._ea_get(
-            "/allTimeLeaderboard/search",
-            {"platform": self.platform, "clubName": name},
-        )
+    def search_club(self, name: str) -> List[dict]:
+        try:
+            return self._ea_get("/allTimeLeaderboard/search", {"platform": self.platform, "clubName": name})
+        except Exception as e:
+            logger.error("search_club error: %s", e)
+            return []
 
     # ── Parsers ─────────────────────────────────────────────────────────
 
@@ -352,7 +323,6 @@ class EAProClubsAPI:
                 rating = float(p.get("rating", "6.0") or "6.0")
                 pos = p.get("pos", "midfielder").upper()
 
-                # Normalize position
                 pos_map = {
                     "GOALKEEPER": "GK", "DEFENDER": "CB", "MIDFIELDER": "CM",
                     "FORWARD": "ST", "STRIKER": "ST", "WING": "LW",
@@ -365,10 +335,10 @@ class EAProClubsAPI:
                     goals=int(p.get("goals", 0)),
                     assists=int(p.get("assists", 0)),
                     shots=int(p.get("shots", 0)),
-                    shots_on_target=int(p.get("shots", 0)),  # EA doesn't separate on-target
+                    shots_on_target=int(p.get("shots", 0)),
                     passes_attempted=passes_att,
                     passes_completed=passes_comp,
-                    key_passes=int(p.get("assists", 0)) * 2,  # proxy
+                    key_passes=int(p.get("assists", 0)) * 2,
                     tackles=int(p.get("tacklesmade", 0)),
                     tackles_attempted=int(p.get("tackleattempts", 0)),
                     interceptions=int(p.get("interceptions", 0)),
@@ -393,9 +363,8 @@ class EAProClubsAPI:
             logger.error("Parse match error: %s", e)
             return None
 
-    async def close(self):
-        if self._client:
-            await self._client.aclose()
+    def close(self):
+        self._client.close()
 
 
 def get_ea_api(club_id: str, platform: str = "common-gen5") -> EAProClubsAPI:
