@@ -7,6 +7,12 @@ from typing import Optional, List
 from models import ClubStats, PlayerStats, MatchResult
 
 try:
+    import httpx
+    HAS_HTTPX = True
+except ImportError:
+    HAS_HTTPX = False
+
+try:
     from playwright.async_api import async_playwright
     HAS_PLAYWRIGHT = True
 except ImportError:
@@ -28,12 +34,200 @@ class ProClubsTrackerScraper:
         self.context = None
         self.page = None
         self._cookie_file = "pct_cookies.json"
+        self._last_error = None
+    
+    # ============================================================
+    # HTTP FALLBACK (no browser needed)
+    # ============================================================
+    
+    async def _scrape_http(self) -> Optional[ClubStats]:
+        """Try to scrape using HTTP request only. No browser needed."""
+        if not HAS_HTTPX:
+            return None
+        
+        try:
+            print("🌐 Trying HTTP fallback...")
+            async with httpx.AsyncClient(
+                timeout=30.0,
+                follow_redirects=True,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "DNT": "1",
+                    "Connection": "keep-alive",
+                }
+            ) as client:
+                response = await client.get(self.club_url)
+                
+                if response.status_code != 200:
+                    print(f"⚠️ HTTP fallback: status {response.status_code}")
+                    return None
+                
+                html = response.text
+                return self._parse_html(html)
+                
+        except Exception as e:
+            print(f"⚠️ HTTP fallback failed: {e}")
+            return None
+    
+    def _parse_html(self, html: str) -> Optional[ClubStats]:
+        """Parse ProClubsTracker HTML for player data."""
+        club = ClubStats(
+            club_name="Rachad L3ERGONI",
+            last_updated=datetime.now()
+        )
+        
+        # Try to extract club name
+        title_match = re.search(r'<title>(.*?)</title>', html, re.I)
+        if title_match:
+            club.club_name = title_match.group(1).strip().split(" - ")[0].split(" | ")[0]
+        
+        # Try to find JSON data embedded in script tags (common in React apps)
+        # PCT often embeds data as window.__INITIAL_STATE__ or similar
+        json_patterns = [
+            r'window\.__INITIAL_STATE__\s*=\s*({.+?});',
+            r'window\.__DATA__\s*=\s*({.+?});',
+            r'"players":\s*(\[.+?\])',
+            r'"club":\s*({.+?})',
+        ]
+        
+        for pattern in json_patterns:
+            json_match = re.search(pattern, html, re.DOTALL)
+            if json_match:
+                try:
+                    data = json.loads(json_match.group(1))
+                    # Try to parse this JSON structure
+                    if isinstance(data, dict):
+                        if "players" in data:
+                            self._parse_json_players(data["players"], club)
+                        if "club" in data:
+                            self._parse_json_club(data["club"], club)
+                    elif isinstance(data, list):
+                        self._parse_json_players(data, club)
+                    
+                    if club.players:
+                        print(f"✅ HTTP fallback: parsed {len(club.players)} players from JSON")
+                        return club
+                except Exception:
+                    continue
+        
+        # Fallback: parse HTML table directly
+        self._parse_html_table(html, club)
+        
+        if club.players:
+            print(f"✅ HTTP fallback: parsed {len(club.players)} players from HTML table")
+            return club
+        
+        return None
+    
+    def _parse_json_players(self, players_data: list, club: ClubStats):
+        """Parse player list from JSON."""
+        for p_data in players_data:
+            try:
+                if isinstance(p_data, dict):
+                    name = p_data.get("name", p_data.get("playerName", ""))
+                    if not name:
+                        continue
+                    
+                    player = PlayerStats(name=name)
+                    player.games = int(p_data.get("games", p_data.get("gp", 0)))
+                    player.goals = int(p_data.get("goals", p_data.get("gls", 0)))
+                    player.assists = int(p_data.get("assists", p_data.get("ast", 0)))
+                    player.rating = float(p_data.get("rating", p_data.get("avgRating", 0)))
+                    player.pass_accuracy = float(p_data.get("passAccuracy", p_data.get("passAcc", 0)))
+                    player.tackles = int(p_data.get("tackles", p_data.get("tkl", 0)))
+                    player.interceptions = int(p_data.get("interceptions", p_data.get("int", 0)))
+                    player.possession_losses = int(p_data.get("possessionLosses", p_data.get("dispossessed", 0)))
+                    player.motm = int(p_data.get("motm", p_data.get("manOfTheMatch", 0)))
+                    player.shots = int(p_data.get("shots", 0))
+                    player.minutes_played = int(p_data.get("minutes", p_data.get("min", 0)))
+                    player.distance_covered = float(p_data.get("distance", p_data.get("dist", 0)))
+                    
+                    club.players.append(player)
+            except Exception:
+                continue
+    
+    def _parse_json_club(self, club_data: dict, club: ClubStats):
+        """Parse club stats from JSON."""
+        try:
+            club.wins = int(club_data.get("wins", 0))
+            club.losses = int(club_data.get("losses", 0))
+            club.draws = int(club_data.get("draws", 0))
+            club.division = int(club_data.get("division", 6))
+            club.skill_rating = int(club_data.get("skillRating", 0))
+        except Exception:
+            pass
+    
+    def _parse_html_table(self, html: str, club: ClubStats):
+        """Parse player table from raw HTML using regex."""
+        # Find table rows
+        row_pattern = r'<tr[^>]*>(.*?)</tr>'
+        rows = re.findall(row_pattern, html, re.DOTALL)
+        
+        for row in rows:
+            try:
+                # Extract all text from cells
+                cell_pattern = r'<td[^>]*>(.*?)</td>'
+                cells = re.findall(cell_pattern, row, re.DOTALL)
+                
+                if len(cells) < 3:
+                    continue
+                
+                # Clean HTML tags from cells
+                clean_cells = []
+                for cell in cells:
+                    text = re.sub(r'<[^>]+>', '', cell).strip()
+                    clean_cells.append(text)
+                
+                # First cell is usually name
+                name = clean_cells[0]
+                if not name or name.lower() in ["player", "name", "member", ""]:
+                    continue
+                
+                player = PlayerStats(name=name)
+                
+                # Try to extract numbers from all cells
+                all_text = " ".join(clean_cells)
+                
+                # Rating (usually has decimal)
+                rating_match = re.search(r'(\d+\.\d+)', all_text)
+                if rating_match:
+                    player.rating = float(rating_match.group(1))
+                
+                # Extract integers
+                numbers = re.findall(r'\d+', all_text)
+                if len(numbers) >= 2:
+                    # Try to map: games, goals, assists, shots, tackles, etc.
+                    # This is heuristic but works for many table layouts
+                    pass
+                
+                # Pass accuracy
+                pass_match = re.search(r'(\d+\.?\d*)%', all_text)
+                if pass_match:
+                    player.pass_accuracy = float(pass_match.group(1))
+                
+                club.players.append(player)
+            except Exception:
+                continue
+    
+    # ============================================================
+    # PLAYWRIGHT (browser-based)
+    # ============================================================
     
     async def _init_browser(self):
         if not HAS_PLAYWRIGHT:
             raise RuntimeError("Playwright not installed")
         
         pw = await async_playwright().start()
+        
+        # Use env var for browser path if set
+        env = {}
+        browsers_path = "/app/ms-playwright"
+        if os.path.exists(browsers_path):
+            env["PLAYWRIGHT_BROWSERS_PATH"] = browsers_path
+        
         self.browser = await pw.chromium.launch(
             headless=self.headless,
             args=[
@@ -45,6 +239,10 @@ class ProClubsTrackerScraper:
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
                 "--single-process",
+                "--disable-background-networking",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
             ]
         )
         self.context = await self.browser.new_context(
@@ -96,7 +294,7 @@ class ProClubsTrackerScraper:
             pass
         return ""
     
-    async def _parse_player_table(self, club: ClubStats):
+    async def _parse_player_table_playwright(self, club: ClubStats):
         headers = await self.page.query_selector_all("table thead th, .table-header-cell, [role='columnheader']")
         header_texts = []
         for h in headers:
@@ -157,7 +355,6 @@ class ProClubsTrackerScraper:
                 p = PlayerStats(name=name)
                 all_text = " ".join(texts)
                 
-                # Extract numbers safely
                 rating_match = re.search(r'(\d+\.\d+)', get_col("rating", 1)) or re.search(r'(\d+\.\d+)', all_text)
                 if rating_match:
                     p.rating = float(rating_match.group(1))
@@ -177,19 +374,16 @@ class ProClubsTrackerScraper:
                     if m:
                         setattr(p, field, int(m.group(1)))
                 
-                # Pass accuracy
                 pass_txt = get_col("pass_accuracy", 0)
                 pa = re.search(r'(\d+\.?\d*)%', pass_txt) or re.search(r'(\d+\.?\d*)%', all_text)
                 if pa:
                     p.pass_accuracy = float(pa.group(1))
                 
-                # Distance
                 dist_txt = get_col("distance", 0)
                 dt = re.search(r'(\d+\.?\d*)', dist_txt)
                 if dt:
                     p.distance_covered = float(dt.group(1))
                 
-                # Shots
                 shots_txt = get_col("shots", 0)
                 sh = re.search(r'(\d+)', shots_txt)
                 if sh:
@@ -199,18 +393,17 @@ class ProClubsTrackerScraper:
             except Exception:
                 continue
     
-    async def scrape_club(self) -> Optional[ClubStats]:
-        """Scrape ProClubsTracker. NEVER raises. Returns None on total failure."""
+    async def _scrape_playwright(self) -> Optional[ClubStats]:
+        """Scrape using Playwright browser."""
         if not HAS_PLAYWRIGHT:
-            print("❌ Playwright not installed. Cannot scrape.")
             return None
         
         try:
             if not self.browser:
                 await self._init_browser()
         except Exception as e:
+            self._last_error = f"Browser init failed: {e}"
             print(f"❌ Browser init failed: {e}")
-            traceback.print_exc()
             return None
         
         max_retries = 2
@@ -219,7 +412,6 @@ class ProClubsTrackerScraper:
                 await self.page.goto(self.club_url, wait_until="domcontentloaded", timeout=20000)
                 await asyncio.sleep(2)
                 
-                # Wait for any content
                 try:
                     await self.page.wait_for_selector("body", timeout=5000)
                 except Exception:
@@ -230,7 +422,6 @@ class ProClubsTrackerScraper:
                     last_updated=datetime.now()
                 )
                 
-                # Try to get club name from page
                 try:
                     title = await self._extract_text("h1, .club-name, [data-testid='club-name'], .title")
                     if title:
@@ -238,7 +429,6 @@ class ProClubsTrackerScraper:
                 except Exception:
                     pass
                 
-                # Overview stats
                 try:
                     div_text = await self._extract_text(".division, [data-testid='division'], .club-division")
                     skill_text = await self._extract_text(".skill-rating, [data-testid='skill-rating']")
@@ -258,12 +448,10 @@ class ProClubsTrackerScraper:
                 except Exception:
                     pass
                 
-                # Players tab
                 await self._safe_click("button:has-text('Players'), [data-testid='players-tab'], a:has-text('Players'), #players-tab")
                 await asyncio.sleep(1.5)
-                await self._parse_player_table(club)
+                await self._parse_player_table_playwright(club)
                 
-                # Match History
                 await self._safe_click("button:has-text('Match History'), [data-testid='matches-tab'], a:has-text('Matches'), #matches-tab")
                 await asyncio.sleep(1.5)
                 
@@ -314,7 +502,6 @@ class ProClubsTrackerScraper:
                 
                 club.matches = matches
                 
-                # Detailed stats via modals
                 for player in club.players:
                     try:
                         safe_name = player.name.replace("'", "\\'").replace('"', '\\"')
@@ -344,20 +531,46 @@ class ProClubsTrackerScraper:
                 await self._save_cookies()
                 
                 if club.players:
-                    print(f"✅ Scraped {len(club.players)} players from PCT")
+                    print(f"✅ Playwright scraped {len(club.players)} players")
                     return club
                 else:
-                    print("⚠️ No players found in scrape")
+                    print("⚠️ Playwright: no players found")
                     return None
                     
             except Exception as e:
-                print(f"Scrape attempt {attempt + 1} failed: {e}")
-                traceback.print_exc()
+                print(f"Playwright attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(3)
                 else:
+                    self._last_error = f"Playwright failed after {max_retries} attempts: {e}"
                     return None
         
+        return None
+    
+    # ============================================================
+    # PUBLIC API
+    # ============================================================
+    
+    async def scrape_club(self) -> Optional[ClubStats]:
+        """Scrape ProClubsTracker. NEVER raises. Returns None on total failure.
+        
+        Strategy:
+        1. Try HTTP first (fast, no browser)
+        2. Try Playwright (browser-based, heavy)
+        3. Return None with error info
+        """
+        # Try HTTP first
+        club = await self._scrape_http()
+        if club and club.players:
+            return club
+        
+        # Try Playwright
+        club = await self._scrape_playwright()
+        if club and club.players:
+            return club
+        
+        # Total failure
+        print(f"❌ All scraping methods failed. Last error: {self._last_error}")
         return None
     
     async def close(self):
