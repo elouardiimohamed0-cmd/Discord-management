@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers to PROJECT directory (persisted, not /root/.cache)
+# Install Playwright browsers to persistent path
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
 RUN mkdir -p /app/ms-playwright
 RUN playwright install chromium
