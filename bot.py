@@ -33,11 +33,14 @@ class HealthHandler(BaseHTTPRequestHandler):
         pass
 
 def start_health_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    print(f"Health check server running on port {port}")
+    port = Config.PORT
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        print(f"✅ Health check server running on port {port}")
+    except Exception as e:
+        print(f"⚠️ Health server failed to start on port {port}: {e}")
 
 
 class RachadBot(commands.Bot):
@@ -62,6 +65,7 @@ class RachadBot(commands.Bot):
         self._fonts_ok = False
         
     async def setup_hook(self):
+        print("🔄 Setting up bot...")
         self.scraper = ProClubsTrackerScraper(
             Config.PCT_CLUB_URL,
             headless=Config.HEADLESS,
@@ -72,11 +76,13 @@ class RachadBot(commands.Bot):
         guild = discord.Object(id=Config.DISCORD_GUILD_ID)
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
+        print(f"✅ Slash commands synced to guild {Config.DISCORD_GUILD_ID}")
         
-        # Background startup scrape
+        # Background startup scrape (non-blocking)
         asyncio.create_task(self._startup_scrape())
     
     async def _startup_scrape(self):
+        """Try to scrape once on startup so data is ready immediately."""
         try:
             print("🔄 Startup scrape attempt...")
             club = await self.scraper.scrape_club()
@@ -84,27 +90,28 @@ class RachadBot(commands.Bot):
                 self.current_club = club
                 squad_map = self._get_squad_map()
                 self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
-                print(f"✅ Startup OK: {len(club.players)} players")
+                print(f"✅ Startup OK: {len(club.players)} players, {len(club.matches)} matches")
             else:
-                print("⚠️ Startup scrape: no players found")
+                print("⚠️ Startup scrape: no data returned")
         except Exception as e:
             print(f"❌ Startup scrape failed: {e}")
             traceback.print_exc()
     
     async def on_ready(self):
-        print(f"Rachad L3ERGONI Bot online as {self.user}")
+        print(f"✅ Rachad L3ERGONI Bot online as {self.user}")
         try:
             self.imgen._get_font(20)
             self._fonts_ok = True
         except Exception:
             self._fonts_ok = False
-            print("⚠️ Arabic fonts not found")
+            print("⚠️ Arabic fonts not found in assets/fonts/")
+        
         await self.change_presence(activity=discord.Game(name="Pro Clubs • /help"))
     
     async def on_command_error(self, ctx, error):
         """Handle prefix command errors gracefully."""
         if isinstance(error, commands.CommandNotFound):
-            await ctx.send("❌ هاد الكوماند ما كاينش. جرب `/help` ولا `!help` باش تشوف الكوماندات.")
+            await ctx.send("❌ هاد الكوماند ما كاينش. جرب `!help` باش تشوف الكوماندات.")
             return
         if isinstance(error, commands.MissingRequiredArgument):
             await ctx.send(f"❌ ناقصك parameter: `{error.param.name}`. جرب `!help` باش تشوف كيفاش تستعمل.")
@@ -112,22 +119,13 @@ class RachadBot(commands.Bot):
         if isinstance(error, commands.CommandOnCooldown):
             await ctx.send(f"⏳ صبر {error.retry_after:.1f} seconds.")
             return
-        # Log unknown errors
+        
         print(f"Prefix command error: {error}")
         traceback.print_exc()
         await ctx.send(f"❌ Error: {str(error)[:300]}")
     
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         """Handle slash command errors gracefully."""
-        if isinstance(error, app_commands.CommandNotFound):
-            return
-        if isinstance(error, app_commands.MissingPermissions):
-            if interaction.response.is_done():
-                await interaction.followup.send("❌ ما عندكش الصلاحية.")
-            else:
-                await interaction.response.send_message("❌ ما عندكش الصلاحية.")
-            return
-        
         print(f"Slash command error: {error}")
         traceback.print_exc()
         
@@ -154,8 +152,8 @@ class RachadBot(commands.Bot):
             return None
         return fuzzy_find_player(query, self.current_club.players, self.squad)
     
-    async def _ensure_scraped(self, ctx_or_interaction) -> bool:
-        """Returns True if data is available. Sends error message if not."""
+    async def _ensure_data(self, ctx_or_interaction) -> bool:
+        """Returns True if data is available. Tells user what to do if not."""
         if self.current_club and self.current_club.players:
             return True
         
@@ -163,13 +161,16 @@ class RachadBot(commands.Bot):
         try:
             msg = "⏳ جاري جلب البيانات من ProClubsTracker... صبر شوية."
             if isinstance(ctx_or_interaction, discord.Interaction):
-                await ctx_or_interaction.followup.send(msg)
+                if not ctx_or_interaction.response.is_done():
+                    await ctx_or_interaction.response.send_message(msg)
+                else:
+                    await ctx_or_interaction.followup.send(msg)
             else:
                 await ctx_or_interaction.send(msg)
             
             club = await self.scraper.scrape_club()
             if not club or not club.players:
-                err = "❌ ما قدرتش نجيب البيانات. ProClubsTracker ما بانش ليا."
+                err = "❌ ما قدرتش نجيب البيانات من ProClubsTracker.\n\n**جرب:**\n1. `/sync` مرة أخرى\n2. تأكد من أن الURL صحيح فالenv vars\n3. شوف Render logs باش تعرف المشكل"
                 if isinstance(ctx_or_interaction, discord.Interaction):
                     await ctx_or_interaction.followup.send(err)
                 else:
@@ -182,9 +183,9 @@ class RachadBot(commands.Bot):
             return True
             
         except Exception as e:
-            print(f"Scrape error: {e}")
+            print(f"Scrape error in _ensure_data: {e}")
             traceback.print_exc()
-            err = f"❌ كاين مشكل فالscraper.\n```\n{str(e)[:300]}\n```"
+            err = f"❌ كاين مشكل فالscraper.\n```\n{str(e)[:300]}\n```\nجرب `/sync` مرة أخرى."
             if isinstance(ctx_or_interaction, discord.Interaction):
                 await ctx_or_interaction.followup.send(err)
             else:
@@ -197,7 +198,7 @@ class RachadBot(commands.Bot):
             return
         try:
             club = await self.scraper.scrape_club()
-            if not club:
+            if not club or not club.players:
                 return
             self.current_club = club
             squad_map = self._get_squad_map()
@@ -231,7 +232,7 @@ class RachadBot(commands.Bot):
         await self.wait_until_ready()
     
     # ============================================================
-    # PREFIX COMMANDS (for !command style)
+    # PREFIX COMMANDS
     # ============================================================
     
     @commands.command(name="help")
@@ -244,23 +245,23 @@ class RachadBot(commands.Bot):
         cmds = [
             ("`!sync` / `/sync`", "جلب البيانات من ProClubsTracker (دير هادي الأول!)"),
             ("`!stats [player]` / `/stats`", "إحصائيات لاعب + كارطة"),
-            ("`!mvp` / `/mvp`", "أفضل لاعب فالموسم"),
-            ("`!worst` / `/worst`", "أسوأ لاعب فالأسبوع"),
+            ("`!mvp` / `/mvp`", "أفضل لاعب"),
+            ("`!worst` / `/worst`", "أسوأ لاعب"),
             ("`!who_sold` / `/who_sold`", "شكون باع الماتش"),
             ("`!carry` / `/carry_detector`", "شكون كيجرّ الفريق"),
             ("`!fraud [player]` / `/fraud_check`", "فحص الفريق"),
             ("`!ballon` / `/ballon_dor`", "ترتيب Ballon d'Or"),
-            ("`!ghost` / `/ghost_detector`", "كشف اللاعبين الغيّاب"),
+            ("`!ghost` / `/ghost_detector`", "كشف الغيّاب"),
             ("`!pass` / `/pass_the_ball`", "نادِي على اللي كيضيع الكورة"),
-            ("`!leaderboard` / `/leaderboard`", "لوحة المتصدرين"),
+            ("`!leaderboard [metric]` / `/leaderboard`", "لوحة المتصدرين"),
             ("`!compare p1 p2` / `/compare`", "مقارنة 1v1"),
             ("`!lastmatch` / `/lastmatch`", "آخر ماتش"),
             ("`!club` / `/clubinfo`", "معلومات النادي"),
             ("`!banter` / `/banter`", "هضرة رياضية"),
-            ("`!drama` / `/drama`", "دراما / بوليميك"),
+            ("`!drama` / `/drama`", "دراما"),
             ("`!meme [player]` / `/meme`", "ميم بالدارجة"),
             ("`!transfer [player]` / `/transfer`", "إشاعة انتقال"),
-            ("`!predict` / `/predict`", "توقع الماتش الجاي"),
+            ("`!predict` / `/predict`", "توقع الماتش"),
             ("`!personality [mode]` / `/personality`", "تبديل الشخصية"),
             ("`!roast` / `/roast`", "بدء session monitoring"),
             ("`!stop` / `/stop`", "إيقاف session"),
@@ -275,7 +276,7 @@ class RachadBot(commands.Bot):
             try:
                 club = await self.scraper.scrape_club()
                 if not club or not club.players:
-                    await ctx.send("❌ ما قدرتش نجيب البيانات من ProClubsTracker.")
+                    await ctx.send("❌ ما قدرتش نجيب البيانات من ProClubsTracker.\n\n**أسباب محتملة:**\n1. ProClubsTracker محمي ضد bots\n2. Chromium ما كيهضرش فRender (memory issue)\n3. الURL غالط\n\n**جرب:** شوف Render logs.")
                     return
                 
                 self.current_club = club
@@ -290,16 +291,16 @@ class RachadBot(commands.Bot):
                 await ctx.send(embed=embed)
             except Exception as e:
                 traceback.print_exc()
-                await ctx.send(f"❌ Sync failed.\n```\n{str(e)[:500]}\n```")
+                await ctx.send(f"❌ Sync failed.\n```\n{str(e)[:500]}\n```\nشوف Render logs باش تعرف المشكل بالضبط.")
     
     @commands.command(name="stats")
     async def cmd_stats(self, ctx, *, player: str):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         target = self._find_player(player)
         if not target:
-            await ctx.send(f"ما لقيتش `{player}`.")
+            await ctx.send(f"ما لقيتش `{player}`. جرب اسم آخر.")
             return
         
         squad_map = self._get_squad_map()
@@ -329,11 +330,11 @@ class RachadBot(commands.Bot):
                 await ctx.send(embed=embed, file=file)
             except Exception as e:
                 traceback.print_exc()
-                await ctx.send(f"❌ Error: {str(e)[:300]}")
+                await ctx.send(f"❌ Error generating card: {str(e)[:300]}")
     
     @commands.command(name="mvp")
     async def cmd_mvp(self, ctx):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         async with ctx.typing():
@@ -361,7 +362,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="worst")
     async def cmd_worst(self, ctx):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         async with ctx.typing():
@@ -384,7 +385,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="who_sold")
     async def cmd_who_sold(self, ctx):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         async with ctx.typing():
@@ -407,7 +408,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="carry")
     async def cmd_carry(self, ctx):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         async with ctx.typing():
@@ -430,7 +431,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="fraud")
     async def cmd_fraud(self, ctx, *, player: str):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         target = self._find_player(player)
@@ -459,7 +460,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="ballon")
     async def cmd_ballon(self, ctx):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         async with ctx.typing():
@@ -486,7 +487,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="ghost")
     async def cmd_ghost(self, ctx):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         async with ctx.typing():
@@ -509,7 +510,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="pass")
     async def cmd_pass(self, ctx):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         async with ctx.typing():
@@ -532,7 +533,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="leaderboard")
     async def cmd_leaderboard(self, ctx, metric: str = "impact"):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         metric_map = {
@@ -564,7 +565,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="compare")
     async def cmd_compare(self, ctx, player1: str, player2: str):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         p1 = self._find_player(player1)
@@ -594,7 +595,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="lastmatch")
     async def cmd_lastmatch(self, ctx):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         if not self.current_club.matches:
@@ -616,7 +617,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="club")
     async def cmd_club(self, ctx):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         async with ctx.typing():
@@ -650,7 +651,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="drama")
     async def cmd_drama(self, ctx):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         try:
@@ -684,7 +685,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="predict")
     async def cmd_predict(self, ctx):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         try:
@@ -733,7 +734,7 @@ class RachadBot(commands.Bot):
     
     @commands.command(name="roastplayer")
     async def cmd_roastplayer(self, ctx, *, player: str):
-        if not await self._ensure_scraped(ctx):
+        if not await self._ensure_data(ctx):
             return
         
         target = self._find_player(player)
@@ -761,14 +762,14 @@ class RachadBot(commands.Bot):
                 await ctx.send(f"❌ Error: {str(e)[:300]}")
     
     # ============================================================
-    # SLASH COMMANDS (same logic, wrapped for /command style)
+    # SLASH COMMANDS
     # ============================================================
     
     @app_commands.command(name="stats", description="Player stats + premium card")
     @app_commands.describe(player="Player name, PSN, or nickname")
     async def slash_stats(self, interaction: discord.Interaction, player: str):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         target = self._find_player(player)
@@ -808,7 +809,7 @@ class RachadBot(commands.Bot):
     @app_commands.describe(player="Player name, PSN, or nickname")
     async def slash_roastplayer(self, interaction: discord.Interaction, player: str):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         target = self._find_player(player)
@@ -837,7 +838,7 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="mvp", description="MVP of the season")
     async def slash_mvp(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         try:
@@ -865,7 +866,7 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="worst", description="Worst player of the week")
     async def slash_worst(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         try:
@@ -888,7 +889,7 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="who_sold", description="Who sold the match")
     async def slash_who_sold(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         try:
@@ -911,7 +912,7 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="carry_detector", description="Who is carrying the team")
     async def slash_carry(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         try:
@@ -935,7 +936,7 @@ class RachadBot(commands.Bot):
     @app_commands.describe(player="Player name, PSN, or nickname")
     async def slash_fraud_check(self, interaction: discord.Interaction, player: str):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         target = self._find_player(player)
@@ -964,7 +965,7 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="ballon_dor", description="Ballon d'Or ranking")
     async def slash_ballon_dor(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         try:
@@ -991,7 +992,7 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="ghost_detector", description="Detect inactive players")
     async def slash_ghost(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         try:
@@ -1014,7 +1015,7 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="pass_the_ball", description="Call out ball hog")
     async def slash_pass_ball(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         try:
@@ -1046,7 +1047,7 @@ class RachadBot(commands.Bot):
     async def slash_leaderboard(self, interaction: discord.Interaction,
                                metric: app_commands.Choice[str]):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         try:
@@ -1069,7 +1070,7 @@ class RachadBot(commands.Bot):
     @app_commands.describe(player1="First player", player2="Second player")
     async def slash_compare(self, interaction: discord.Interaction, player1: str, player2: str):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         p1 = self._find_player(player1)
@@ -1099,7 +1100,7 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="lastmatch", description="Last match + result")
     async def slash_lastmatch(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         if not self.current_club.matches:
@@ -1122,7 +1123,7 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="clubinfo", description="Club overview + match report card")
     async def slash_clubinfo(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         try:
@@ -1156,7 +1157,7 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="drama", description="Drama / polemique")
     async def slash_drama(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         try:
@@ -1194,7 +1195,7 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="predict", description="Match prediction")
     async def slash_predict(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not await self._ensure_scraped(interaction):
+        if not await self._ensure_data(interaction):
             return
         
         try:
@@ -1236,7 +1237,9 @@ class RachadBot(commands.Bot):
         try:
             club = await self.scraper.scrape_club()
             if not club or not club.players:
-                await interaction.followup.send("❌ ما قدرتش نجيب البيانات.")
+                await interaction.followup.send(
+                    "❌ ما قدرتش نجيب البيانات.\n\n**أسباب محتملة:**\n1. ProClubsTracker محمي ضد bots (cloud IP blocked)\n2. Chromium ما كيهضرش فRender (memory limit)\n3. الURL غالط\n\n**شوف Render logs باش تعرف المشكل بالضبط.**"
+                )
                 return
             
             self.current_club = club
@@ -1253,7 +1256,7 @@ class RachadBot(commands.Bot):
             traceback.print_exc()
             await interaction.followup.send(
                 f"❌ Sync failed.\n```\n{str(e)[:500]}\n```\n"
-                "Check Render logs for full error."
+                "شوف Render logs."
             )
     
     @app_commands.command(name="help", description="Show all commands")
@@ -1261,7 +1264,7 @@ class RachadBot(commands.Bot):
         try:
             embed = discord.Embed(
                 title="🎮 Rachad L3ERGONI Bot",
-                description="**الخطوة الأولى: دير `/sync` باش يجيب البيانات**\n\nبعدها تقدر تستعمل كل شي:",
+                description="**الخطوة الأولى: دير `/sync` أو `!sync` باش يجيب البيانات**\n\nبعدها تقدر تستعمل كل شي:",
                 color=0x1e90ff
             )
             cmds = [
