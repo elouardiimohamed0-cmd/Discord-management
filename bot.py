@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+import random
 from datetime import datetime
 from typing import Optional
 
@@ -15,6 +16,7 @@ from darija_engine import DarijaEngine
 from image_gen import ImageGenerator
 from memory import SquadMemory
 from models import ClubStats, PlayerStats
+from utils import fuzzy_find_player
 
 class RachadBot(commands.Bot):
     def __init__(self):
@@ -31,24 +33,53 @@ class RachadBot(commands.Bot):
         self.memory = SquadMemory()
         self.current_club: Optional[ClubStats] = None
         self._session_active = False
+        self._last_match_count = 0
+        self._fonts_ok = False
         
     async def setup_hook(self):
-        self.scraper = ProClubsTrackerScraper(Config.PCT_CLUB_URL, headless=Config.HEADLESS, use_stealth=Config.STEALTH)
+        self.scraper = ProClubsTrackerScraper(
+            Config.PCT_CLUB_URL, 
+            headless=Config.HEADLESS, 
+            use_stealth=Config.STEALTH
+        )
         self.auto_scraper.start()
         
-        # Sync slash commands
         guild = discord.Object(id=Config.DISCORD_GUILD_ID)
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
     
     async def on_ready(self):
         print(f"Rachad L3ERGONI Bot online as {self.user}")
+        
+        # Font check
+        try:
+            test_font = self.imgen._get_font(20)
+            self._fonts_ok = True
+        except Exception:
+            self._fonts_ok = False
+            print("⚠️ WARNING: Arabic fonts not found. Install Cairo/Noto fonts in assets/fonts/")
+        
         await self.change_presence(activity=discord.Game(name="Pro Clubs • /help"))
     
     async def close(self):
         if self.scraper:
             await self.scraper.close()
         await super().close()
+    
+    def _get_squad_map(self):
+        players = self.squad.get("players", [])
+        return {p.get("name", ""): p for p in players}
+    
+    def _find_player(self, query: str) -> Optional[PlayerStats]:
+        if not self.current_club or not self.current_club.players:
+            return None
+        return fuzzy_find_player(query, self.current_club.players, self.squad)
+    
+    async def _ensure_scraped(self):
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+            squad_map = self._get_squad_map()
+            self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
     
     @tasks.loop(minutes=Config.SCRAPE_INTERVAL)
     async def auto_scraper(self):
@@ -57,27 +88,37 @@ class RachadBot(commands.Bot):
         
         try:
             club = await self.scraper.scrape_club()
-            if club:
-                self.current_club = club
+            if not club:
+                return
+            
+            self.current_club = club
+            squad_map = self._get_squad_map()
+            club.players = StatsEngine.compute_all(club.players, squad_map)
+            
+            # Update memory (store current totals, not incremental)
+            for p in club.players:
+                self.memory.update_player(p.name, {
+                    "games": p.games,
+                    "goals": p.goals,
+                    "assists": p.assists,
+                    "rating": p.rating_pg,
+                    "possession_losses": p.possession_losses,
+                })
+            
+            # Only announce if new matches detected
+            current_match_count = len(club.matches)
+            if current_match_count > self._last_match_count:
+                self._last_match_count = current_match_count
                 
-                # Compute stats
-                squad_map = {p["name"]: p for p in self.squad.get("players", [])}
-                club.players = StatsEngine.compute_all(club.players, squad_map)
-                
-                # Update memory
-                for p in club.players:
-                    self.memory.update_player(p.name, {
-                        "games": p.games, "goals": p.goals, "assists": p.assists, "rating": p.rating_pg
-                    })
-                
-                # Check for new matches to announce
                 channel = self.get_channel(Config.DISCORD_STATS_CHANNEL_ID)
-                if channel:
+                if channel and club.matches:
+                    last = club.matches[0]
                     motm = StatsEngine.get_mvp(club.players)
+                    
                     embed = discord.Embed(
-                        title=f"📊 Rachad L3ERGONI — Auto Update",
+                        title=f"📊 New Match Detected — {last.score_for}-{last.score_against} vs {last.opponent}",
                         description=f"Division {club.division} • {club.wins}W {club.losses}L {club.draws}D",
-                        color=0x00ff00
+                        color=0x00ff00 if last.result == "W" else 0xff0000 if last.result == "L" else 0xffff00
                     )
                     embed.add_field(name="MVP", value=f"{motm.name} (Impact: {motm.impact_score})", inline=False)
                     await channel.send(embed=embed)
@@ -96,10 +137,8 @@ class RachadBot(commands.Bot):
         self._session_active = True
         self.darija.set_personality("casablanca")
         
-        # Initial scrape
         await interaction.response.defer()
-        club = await self.scraper.scrape_club()
-        self.current_club = club
+        await self._ensure_scraped()
         
         embed = discord.Embed(
             title="🔥 ROAST MODE ACTIVATED",
@@ -123,32 +162,29 @@ class RachadBot(commands.Bot):
         await interaction.response.send_message(embed=embed)
     
     @app_commands.command(name="stats", description="Player stats + premium card")
-    @app_commands.describe(player="Player name (or @mention)")
+    @app_commands.describe(player="Player name, PSN, or nickname")
     async def slash_stats(self, interaction: discord.Interaction, player: str):
         await interaction.response.defer()
+        await self._ensure_scraped()
         
-        if not self.current_club:
-            self.current_club = await self.scraper.scrape_club()
-        
-        target = None
-        for p in self.current_club.players:
-            if player.lower() in p.name.lower():
-                target = p
-                break
-        
+        target = self._find_player(player)
         if not target:
             await interaction.followup.send(f"ما لقيتش player باسم {player} آ صاحبي.")
             return
         
-        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        squad_map = self._get_squad_map()
         pos = squad_map.get(target.name, {}).get("position", "CM")
         
-        # Generate card
-        card = self.imgen.generate_player_card(target, pos)
+        card = self.imgen.generate_player_card(target, pos, division=self.current_club.division)
         file = discord.File(card, filename=f"{target.name}_card.png")
         
-        # Darija interpretation
-        text = self.darija.generate(target, pos, roast_freq=0.3)  # More stats, less roast
+        # Use Darija interpretation instead of raw numbers
+        lines = [
+            StatsEngine.interpret_stat("rating", target.rating_pg, pos),
+            StatsEngine.interpret_stat("pass_accuracy", target.pass_accuracy, pos),
+            StatsEngine.interpret_stat("impact_score", target.impact_score, pos),
+        ]
+        text = "\n".join(lines)
         
         embed = discord.Embed(
             title=f"📊 {target.name} — {pos}",
@@ -162,24 +198,17 @@ class RachadBot(commands.Bot):
         await interaction.followup.send(embed=embed, file=file)
     
     @app_commands.command(name="roastplayer", description="Roast a specific player")
-    @app_commands.describe(player="Player name")
+    @app_commands.describe(player="Player name, PSN, or nickname")
     async def slash_roastplayer(self, interaction: discord.Interaction, player: str):
         await interaction.response.defer()
+        await self._ensure_scraped()
         
-        if not self.current_club:
-            self.current_club = await self.scraper.scrape_club()
-        
-        target = None
-        for p in self.current_club.players:
-            if player.lower() in p.name.lower():
-                target = p
-                break
-        
+        target = self._find_player(player)
         if not target:
             await interaction.followup.send(f"ما لقيتش {player} فالفريق.")
             return
         
-        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        squad_map = self._get_squad_map()
         pos = squad_map.get(target.name, {}).get("position", "CM")
         
         roast = self.darija.roast(target, pos)
@@ -194,14 +223,12 @@ class RachadBot(commands.Bot):
         
         await interaction.followup.send(embed=embed, file=file)
     
-    @app_commands.command(name="mvp", description="MVP of last 5 matches / season")
+    @app_commands.command(name="mvp", description="MVP of the season")
     async def slash_mvp(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        await self._ensure_scraped()
         
-        if not self.current_club:
-            self.current_club = await self.scraper.scrape_club()
-        
-        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        squad_map = self._get_squad_map()
         self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
         
         mvp = StatsEngine.get_mvp(self.current_club.players)
@@ -224,11 +251,9 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="worst", description="Worst player of the week")
     async def slash_worst(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        await self._ensure_scraped()
         
-        if not self.current_club:
-            self.current_club = await self.scraper.scrape_club()
-        
-        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        squad_map = self._get_squad_map()
         self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
         
         worst = StatsEngine.get_worst(self.current_club.players)
@@ -247,11 +272,9 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="who_sold", description="Who sold the match")
     async def slash_who_sold(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        await self._ensure_scraped()
         
-        if not self.current_club:
-            self.current_club = await self.scraper.scrape_club()
-        
-        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        squad_map = self._get_squad_map()
         self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
         
         fraud = StatsEngine.get_fraud(self.current_club.players)
@@ -270,11 +293,9 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="carry_detector", description="Who is carrying the team")
     async def slash_carry(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        await self._ensure_scraped()
         
-        if not self.current_club:
-            self.current_club = await self.scraper.scrape_club()
-        
-        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        squad_map = self._get_squad_map()
         self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
         
         carry = StatsEngine.get_carry(self.current_club.players)
@@ -291,24 +312,17 @@ class RachadBot(commands.Bot):
         await interaction.followup.send(embed=embed)
     
     @app_commands.command(name="fraud_check", description="Check if a player is fraud")
-    @app_commands.describe(player="Player name")
+    @app_commands.describe(player="Player name, PSN, or nickname")
     async def slash_fraud_check(self, interaction: discord.Interaction, player: str):
         await interaction.response.defer()
+        await self._ensure_scraped()
         
-        if not self.current_club:
-            self.current_club = await self.scraper.scrape_club()
-        
-        target = None
-        for p in self.current_club.players:
-            if player.lower() in p.name.lower():
-                target = p
-                break
-        
+        target = self._find_player(player)
         if not target:
             await interaction.followup.send(f"ما لقيتش {player}.")
             return
         
-        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        squad_map = self._get_squad_map()
         pos = squad_map.get(target.name, {}).get("position", "CM")
         
         fraud_threshold = 3.0
@@ -327,14 +341,11 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="ballon_dor", description="Ballon d'Or ranking")
     async def slash_ballon_dor(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        await self._ensure_scraped()
         
-        if not self.current_club:
-            self.current_club = await self.scraper.scrape_club()
-        
-        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        squad_map = self._get_squad_map()
         self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
         
-        # Sort by impact + clutch + goals
         ranked = sorted(self.current_club.players, 
                        key=lambda p: p.impact_score + p.clutch_score + p.goals * 2, 
                        reverse=True)
@@ -355,11 +366,9 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="ghost_detector", description="Detect inactive players")
     async def slash_ghost(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        await self._ensure_scraped()
         
-        if not self.current_club:
-            self.current_club = await self.scraper.scrape_club()
-        
-        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        squad_map = self._get_squad_map()
         self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
         
         ghost = StatsEngine.get_ghost(self.current_club.players)
@@ -378,11 +387,9 @@ class RachadBot(commands.Bot):
     @app_commands.command(name="pass_the_ball", description="Call out ball hog")
     async def slash_pass_ball(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        await self._ensure_scraped()
         
-        if not self.current_club:
-            self.current_club = await self.scraper.scrape_club()
-        
-        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        squad_map = self._get_squad_map()
         self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
         
         hog = StatsEngine.get_ball_hog(self.current_club.players)
@@ -399,7 +406,7 @@ class RachadBot(commands.Bot):
         await interaction.followup.send(embed=embed)
     
     @app_commands.command(name="leaderboard", description="Leaderboard with visual card")
-    @app_commands.describe(metric="Metric to rank by", period="Time period")
+    @app_commands.describe(metric="Metric to rank by")
     @app_commands.choices(metric=[
         app_commands.Choice(name="Impact Score", value="impact_score"),
         app_commands.Choice(name="Goals", value="goals"),
@@ -408,14 +415,11 @@ class RachadBot(commands.Bot):
         app_commands.Choice(name="Clutch", value="clutch_score"),
     ])
     async def slash_leaderboard(self, interaction: discord.Interaction, 
-                               metric: app_commands.Choice[str], 
-                               period: str = "all"):
+                               metric: app_commands.Choice[str]):
         await interaction.response.defer()
+        await self._ensure_scraped()
         
-        if not self.current_club:
-            self.current_club = await self.scraper.scrape_club()
-        
-        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        squad_map = self._get_squad_map()
         self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
         
         card = self.imgen.generate_leaderboard(self.current_club.players, metric.value)
@@ -423,7 +427,6 @@ class RachadBot(commands.Bot):
         
         embed = discord.Embed(
             title=f"📊 Leaderboard — {metric.name}",
-            description=f"Period: {period}",
             color=0x1e90ff
         )
         
@@ -433,18 +436,16 @@ class RachadBot(commands.Bot):
     @app_commands.describe(player1="First player", player2="Second player")
     async def slash_compare(self, interaction: discord.Interaction, player1: str, player2: str):
         await interaction.response.defer()
+        await self._ensure_scraped()
         
-        if not self.current_club:
-            self.current_club = await self.scraper.scrape_club()
-        
-        p1 = next((p for p in self.current_club.players if player1.lower() in p.name.lower()), None)
-        p2 = next((p for p in self.current_club.players if player2.lower() in p.name.lower()), None)
+        p1 = self._find_player(player1)
+        p2 = self._find_player(player2)
         
         if not p1 or not p2:
             await interaction.followup.send("ما لقيتش واحد من players. جرب أسماء أخرى.")
             return
         
-        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        squad_map = self._get_squad_map()
         pos1 = squad_map.get(p1.name, {}).get("position", "CM")
         pos2 = squad_map.get(p2.name, {}).get("position", "CM")
         
@@ -465,14 +466,32 @@ class RachadBot(commands.Bot):
         
         await interaction.followup.send(embed=embed)
     
+    @app_commands.command(name="lastmatch", description="Last match + result")
+    async def slash_lastmatch(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        await self._ensure_scraped()
+        
+        if not self.current_club.matches:
+            await interaction.followup.send("ما لقيتش match history. جرب /sync.")
+            return
+        
+        last = self.current_club.matches[0]
+        color = 0x00ff00 if last.result == "W" else 0xff0000 if last.result == "L" else 0xffff00
+        
+        embed = discord.Embed(
+            title=f"⚽ Last Match: {last.score_for} - {last.score_against} vs {last.opponent}",
+            description=f"Result: {last.result} • {last.date.strftime('%d/%m/%Y')}",
+            color=color
+        )
+        
+        await interaction.followup.send(embed=embed)
+    
     @app_commands.command(name="clubinfo", description="Club overview + match report card")
     async def slash_clubinfo(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        await self._ensure_scraped()
         
-        if not self.current_club:
-            self.current_club = await self.scraper.scrape_club()
-        
-        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        squad_map = self._get_squad_map()
         self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
         
         motm = StatsEngine.get_mvp(self.current_club.players)
@@ -493,6 +512,41 @@ class RachadBot(commands.Bot):
         text = self.darija.banter()
         embed = discord.Embed(title="☕ Cafeteria Banter", description=text, color=0xffa500)
         await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="drama", description="Drama / polemique")
+    async def slash_drama(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        await self._ensure_scraped()
+        
+        names = [p.name for p in self.current_club.players[:2]] if self.current_club.players else ["Player1", "Player2"]
+        text = self.darija.drama(names)
+        embed = discord.Embed(title="🍿 Drama Alert", description=text, color=0xff1493)
+        await interaction.followup.send(embed=embed)
+    
+    @app_commands.command(name="meme", description="Meme b Darija")
+    @app_commands.describe(player="Player name (optional)")
+    async def slash_meme(self, interaction: discord.Interaction, player: str = None):
+        target = player or "Player"
+        text = self.darija.meme(target)
+        embed = discord.Embed(title="😂 Darija Meme", description=text, color=0x00ff7f)
+        await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="transfer", description="Transfer rumor")
+    @app_commands.describe(player="Player name")
+    async def slash_transfer(self, interaction: discord.Interaction, player: str):
+        text = self.darija.transfer(player)
+        embed = discord.Embed(title="📰 Transfer News", description=text, color=0x1e90ff)
+        await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="predict", description="Match prediction")
+    async def slash_predict(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        await self._ensure_scraped()
+        
+        names = [p.name for p in self.current_club.players[:2]] if self.current_club.players else ["Player1", "Player2"]
+        text = self.darija.predict(names)
+        embed = discord.Embed(title="🔮 Match Prediction", description=text, color=0x9400d3)
+        await interaction.followup.send(embed=embed)
     
     @app_commands.command(name="personality", description="Switch bot personality")
     @app_commands.describe(mode="Personality mode")
@@ -551,8 +605,13 @@ class RachadBot(commands.Bot):
             ("/pass_the_ball", "Call out ball hog"),
             ("/leaderboard [metric]", "Visual leaderboard"),
             ("/compare [p1] [p2]", "1v1 comparison"),
+            ("/lastmatch", "Last match result"),
             ("/clubinfo", "Club overview card"),
             ("/banter", "Football trash talk"),
+            ("/drama", "Drama / polemique"),
+            ("/meme [player]", "Meme b Darija"),
+            ("/transfer [player]", "Transfer rumor"),
+            ("/predict", "Match prediction"),
             ("/personality [mode]", "Switch personality"),
             ("/sync", "Manual sync from ProClubsTracker"),
         ]
@@ -561,16 +620,6 @@ class RachadBot(commands.Bot):
             embed.add_field(name=cmd, value=desc, inline=False)
         
         await interaction.response.send_message(embed=embed)
-
-# Legacy text commands for compatibility
-    @commands.command(name="roast")
-    async def cmd_roast(self, ctx):
-        await self.slash_roast.callback(self, ctx)
-    
-    @commands.command(name="stats")
-    async def cmd_stats(self, ctx, *, player: str):
-        # Create a fake interaction or call directly
-        pass
 
 def main():
     bot = RachadBot()
