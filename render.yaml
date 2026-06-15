@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: rachad-l3ergoni-bot
+    runtime: docker
+    plan: standard
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: PCT_CLUB_URL
+        value: https://proclubstracker.com/club/1427607?platform=common-gen5&div=6
+      - key: PLAYWRIGHT_HEADLESS
+        value: "true"
+      - key: PLAYWRIGHT_STEALTH
+        value: "true"
+    disk:
+      name: data
+      mountPath: /app/data
+      sizeGB: 1
