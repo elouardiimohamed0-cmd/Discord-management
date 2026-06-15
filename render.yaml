@@ -8,12 +8,34 @@ services:
         sync: false
       - key: DISCORD_GUILD_ID
         sync: false
+      - key: DISCORD_STATS_CHANNEL_ID
+        sync: false
+      - key: DISCORD_ROAST_CHANNEL_ID
+        sync: false
       - key: PCT_CLUB_URL
         value: https://proclubstracker.com/club/1427607?platform=common-gen5&div=6
+      - key: PCT_PLATFORM
+        value: common-gen5
       - key: PLAYWRIGHT_HEADLESS
         value: "true"
       - key: PLAYWRIGHT_STEALTH
         value: "true"
+      - key: PORT
+        value: "8080"
+      - key: SCRAPE_INTERVAL_MINUTES
+        value: "5"
+      - key: DEFAULT_PERSONALITY
+        value: casablanca
+      - key: ROAST_FREQUENCY
+        value: "0.95"
+      - key: SQUAD_FILE
+        value: squad.json
+      - key: MATCH_DB
+        value: matches.db
+      - key: MEMORY_DB
+        value: memory.db
+      - key: ASSETS_DIR
+        value: assets
     disk:
       name: data
       mountPath: /app/data
