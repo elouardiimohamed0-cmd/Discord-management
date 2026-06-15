@@ -1,293 +1,339 @@
-"""
-Rachad L3ERGONI Bot — Image Generator v3
-Premium dark cards. FUT/Futbin inspired. Pure PIL.
-"""
-
-import io
-import math
 import os
-from typing import Dict, List, Optional, Tuple
-
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
-
+import io
+import random
+from typing import List, Optional, Tuple
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+from models import PlayerStats, ClubStats
 
 class ImageGenerator:
-    def __init__(self, assets_path: str = "assets"):
-        self.assets_path = assets_path
-        self._photo_cache: Dict[str, Image.Image] = {}
-        self._fonts = self._load_fonts()
-
-    def _load_fonts(self) -> Dict[str, ImageFont.FreeTypeFont]:
-        paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/System/Library/Fonts/Helvetica.ttc",
-            "C:/Windows/Fonts/arial.ttf",
+    def __init__(self, assets_dir: str = "assets"):
+        self.assets_dir = assets_dir
+        self.fonts_dir = os.path.join(assets_dir, "fonts")
+        self.bg_dir = os.path.join(assets_dir, "backgrounds")
+        self.players_dir = os.path.join(assets_dir, "players")
+        
+        # Default colors
+        self.GOLD = (255, 215, 0)
+        self.SILVER = (192, 192, 192)
+        self.BRONZE = (205, 127, 50)
+        self.WHITE = (255, 255, 255)
+        self.BLACK = (0, 0, 0)
+        self.RED = (220, 20, 60)
+        self.GREEN = (50, 205, 50)
+        self.ORANGE = (255, 140, 0)
+        self.BLUE = (30, 144, 255)
+        self.DARK_BG = (15, 15, 25)
+        self.CARD_BG = (25, 25, 40)
+    
+    def _get_font(self, size: int, bold: bool = False):
+        # Try multiple font paths
+        candidates = [
+            os.path.join(self.fonts_dir, "Cairo-Bold.ttf" if bold else "Cairo-Regular.ttf"),
+            os.path.join(self.fonts_dir, "NotoSansArabic-Bold.ttf" if bold else "NotoSansArabic-Regular.ttf"),
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         ]
-        bold = regular = None
-        for p in paths:
-            if os.path.exists(p):
-                try:
-                    if "Bold" in p or "-Bold" in p:
-                        bold = ImageFont.truetype(p, 36) if bold is None else bold
-                    else:
-                        regular = ImageFont.truetype(p, 18) if regular is None else regular
-                except Exception:
-                    pass
-        default = ImageFont.load_default()
-        fonts = {
-            "header": bold or default,
-            "subheader": bold or default,
-            "body": regular or default,
-            "small": regular or default,
-            "rating": bold or default,
-        }
-        if bold:
-            try:
-                fonts["subheader"] = ImageFont.truetype(bold.path, 26)
-                fonts["rating"] = ImageFont.truetype(bold.path, 52)
-            except Exception:
-                pass
-        if regular:
-            try:
-                fonts["small"] = ImageFont.truetype(regular.path, 14)
-                fonts["body"] = ImageFont.truetype(regular.path, 20)
-            except Exception:
-                pass
-        return fonts
-
-    def _gradient(self, w: int, h: int, colors: List[Tuple[int, int, int]]) -> Image.Image:
-        img = Image.new("RGB", (w, h))
+        for path in candidates:
+            if os.path.exists(path):
+                return ImageFont.truetype(path, size)
+        return ImageFont.load_default()
+    
+    def _create_gradient_bg(self, size: Tuple[int, int], color1: Tuple, color2: Tuple) -> Image:
+        img = Image.new('RGB', size)
         draw = ImageDraw.Draw(img)
-        for y in range(h):
-            ratio = y / h
-            r = int(colors[0][0] * (1 - ratio) + colors[-1][0] * ratio)
-            g = int(colors[0][1] * (1 - ratio) + colors[-1][1] * ratio)
-            b = int(colors[0][2] * (1 - ratio) + colors[-1][2] * ratio)
-            draw.line([(0, y), (w, y)], fill=(r, g, b))
+        for y in range(size[1]):
+            r = int(color1[0] + (color2[0] - color1[0]) * y / size[1])
+            g = int(color1[1] + (color2[1] - color1[1]) * y / size[1])
+            b = int(color1[2] + (color2[2] - color1[2]) * y / size[1])
+            draw.line([(0, y), (size[0], y)], fill=(r, g, b))
         return img
-
-    def _glow_bar(self, draw: ImageDraw.Draw, x: int, y: int, w: int, h: int, val: float, maxv: float, color: Tuple[int, int, int]):
-        ratio = min(val / max(maxv, 1), 1.0)
-        fw = int(w * ratio)
-        draw.rounded_rectangle([x, y, x + w, y + h], radius=h // 2, fill=(35, 35, 45))
-        if fw > 0:
-            draw.rounded_rectangle([x, y, x + fw, y + h], radius=h // 2, fill=color)
-        if fw > 2:
-            glow = (min(color[0] + 60, 255), min(color[1] + 60, 255), min(color[2] + 60, 255))
-            draw.line([(x, y), (x + fw, y)], fill=glow, width=2)
-
-    def _hexagon(self, draw: ImageDraw.Draw, cx: int, cy: int, size: int, color: Tuple[int, int, int], text: str):
-        pts = []
-        for i in range(6):
-            ang = math.pi * (60 * i - 30) / 180
-            pts.append((cx + size * 0.5 * (1 + 0.9 * math.cos(ang)), cy + size * 0.5 * (1 + 0.9 * math.sin(ang))))
-        draw.polygon(pts, fill=color, outline=(255, 255, 255))
-        bbox = draw.textbbox((0, 0), text, font=self._fonts["rating"])
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        draw.text((cx - tw // 2, cy - th // 2), text, fill=(255, 255, 255), font=self._fonts["rating"])
-
-    def _load_photo(self, name: str) -> Optional[Image.Image]:
-        if name in self._photo_cache:
-            return self._photo_cache[name]
-        variants = {name, name.lower(), name.upper(), name.replace(" ", "_"), name.replace(" ", ""), name.replace(" ", "-")}
-        for ext in [".png", ".jpg", ".jpeg", ".webp"]:
-            for v in variants:
-                path = os.path.join(self.assets_path, f"{v}{ext}")
-                if os.path.exists(path):
-                    try:
-                        img = Image.open(path).convert("RGBA")
-                        self._photo_cache[name] = img
-                        return img
-                    except Exception:
-                        continue
-        return None
-
-    def _round_mask(self, img: Image.Image, r: int) -> Image.Image:
-        mask = Image.new("L", img.size, 0)
-        ImageDraw.Draw(mask).rounded_rectangle([0, 0, img.width, img.height], radius=r, fill=255)
-        out = img.copy()
-        if out.mode != "RGBA":
-            out = out.convert("RGBA")
-        out.putalpha(mask)
-        return out
-
-    def _tier_colors(self, rating: float) -> Tuple[List[Tuple[int, int, int]], str, Tuple[int, int, int]]:
-        if rating >= 8.5:
-            return ([(255, 215, 0), (255, 165, 0), (200, 120, 0)], "ELITE", (255, 215, 0))
-        elif rating >= 7.5:
-            return ([(0, 255, 255), (0, 200, 255), (80, 140, 255)], "PRO", (0, 220, 255))
-        elif rating >= 6.5:
-            return ([(180, 180, 180), (140, 140, 140), (100, 100, 100)], "STANDARD", (180, 180, 180))
+    
+    def _add_glow(self, draw, pos, radius, color, intensity=0.3):
+        # Simplified glow effect
+        pass
+    
+    def _draw_stat_bar(self, draw, x, y, width, height, value, max_val, color, bg_color=(40, 40, 55)):
+        # Background
+        draw.rectangle([x, y, x + width, y + height], fill=bg_color, outline=(60, 60, 75), width=1)
+        # Fill
+        fill_width = int((value / max_val) * width) if max_val > 0 else 0
+        if fill_width > 0:
+            draw.rectangle([x, y, x + fill_width, y + height], fill=color)
+    
+    def _get_player_color(self, player: PlayerStats) -> Tuple:
+        if player.impact_score > 80:
+            return self.GOLD
+        elif player.impact_score > 60:
+            return self.SILVER
+        elif player.impact_score > 40:
+            return self.BLUE
         else:
-            return ([(180, 50, 50), (140, 40, 40), (100, 30, 30)], "BRONZE", (200, 60, 60))
-
-    def _pos_color(self, pos: str) -> Tuple[int, int, int]:
-        pmap = {
-            "GK": (0, 150, 255), "CB": (0, 200, 100), "LB": (0, 200, 100), "RB": (0, 200, 100),
-            "CDM": (0, 180, 100), "CM": (255, 200, 0), "CAM": (255, 180, 0),
-            "LM": (255, 200, 0), "RM": (255, 200, 0),
-            "LW": (255, 100, 100), "RW": (255, 100, 100), "ST": (255, 80, 80),
-        }
-        return pmap.get(pos.upper(), (200, 200, 200))
-
-    def generate_player_card(self, name: str, stats: dict, info: dict) -> Image.Image:
-        w, h = 900, 1100
-        rating = stats.get("rating", 6.0)
-        grad, tier, accent = self._tier_colors(rating)
-        card = self._gradient(w, h, grad)
-        draw = ImageDraw.Draw(card)
-        pos = info.get("position", "CM").upper()
-        pcolor = self._pos_color(pos)
-
-        # Photo
-        photo = self._load_photo(name)
-        if photo:
-            ps = 320
-            photo = photo.resize((ps, ps), Image.Resampling.LANCZOS)
-            photo = self._round_mask(photo, 40)
-            px = (w - ps) // 2
-            py = 70
-            card.paste(photo, (px, py), photo)
-
-        # Name / Position / Tier
-        nick = info.get("nickname", name)
-        draw.text((w // 2, 430), nick, fill=(255, 255, 255), font=self._fonts["header"], anchor="mm")
-        draw.text((w // 2, 480), f"{pos} | {tier}", fill=pcolor, font=self._fonts["subheader"], anchor="mm")
-
-        # Hex rating
-        self._hexagon(draw, w // 2, 560, 140, pcolor, f"{rating:.1f}")
-
-        # Stat bars
-        bars = [
-            ("Goals", stats.get("goals", 0), 20, (255, 100, 100)),
-            ("Assists", stats.get("assists", 0), 15, (100, 255, 100)),
-            ("Pass Acc", stats.get("pass_accuracy", 0), 100, (100, 200, 255)),
-            ("Tackles", stats.get("tackles", 0), 20, (255, 200, 100)),
-            ("Impact", stats.get("impact_score", 0), 50, accent),
+            return self.RED
+    
+    def generate_player_card(self, player: PlayerStats, position: str = "CM", 
+                            club_name: str = "Rachad L3ERGONI") -> io.BytesIO:
+        W, H = 600, 900
+        img = self._create_gradient_bg((W, H), (20, 20, 35), (10, 10, 20))
+        draw = ImageDraw.Draw(img)
+        
+        # Decorative elements
+        draw.rectangle([20, 20, W-20, H-20], outline=(255, 255, 255, 50), width=2)
+        
+        # Club name at top
+        font_small = self._get_font(20)
+        font_medium = self._get_font(28, bold=True)
+        font_large = self._get_font(42, bold=True)
+        font_stat = self._get_font(22)
+        
+        # Header
+        draw.text((W//2, 50), club_name, fill=self.WHITE, font=font_medium, anchor="mm")
+        draw.text((W//2, 90), f"Division {6} • Pro Clubs Tracker", fill=self.SILVER, font=font_small, anchor="mm")
+        
+        # Player name
+        draw.text((W//2, 160), player.name, fill=self.GOLD, font=font_large, anchor="mm")
+        draw.text((W//2, 210), position.upper(), fill=self.SILVER, font=font_medium, anchor="mm")
+        
+        # Rating circle
+        rating_color = self.GREEN if player.rating_pg >= 7 else self.ORANGE if player.rating_pg >= 5 else self.RED
+        draw.ellipse([W//2-60, 250, W//2+60, 370], fill=rating_color, outline=self.WHITE, width=3)
+        draw.text((W//2, 310), str(round(player.rating_pg, 1)), fill=self.WHITE, font=font_large, anchor="mm")
+        
+        # Stats section
+        y_start = 400
+        stats = [
+            ("Games", player.games, 100, self.WHITE),
+            ("Goals", player.goals, 50, self.GREEN),
+            ("Assists", player.assists, 50, self.BLUE),
+            ("Pass %", round(player.pass_accuracy, 1), 100, self.ORANGE),
+            ("Tackles", player.tackles, 50, self.SILVER),
+            ("Interceptions", player.interceptions, 50, self.SILVER),
+            ("Poss Lost", player.possession_losses, 50, self.RED),
+            ("MOTM", player.motm, 20, self.GOLD),
         ]
-        by = 720
-        for label, value, maxv, color in bars:
-            draw.text((60, by), label, fill=(255, 255, 255), font=self._fonts["body"])
-            self._glow_bar(draw, 240, by + 5, 580, 28, value, maxv, color)
-            draw.text((840, by), str(value), fill=(255, 255, 255), font=self._fonts["body"])
-            by += 60
-
+        
+        for i, (label, val, max_v, color) in enumerate(stats):
+            y = y_start + i * 55
+            draw.text((40, y), label, fill=self.SILVER, font=font_stat)
+            self._draw_stat_bar(draw, 200, y, 300, 30, val, max_v, color)
+            draw.text((520, y), str(val), fill=self.WHITE, font=font_stat)
+        
+        # Advanced metrics
+        y_adv = y_start + len(stats) * 55 + 30
+        draw.text((W//2, y_adv), "ADVANCED METRICS", fill=self.GOLD, font=font_medium, anchor="mm")
+        
+        adv_stats = [
+            ("Impact", round(player.impact_score, 1)),
+            ("Clutch", round(player.clutch_score, 1)),
+            ("Error", round(player.error_score, 1)),
+            ("Throwing", round(player.throwing_score, 1)),
+        ]
+        
+        for i, (label, val) in enumerate(adv_stats):
+            x = 80 + (i % 2) * 250
+            y = y_adv + 40 + (i // 2) * 50
+            color = self.RED if label in ["Error", "Throwing"] and val > 5 else self.GREEN
+            draw.text((x, y), f"{label}: {val}", fill=color, font=font_stat)
+        
         # Footer
-        impact = stats.get("impact_score", 0)
-        draw.text((w // 2, 1040), f"Impact Score: {impact:.1f}", fill=(255, 255, 255), font=self._fonts["subheader"], anchor="mm")
-        return card
-
-    def generate_motm_card(self, name: str, stats: dict, info: dict) -> Image.Image:
-        w, h = 900, 1100
-        grad = [(255, 215, 0), (255, 165, 0), (200, 120, 0)]
-        card = self._gradient(w, h, grad)
-        draw = ImageDraw.Draw(card)
-
-        draw.text((w // 2, 80), "👑 MOTM", fill=(255, 215, 0), font=self._fonts["header"], anchor="mm")
-
-        photo = self._load_photo(name)
-        if photo:
-            ps = 300
-            photo = photo.resize((ps, ps), Image.Resampling.LANCZOS)
-            photo = self._round_mask(photo, 40)
-            card.paste(photo, ((w - ps) // 2, 160), photo)
-
-        nick = info.get("nickname", name)
-        draw.text((w // 2, 520), nick, fill=(255, 255, 255), font=self._fonts["header"], anchor="mm")
-
-        rating = stats.get("rating", 6.0)
-        self._hexagon(draw, w // 2, 600, 140, (255, 215, 0), f"{rating:.1f}")
-
-        draw.text((w // 2, 780), f"Goals: {stats.get('goals', 0)}", fill=(255, 255, 255), font=self._fonts["subheader"], anchor="mm")
-        draw.text((w // 2, 830), f"Assists: {stats.get('assists', 0)}", fill=(255, 255, 255), font=self._fonts["subheader"], anchor="mm")
-        draw.text((w // 2, 880), f"Impact: {stats.get('impact_score', 0):.1f}", fill=(255, 255, 255), font=self._fonts["subheader"], anchor="mm")
-        return card
-
-    def generate_match_report_card(self, match_data: dict) -> Image.Image:
-        w, h = 900, 700
-        result = match_data.get("result", "draw")
-        colors = {
-            "win": [(0, 150, 50), (0, 100, 30)],
-            "loss": [(150, 30, 30), (100, 20, 20)],
-            "draw": [(150, 150, 50), (100, 100, 30)],
-        }.get(result, [(80, 80, 80), (50, 50, 50)])
-        card = self._gradient(w, h, colors)
-        draw = ImageDraw.Draw(card)
-
-        tg = match_data.get("team_goals", 0)
-        og = match_data.get("opponent_goals", 0)
-        opp = match_data.get("opponent", "Unknown")
-
-        draw.text((w // 2, 120), f"{tg} - {og}", fill=(255, 255, 255), font=self._fonts["header"], anchor="mm")
-        draw.text((w // 2, 200), f"vs {opp}", fill=(220, 220, 220), font=self._fonts["subheader"], anchor="mm")
-        draw.text((w // 2, 260), result.upper(), fill=(255, 255, 255), font=self._fonts["header"], anchor="mm")
-
-        pstats = match_data.get("player_stats", {})
-        y = 360
-        for i, (pname, ps) in enumerate(list(pstats.items())[:6]):
-            line = f"{pname}: {ps.get('goals', 0)}G {ps.get('assists', 0)}A | ⭐{ps.get('rating', 6.0):.1f}"
-            draw.text((60, y), line, fill=(255, 255, 255), font=self._fonts["body"])
-            y += 50
-        return card
-
-    def generate_leaderboard_card(self, leaderboard: List[Tuple[str, dict]], period: str) -> Image.Image:
-        w, h = 900, 1100
-        dark = [(25, 25, 35), (15, 15, 25), (8, 8, 15)]
-        card = self._gradient(w, h, dark)
-        draw = ImageDraw.Draw(card)
-
-        draw.text((w // 2, 60), f"Leaderboard — {period.upper()}", fill=(255, 215, 0), font=self._fonts["header"], anchor="mm")
-
-        y = 160
-        for i, (name, stats) in enumerate(leaderboard[:10]):
-            rc = (255, 215, 0) if i == 0 else (200, 200, 200) if i == 1 else (205, 127, 50) if i == 2 else (150, 150, 150)
-            draw.text((60, y), f"#{i+1}", fill=rc, font=self._fonts["subheader"])
-            draw.text((140, y), name, fill=(255, 255, 255), font=self._fonts["body"])
-            draw.text((560, y), f"Impact: {stats.get('impact_score', 0):.1f}", fill=(255, 255, 255), font=self._fonts["body"])
-            draw.text((760, y), f"{stats.get('rating', 0):.1f}⭐", fill=(255, 215, 0), font=self._fonts["body"])
-            y += 80
-        return card
-
-    def generate_comparison_card(self, n1: str, s1: dict, i1: dict, n2: str, s2: dict, i2: dict) -> Image.Image:
-        w, h = 1100, 900
-        dark = [(25, 25, 35), (15, 15, 25), (8, 8, 15)]
-        card = self._gradient(w, h, dark)
-        draw = ImageDraw.Draw(card)
-
-        nick1 = i1.get("nickname", n1)
-        nick2 = i2.get("nickname", n2)
-
-        draw.text((275, 60), nick1, fill=(255, 100, 100), font=self._fonts["header"], anchor="mm")
-        draw.text((825, 60), nick2, fill=(100, 100, 255), font=self._fonts["header"], anchor="mm")
-        draw.text((550, 60), "VS", fill=(255, 255, 255), font=self._fonts["header"], anchor="mm")
-
-        comps = [
-            ("Goals", s1.get("goals", 0), s2.get("goals", 0)),
-            ("Assists", s1.get("assists", 0), s2.get("assists", 0)),
-            ("Rating", s1.get("rating", 0), s2.get("rating", 0)),
-            ("Impact", s1.get("impact_score", 0), s2.get("impact_score", 0)),
-            ("Pass %", s1.get("pass_accuracy", 0), s2.get("pass_accuracy", 0)),
-        ]
-
-        y = 180
-        for label, v1, v2 in comps:
-            c1 = (0, 255, 120) if v1 > v2 else (255, 255, 255)
-            c2 = (0, 255, 120) if v2 > v1 else (255, 255, 255)
-            draw.text((275, y), f"{v1}", fill=c1, font=self._fonts["subheader"], anchor="mm")
-            draw.text((550, y), label, fill=(180, 180, 180), font=self._fonts["body"], anchor="mm")
-            draw.text((825, y), f"{v2}", fill=c2, font=self._fonts["subheader"], anchor="mm")
-            y += 100
-        return card
-
-    def to_bytes(self, img: Image.Image) -> bytes:
+        draw.text((W//2, H-40), "Rachad L3ERGONI Bot • ProClubsTracker", fill=(100, 100, 120), font=font_small, anchor="mm")
+        
         buf = io.BytesIO()
-        img.convert("RGB").save(buf, format="PNG", optimize=True)
+        img.save(buf, format="PNG")
         buf.seek(0)
-        return buf.getvalue()
-
-
-def get_image_generator(assets_path: str = "assets") -> ImageGenerator:
-    return ImageGenerator(assets_path)
+        return buf
+    
+    def generate_motm_card(self, player: PlayerStats, position: str = "CM") -> io.BytesIO:
+        W, H = 600, 800
+        img = self._create_gradient_bg((W, H), (40, 30, 10), (20, 15, 5))
+        draw = ImageDraw.Draw(img)
+        
+        font_large = self._get_font(48, bold=True)
+        font_medium = self._get_font(32, bold=True)
+        font_small = self._get_font(22)
+        
+        # MOTM Header
+        draw.text((W//2, 80), "MAN OF THE MATCH", fill=self.GOLD, font=font_large, anchor="mm")
+        draw.text((W//2, 140), "★ ★ ★", fill=self.GOLD, font=font_medium, anchor="mm")
+        
+        # Player
+        draw.text((W//2, 220), player.name, fill=self.WHITE, font=font_large, anchor="mm")
+        draw.text((W//2, 280), position.upper(), fill=self.SILVER, font=font_medium, anchor="mm")
+        
+        # Big rating
+        draw.ellipse([W//2-80, 320, W//2+80, 480], fill=self.GOLD, outline=self.WHITE, width=4)
+        draw.text((W//2, 400), str(round(player.rating_pg, 1)), fill=self.BLACK, font=font_large, anchor="mm")
+        
+        # Key stats
+        stats_y = 520
+        draw.text((W//2, stats_y), f"Goals: {player.goals}  |  Assists: {player.assists}", 
+                 fill=self.WHITE, font=font_medium, anchor="mm")
+        draw.text((W//2, stats_y+50), f"Impact: {round(player.impact_score, 1)}  |  Clutch: {round(player.clutch_score, 1)}", 
+                 fill=self.SILVER, font=font_small, anchor="mm")
+        
+        draw.text((W//2, H-60), "Rachad L3ERGONI • MOTM", fill=(150, 150, 150), font=font_small, anchor="mm")
+        
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
+    
+    def generate_roast_card(self, player: PlayerStats, roast_text: str, position: str = "CM") -> io.BytesIO:
+        W, H = 700, 500
+        img = self._create_gradient_bg((W, H), (35, 10, 10), (20, 5, 5))
+        draw = ImageDraw.Draw(img)
+        
+        font_large = self._get_font(36, bold=True)
+        font_medium = self._get_font(24)
+        font_roast = self._get_font(20)
+        
+        # Header
+        draw.text((W//2, 50), "ROAST REPORT", fill=self.RED, font=font_large, anchor="mm")
+        draw.text((W//2, 100), f"{player.name} • {position.upper()}", fill=self.WHITE, font=font_medium, anchor="mm")
+        
+        # Rating badge
+        rating_color = self.RED if player.rating_pg < 5 else self.ORANGE if player.rating_pg < 7 else self.GREEN
+        draw.rounded_rectangle([50, 140, 150, 240], radius=10, fill=rating_color)
+        draw.text((100, 190), str(round(player.rating_pg, 1)), fill=self.WHITE, font=font_large, anchor="mm")
+        
+        # Stats column
+        stats = [
+            f"Goals: {player.goals}",
+            f"Assists: {player.assists}",
+            f"Pass: {round(player.pass_accuracy, 1)}%",
+            f"Poss Lost: {player.possession_losses}",
+            f"Impact: {round(player.impact_score, 1)}",
+            f"Throwing: {round(player.throwing_score, 1)}",
+        ]
+        for i, s in enumerate(stats):
+            draw.text((180, 150 + i * 30), s, fill=self.SILVER, font=font_roast)
+        
+        # Roast text box
+        draw.rounded_rectangle([50, 280, W-50, H-50], radius=15, fill=(30, 10, 10), outline=self.RED, width=2)
+        
+        # Wrap text
+        words = roast_text.split()
+        lines = []
+        line = []
+        for word in words:
+            line.append(word)
+            if len(" ".join(line)) > 50:
+                lines.append(" ".join(line[:-1]))
+                line = [line[-1]]
+        if line:
+            lines.append(" ".join(line))
+        
+        y = 310
+        for line in lines[:8]:  # Max 8 lines
+            draw.text((W//2, y), line, fill=self.WHITE, font=font_roast, anchor="mm")
+            y += 28
+        
+        draw.text((W//2, H-25), "Rachad L3ERGONI Bot", fill=(100, 100, 100), font=font_roast, anchor="mm")
+        
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
+    
+    def generate_leaderboard(self, players: List[PlayerStats], metric: str = "impact_score") -> io.BytesIO:
+        W, H = 800, 600 + len(players) * 60
+        img = self._create_gradient_bg((W, H), (15, 15, 25), (10, 10, 15))
+        draw = ImageDraw.Draw(img)
+        
+        font_large = self._get_font(36, bold=True)
+        font_medium = self._get_font(24, bold=True)
+        font_small = self._get_font(20)
+        
+        # Title
+        draw.text((W//2, 40), f"LEADERBOARD — {metric.upper().replace('_', ' ')}", 
+                 fill=self.GOLD, font=font_large, anchor="mm")
+        
+        # Headers
+        headers = ["#", "Player", "Games", "Goals", "Assists", "Rating", metric.replace('_', ' ').title()]
+        x_positions = [40, 100, 280, 380, 480, 580, 680]
+        
+        for i, h in enumerate(headers):
+            draw.text((x_positions[i], 100), h, fill=self.SILVER, font=font_medium)
+        
+        # Sort players
+        sorted_players = sorted(players, key=lambda p: getattr(p, metric, 0), reverse=True)
+        
+        for idx, p in enumerate(sorted_players[:10]):
+            y = 150 + idx * 55
+            color = self.GOLD if idx == 0 else self.SILVER if idx == 1 else self.BRONZE if idx == 2 else self.WHITE
+            
+            # Rank
+            draw.text((x_positions[0], y), str(idx+1), fill=color, font=font_medium)
+            # Name
+            draw.text((x_positions[1], y), p.name[:15], fill=self.WHITE, font=font_small)
+            # Stats
+            draw.text((x_positions[2], y), str(p.games), fill=self.SILVER, font=font_small)
+            draw.text((x_positions[3], y), str(p.goals), fill=self.SILVER, font=font_small)
+            draw.text((x_positions[4], y), str(p.assists), fill=self.SILVER, font=font_small)
+            draw.text((x_positions[5], y), str(round(p.rating_pg, 1)), fill=self.SILVER, font=font_small)
+            draw.text((x_positions[6], y), str(round(getattr(p, metric, 0), 1)), fill=color, font=font_small)
+            
+            # Separator
+            draw.line([(40, y+35), (W-40, y+35)], fill=(40, 40, 50), width=1)
+        
+        draw.text((W//2, H-30), "Rachad L3ERGONI Bot • ProClubsTracker", fill=(80, 80, 90), font=font_small, anchor="mm")
+        
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
+    
+    def generate_match_report(self, club: ClubStats, motm: PlayerStats) -> io.BytesIO:
+        W, H = 800, 700
+        img = self._create_gradient_bg((W, H), (20, 25, 35), (10, 15, 20))
+        draw = ImageDraw.Draw(img)
+        
+        font_large = self._get_font(40, bold=True)
+        font_medium = self._get_font(28, bold=True)
+        font_small = self._get_font(20)
+        
+        # Header
+        draw.text((W//2, 50), club.club_name, fill=self.WHITE, font=font_large, anchor="mm")
+        draw.text((W//2, 100), f"Division {club.division} • Skill Rating {club.skill_rating}", 
+                 fill=self.SILVER, font=font_small, anchor="mm")
+        
+        # Record
+        draw.text((W//2, 160), f"{club.wins}W — {club.losses}L — {club.draws}D", 
+                 fill=self.GOLD, font=font_medium, anchor="mm")
+        
+        # Win rate bar
+        total = club.wins + club.losses + club.draws
+        if total > 0:
+            win_pct = club.wins / total
+            draw.rectangle([100, 220, 700, 260], fill=(40, 40, 50))
+            draw.rectangle([100, 220, 100 + int(600 * win_pct), 260], fill=self.GREEN)
+            draw.text((W//2, 240), f"Win Rate: {round(win_pct*100, 1)}%", fill=self.WHITE, font=font_small, anchor="mm")
+        
+        # MOTM
+        draw.text((W//2, 300), "MVP OF THE SEASON", fill=self.GOLD, font=font_medium, anchor="mm")
+        draw.text((W//2, 350), motm.name, fill=self.WHITE, font=font_large, anchor="mm")
+        draw.text((W//2, 400), f"Impact: {round(motm.impact_score, 1)} • Clutch: {round(motm.clutch_score, 1)}", 
+                 fill=self.SILVER, font=font_small, anchor="mm")
+        
+        # Top stats
+        top_scorer = max(club.players, key=lambda p: p.goals) if club.players else None
+        top_assist = max(club.players, key=lambda p: p.assists) if club.players else None
+        top_def = max(club.players, key=lambda p: p.tackles + p.interceptions) if club.players else None
+        
+        y = 460
+        if top_scorer:
+            draw.text((W//2, y), f"Top Scorer: {top_scorer.name} ({top_scorer.goals} goals)", 
+                     fill=self.GREEN, font=font_small, anchor="mm")
+            y += 35
+        if top_assist:
+            draw.text((W//2, y), f"Top Assists: {top_assist.name} ({top_assist.assists} assists)", 
+                     fill=self.BLUE, font=font_small, anchor="mm")
+            y += 35
+        if top_def:
+            draw.text((W//2, y), f"Top Defender: {top_def.name} ({top_def.tackles} T, {top_def.interceptions} INT)", 
+                     fill=self.SILVER, font=font_small, anchor="mm")
+        
+        draw.text((W//2, H-40), "Rachad L3ERGONI Bot • ProClubsTracker", fill=(80, 80, 90), font=font_small, anchor="mm")
+        
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
