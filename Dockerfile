@@ -15,15 +15,19 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Playwright browsers to persistent path
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
+ENV PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL=0
 RUN mkdir -p /app/ms-playwright
 RUN playwright install chromium
 RUN playwright install-deps chromium
+# Verify installation
+RUN ls -la /app/ms-playwright/ || echo "Browser dir not found"
+RUN find /app/ms-playwright -name "chrome*" -type f 2>/dev/null | head -5 || echo "No chrome executables found"
 
 # Copy app
 COPY . .
 RUN mkdir -p assets/players assets/backgrounds assets/fonts
 
-# Expose port (matches your env PORT=8000)
+# Expose port
 EXPOSE 8000
 
 CMD ["python", "bot.py"]
