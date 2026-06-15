@@ -33,5 +33,8 @@ COPY . .
 # Create directories
 RUN mkdir -p assets/players assets/backgrounds assets/fonts
 
+# Expose health check port for Render
+EXPOSE 8080
+
 # Run
 CMD ["python", "bot.py"]
