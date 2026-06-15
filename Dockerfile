@@ -1,13 +1,10 @@
-FROM mcr.microsoft.com/playwright/python:v1.41.2-jammy
+FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
 
 WORKDIR /app
 
-# Install Python deps
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Ensure browser version matches the Python package (safety net)
-RUN playwright install chromium
 
 # Copy app
 COPY . .
