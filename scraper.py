@@ -8,11 +8,8 @@ from typing import Optional
 from models import ClubStats, PlayerStats, MatchResult
 
 # CRITICAL: Set these BEFORE importing playwright
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/app/ms-playwright"
-os.environ["PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL"] = "0"
-
-print(f"🔧 PLAYWRIGHT_BROWSERS_PATH set to: {os.environ.get('PLAYWRIGHT_BROWSERS_PATH')}")
-print(f"🔧 PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL set to: {os.environ.get('PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL')}")
+print(f"🔧 PLAYWRIGHT_BROWSERS_PATH: {os.environ.get('PLAYWRIGHT_BROWSERS_PATH', 'not set')}")
+print(f"🔧 PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL: {os.environ.get('PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL', 'not set')}")
 
 try:
     import httpx
