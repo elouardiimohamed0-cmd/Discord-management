@@ -65,7 +65,7 @@ def find_player(query: str) -> Optional[PlayerStats]:
         return None
     return fuzzy_find_player(query, current_club.players, squad)
 
-# === MISSING FUNCTIONS — ADD THESE ===
+# === DATA LOADING HELPERS ===
 async def ensure_data(ctx):
     global current_club
     if current_club and current_club.players:
@@ -123,6 +123,7 @@ async def on_ready():
     await bot.change_presence(activity=discord.Game(name="!help or /help"))
     try:
         guild = discord.Object(id=Config.DISCORD_GUILD_ID)
+        bot.tree.clear_commands(guild=guild)  # ← Clears old cached slash commands
         bot.tree.copy_global_to(guild=guild)
         await bot.tree.sync(guild=guild)
         print(f"✅ Slash synced to {Config.DISCORD_GUILD_ID}")
@@ -152,6 +153,9 @@ async def on_command_error(ctx, error):
         return
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(f"❌ ناقصك parameter: `{error.param.name}`.")
+        return
+    if isinstance(error, commands.NotOwner):
+        await ctx.send("❌ غير الowner يقدر يدير هاد الكوماند.")
         return
     print(f"Prefix error: {error}")
     traceback.print_exc()
@@ -194,6 +198,19 @@ async def cmd_debug(ctx):
     embed = discord.Embed(title="🔧 Debug Info", description="\n".join(lines), color=0x808080)
     await ctx.send(embed=embed)
 
+@bot.command(name="resync")
+@commands.is_owner()
+async def cmd_resync(ctx):
+    """Force re-sync slash commands to fix signature mismatches."""
+    async with ctx.typing():
+        try:
+            guild = discord.Object(id=Config.DISCORD_GUILD_ID)
+            bot.tree.clear_commands(guild=guild)
+            await bot.tree.sync(guild=guild)
+            await ctx.send("✅ Slash commands re-synced. Try `/leaderboard` now.")
+        except Exception as e:
+            await ctx.send(f"❌ Resync failed: `{e}`")
+
 @bot.command(name="help")
 async def cmd_help(ctx):
     embed = discord.Embed(
@@ -204,6 +221,7 @@ async def cmd_help(ctx):
     cmds = [
         ("`!ping`", "تأكد من أن البوت كيهضر"),
         ("`!debug`", "معلومات تقنية"),
+        ("`!resync`", "إصلاح slash commands إذا بانو مشاكل"),
         ("`!sync` / `/sync`", "جلب البيانات (دير هادي الأول!)"),
         ("`!stats [player]` / `/stats`", "إحصائيات لاعب + كارطة"),
         ("`!mvp` / `/mvp`", "أفضل لاعب"),
@@ -981,6 +999,7 @@ async def slash_help(interaction: discord.Interaction):
         cmds = [
             ("`/ping` / `!ping`", "تأكد من أن البوت كيهضر"),
             ("`/debug` / `!debug`", "معلومات تقنية"),
+            ("`/resync` / `!resync`", "إصلاح slash commands"),
             ("`/sync` / `!sync`", "جلب البيانات (دير هادي الأول!)"),
             ("`/stats [player]` / `!stats [player]`", "إحصائيات لاعب + كارطة"),
             ("`/mvp` / `!mvp`", "أفضل لاعب"),
