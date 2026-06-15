@@ -1,364 +1,251 @@
 import os
 import asyncio
-import json
 import re
-import traceback
 from datetime import datetime
 from typing import Optional
+import httpx
 from models import ClubStats, PlayerStats, MatchResult
 
-# CRITICAL: Set these BEFORE importing playwright
-print(f"🔧 PLAYWRIGHT_BROWSERS_PATH: {os.environ.get('PLAYWRIGHT_BROWSERS_PATH', 'default')}")
-print(f"🔧 PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL: {os.environ.get('PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL', 'default')}")
-
-try:
-    import httpx
-    HAS_HTTPX = True
-except ImportError:
-    HAS_HTTPX = False
-
-try:
-    from playwright.async_api import async_playwright
-    HAS_PLAYWRIGHT = True
-except ImportError:
-    HAS_PLAYWRIGHT = False
-
-try:
-    from playwright_stealth import stealth_async
-    HAS_STEALTH = True
-except ImportError:
-    HAS_STEALTH = False
-
+# EA Pro Clubs API base (FC25/FC26 use /api/fc/)
+EA_API_BASE = "https://proclubs.ea.com/api/fc"
+# Fallback API versions if the primary fails
+EA_API_FALLBACKS = [
+    "https://proclubs.ea.com/api/fc",
+    "https://proclubs.ea.com/api/fc26",
+    "https://proclubs.ea.com/api/fc25",
+]
 
 class ProClubsTrackerScraper:
     def __init__(self, club_url: str, headless: bool = True, use_stealth: bool = True):
+        # club_url kept for backward compatibility; we prefer CLUB_ID env
         self.club_url = club_url
-        self.headless = headless
-        self.use_stealth = use_stealth and HAS_STEALTH
-        self.browser = None
-        self.context = None
-        self.page = None
-        self._cookie_file = "pct_cookies.json"
+        self.club_id = self._extract_club_id(club_url)
+        self.platform = os.environ.get("PCT_PLATFORM", "common-gen5").strip().lower()
+        self.headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Origin": "https://www.ea.com",
+            "Referer": "https://www.ea.com/",
+        }
         self._last_error = None
-    
-    async def _scrape_http(self) -> Optional[ClubStats]:
-        if not HAS_HTTPX:
-            print("🌐 HTTP fallback: httpx not installed")
-            return None
-        try:
-            print(f"🌐 HTTP fallback: GET {self.club_url}")
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-                response = await client.get(self.club_url, headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "en-US,en;q=0.5",
-                })
-                print(f"🌐 HTTP status: {response.status_code}")
-                if response.status_code != 200:
-                    return None
-                html = response.text
-                print(f"🌐 HTTP response length: {len(html)} chars")
-                return self._parse_html(html)
-        except Exception as e:
-            print(f"⚠️ HTTP fallback failed: {e}")
-            traceback.print_exc()
-            return None
-    
-    def _parse_html(self, html: str) -> Optional[ClubStats]:
-        club = ClubStats(club_name="Rachad L3ERGONI", last_updated=datetime.now())
-        # Try JSON in scripts
-        for pattern in [r'window\.__INITIAL_STATE__\s*=\s*({.+?});', r'"players":\s*(\[.+?\])', r'"club":\s*({.+?})']:
-            m = re.search(pattern, html, re.DOTALL)
-            if m:
+        self._base_url = EA_API_BASE
+
+    def _extract_club_id(self, url: str) -> str:
+        # Try env first
+        env_id = os.environ.get("CLUB_ID", "").strip()
+        if env_id:
+            return env_id
+        # Extract from URL like .../club/1427607?...
+        m = re.search(r"/club/(\d+)", url)
+        if m:
+            return m.group(1)
+        return "1427607"
+
+    async def _fetch_json(self, endpoint: str, params: dict) -> Optional[dict | list]:
+        """Fetch JSON from EA API with retries and fallback base URLs."""
+        last_err = None
+        for base in [self._base_url] + [b for b in EA_API_FALLBACKS if b != self._base_url]:
+            url = f"{base}/{endpoint}"
+            for attempt in range(3):
                 try:
-                    data = json.loads(m.group(1))
-                    if isinstance(data, dict) and "players" in data:
-                        for p in data["players"]:
-                            name = p.get("name", "")
-                            if name:
-                                player = PlayerStats(name=name)
-                                player.games = int(p.get("games", 0))
-                                player.goals = int(p.get("goals", 0))
-                                player.assists = int(p.get("assists", 0))
-                                player.rating = float(p.get("rating", 0))
-                                player.pass_accuracy = float(p.get("passAccuracy", 0))
-                                club.players.append(player)
-                        if club.players:
-                            print(f"✅ HTTP: parsed {len(club.players)} players from JSON")
-                            return club
-                except Exception:
-                    continue
-        # Parse HTML table
-        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL)
-        for row in rows:
-            cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
-            if len(cells) >= 3:
-                clean = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
-                name = clean[0]
-                if name and name.lower() not in ["player", "name", "member", ""]:
-                    p = PlayerStats(name=name)
-                    all_text = " ".join(clean)
-                    rm = re.search(r'(\d+\.\d+)', all_text)
-                    if rm:
-                        p.rating = float(rm.group(1))
-                    pm = re.search(r'(\d+\.?\d*)%', all_text)
-                    if pm:
-                        p.pass_accuracy = float(pm.group(1))
-                    club.players.append(p)
-        if club.players:
-            print(f"✅ HTTP: parsed {len(club.players)} players from HTML table")
-            return club
-        print("⚠️ HTTP: no players found in HTML")
-        return None
-    
-    async def _init_browser(self):
-        if not HAS_PLAYWRIGHT:
-            raise RuntimeError("Playwright not installed")
-        print("🎭 Initializing Playwright browser...")
-        
-        # Check if browser exists before launching
-        browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
-        print(f"🎭 Looking for browsers in: {browsers_path}")
-        if browsers_path and os.path.exists(browsers_path):
-            import glob
-            chrome_files = glob.glob(f"{browsers_path}/**/chrome*", recursive=True)
-            print(f"🎭 Found {len(chrome_files)} chrome files: {chrome_files[:3]}")
-        else:
-            print(f"⚠️ Browsers path does not exist: {browsers_path}")
-        
-        pw = await async_playwright().start()
-        print("🎭 Playwright started")
-        
-        print("🎭 Launching Chromium...")
-        self.browser = await pw.chromium.launch(
-            headless=self.headless,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--single-process",
-                "--disable-background-networking",
-                "--disable-background-timer-throttling",
-                "--disable-backgrounding-occluded-windows",
-                "--disable-renderer-backgrounding",
-                "--disable-features=site-per-process",
-                "--disable-features=IsolateOrigins",
-                "--disable-blink-features=AutomationControlled",
-            ]
-        )
-        print("🎭 Chromium launched")
-        self.context = await self.browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        try:
-            with open(self._cookie_file, "r", encoding="utf-8") as f:
-                await self.context.add_cookies(json.load(f))
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
-        self.page = await self.context.new_page()
-        if self.use_stealth:
-            await stealth_async(self.page)
-        await self.page.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-            window.chrome = { runtime: {} };
-        """)
-        print("🎭 Browser ready")
-    
-    async def _save_cookies(self):
-        if self.context:
-            try:
-                cookies = await self.context.cookies()
-                with open(self._cookie_file, "w", encoding="utf-8") as f:
-                    json.dump(cookies, f)
-            except Exception:
-                pass
-    
-    async def _safe_click(self, selector: str, timeout: int = 3000):
-        try:
-            await self.page.wait_for_selector(selector, timeout=timeout)
-            await self.page.click(selector)
-            await asyncio.sleep(0.5)
-            return True
-        except Exception:
-            return False
-    
-    async def _extract_text(self, selector: str) -> str:
-        try:
-            el = await self.page.query_selector(selector)
-            if el:
-                return (await el.text_content() or "").strip()
-        except Exception:
-            pass
-        return ""
-    
-    async def _parse_player_table(self, club: ClubStats):
-        headers = await self.page.query_selector_all("table thead th, [role='columnheader']")
-        header_texts = [(await h.text_content() or "").strip().lower() for h in headers]
-        col_map = {}
-        for i, h in enumerate(header_texts):
-            if any(x in h for x in ["name", "player"]): col_map["name"] = i
-            elif any(x in h for x in ["rating", "avg"]): col_map["rating"] = i
-            elif any(x in h for x in ["games", "gp", "played"]): col_map["games"] = i
-            elif any(x in h for x in ["goals", "gls"]): col_map["goals"] = i
-            elif any(x in h for x in ["assists", "ast"]): col_map["assists"] = i
-            elif any(x in h for x in ["pass %", "pass accuracy"]): col_map["pass_accuracy"] = i
-            elif any(x in h for x in ["tackle", "tkl"]): col_map["tackles"] = i
-            elif any(x in h for x in ["interception", "int"]): col_map["interceptions"] = i
-            elif any(x in h for x in ["possession", "poss lost"]): col_map["possession_losses"] = i
-            elif any(x in h for x in ["motm", "man of the match"]): col_map["motm"] = i
-            elif any(x in h for x in ["distance", "km"]): col_map["distance"] = i
-            elif any(x in h for x in ["minutes", "min"]): col_map["minutes"] = i
-        
-        rows = await self.page.query_selector_all("table tbody tr, .player-row, tr[data-player]")
-        print(f"🎭 Found {len(rows)} player rows")
-        for row in rows:
-            try:
-                cells = await row.query_selector_all("td, .stat-cell")
-                if len(cells) < 3:
-                    continue
-                texts = [(await c.text_content() or "").strip() for c in cells]
-                def get_col(key, default_idx=0):
-                    idx = col_map.get(key, default_idx)
-                    return texts[idx] if 0 <= idx < len(texts) else ""
-                name = get_col("name", 0)
-                if not name or name.lower() in ["player", "name", "member"]:
-                    continue
-                p = PlayerStats(name=name)
-                all_text = " ".join(texts)
-                rm = re.search(r'(\d+\.\d+)', get_col("rating", 1)) or re.search(r'(\d+\.\d+)', all_text)
-                if rm:
-                    p.rating = float(rm.group(1))
-                for field, pattern in [
-                    ("games", r'(\d+)'), ("goals", r'(\d+)'), ("assists", r'(\d+)'),
-                    ("tackles", r'(\d+)'), ("interceptions", r'(\d+)'),
-                    ("possession_losses", r'(\d+)'), ("motm", r'(\d+)'), ("minutes_played", r'(\d+)'),
-                ]:
-                    txt = get_col(field, 0)
-                    m = re.search(pattern, txt)
-                    if m:
-                        setattr(p, field, int(m.group(1)))
-                pm = re.search(r'(\d+\.?\d*)%', get_col("pass_accuracy", 0)) or re.search(r'(\d+\.?\d*)%', all_text)
-                if pm:
-                    p.pass_accuracy = float(pm.group(1))
-                dm = re.search(r'(\d+\.?\d*)', get_col("distance", 0))
-                if dm:
-                    p.distance_covered = float(dm.group(1))
-                sm = re.search(r'(\d+)', get_col("shots", 0))
-                if sm:
-                    p.shots = int(sm.group(1))
-                club.players.append(p)
-            except Exception:
-                continue
-        print(f"🎭 Parsed {len(club.players)} players from table")
-    
-    async def _scrape_playwright(self) -> Optional[ClubStats]:
-        if not HAS_PLAYWRIGHT:
-            print("❌ Playwright not installed")
-            return None
-        try:
-            if not self.browser:
-                await self._init_browser()
-        except Exception as e:
-            self._last_error = f"Browser init failed: {e}"
-            print(f"❌ Browser init failed: {e}")
-            traceback.print_exc()
-            return None
-        
-        for attempt in range(2):
-            try:
-                print(f"🎭 Navigating to {self.club_url} (attempt {attempt+1})...")
-                await self.page.goto(self.club_url, wait_until="domcontentloaded", timeout=20000)
-                print(f"🎭 Page loaded, waiting 2s...")
-                await asyncio.sleep(2)
-                
-                club = ClubStats(club_name="Rachad L3ERGONI", last_updated=datetime.now())
-                try:
-                    title = await self._extract_text("h1, .club-name, .title")
-                    if title:
-                        club.club_name = title
-                        print(f"🎭 Club name: {title}")
-                except Exception:
-                    pass
-                
-                try:
-                    div_text = await self._extract_text(".division, [data-testid='division']")
-                    skill_text = await self._extract_text(".skill-rating, [data-testid='skill-rating']")
-                    record_text = await self._extract_text(".record, [data-testid='record']")
-                    dm = re.search(r'(\d+)', div_text)
-                    club.division = int(dm.group(1)) if dm else 6
-                    sm = re.search(r'(\d+)', skill_text)
-                    club.skill_rating = int(sm.group(1)) if sm else 0
-                    rms = re.findall(r'(\d+)', record_text)
-                    if len(rms) >= 3:
-                        club.wins, club.losses, club.draws = int(rms[0]), int(rms[1]), int(rms[2])
-                    print(f"🎭 Club record: {club.wins}W {club.losses}L {club.draws}D")
+                    print(f"🌐 [{base}] {endpoint} (attempt {attempt + 1})...")
+                    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                        resp = await client.get(url, headers=self.headers, params=params)
+                    print(f"🌐 Status: {resp.status_code}")
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        print(f"✅ {endpoint} OK")
+                        return data
+                    elif resp.status_code in (429, 502, 503, 504):
+                        # Rate limit / server error → retry
+                        wait = 2 * (attempt + 1)
+                        print(f"⏳ Rate limit / server error, waiting {wait}s...")
+                        await asyncio.sleep(wait)
+                    else:
+                        print(f"⚠️ {endpoint} HTTP {resp.status_code}: {resp.text[:200]}")
+                        return None
                 except Exception as e:
-                    print(f"⚠️ Could not parse club stats: {e}")
-                
-                print("🎭 Clicking Players tab...")
-                await self._safe_click("button:has-text('Players'), [data-testid='players-tab']")
-                await asyncio.sleep(1.5)
-                await self._parse_player_table(club)
-                
-                print("🎭 Clicking Match History...")
-                await self._safe_click("button:has-text('Match History'), [data-testid='matches-tab']")
-                await asyncio.sleep(1.5)
-                match_rows = await self.page.query_selector_all("table tbody tr, .match-row")
-                matches = []
-                for i, row in enumerate(match_rows[:20]):
-                    try:
-                        cells = await row.query_selector_all("td, .match-cell")
-                        texts = [(await c.text_content() or "").strip() for c in cells]
-                        all_text = " ".join(texts)
-                        scm = re.search(r'(\d+)\s*-\s*(\d+)', all_text)
-                        if scm:
-                            sf, sa = int(scm.group(1)), int(scm.group(2))
-                            res = "W" if sf > sa else "L" if sf < sa else "D"
-                            om = re.search(r'vs\.?\s*([A-Za-z0-9\s_\-]+)', all_text, re.I)
-                            opp = om.group(1).strip() if om else "Unknown"
-                            matches.append(MatchResult(match_id=f"m{i}", date=datetime.now(), opponent=opp, score_for=sf, score_against=sa, result=res))
-                    except Exception:
-                        continue
-                club.matches = matches
-                print(f"🎭 Found {len(matches)} matches")
-                
-                await self._save_cookies()
-                if club.players:
-                    print(f"✅ Playwright: {len(club.players)} players scraped")
-                    return club
-                print("⚠️ Playwright: no players found")
-                return None
-            except Exception as e:
-                print(f"🎭 Playwright attempt {attempt+1} failed: {e}")
-                traceback.print_exc()
-                if attempt < 1:
-                    await asyncio.sleep(3)
-                else:
-                    self._last_error = f"Playwright failed: {e}"
-                    return None
+                    last_err = e
+                    print(f"⚠️ {endpoint} attempt {attempt + 1} error: {e}")
+                    if attempt < 2:
+                        await asyncio.sleep(2)
+            # If all attempts failed for this base, try next base
+        self._last_error = str(last_err)
         return None
-    
-    async def scrape_club(self) -> Optional[ClubStats]:
-        print(f"🔍 Starting scrape of {self.club_url}")
-        # Try HTTP first
-        club = await self._scrape_http()
-        if club and club.players:
-            return club
-        # Try Playwright
-        print("🔍 HTTP failed, trying Playwright...")
-        club = await self._scrape_playwright()
-        if club and club.players:
-            return club
-        print(f"❌ All scraping methods failed. Last error: {self._last_error}")
+
+    async def _get_club_info(self) -> Optional[dict]:
+        data = await self._fetch_json(
+            "clubs/info",
+            {"platform": self.platform, "clubIds": self.club_id},
+        )
+        if isinstance(data, list) and len(data) > 0:
+            return data[0]
+        if isinstance(data, dict):
+            return data
         return None
-    
-    async def close(self):
+
+    async def _get_member_stats(self) -> Optional[list]:
+        data = await self._fetch_json(
+            "members/stats",
+            {"platform": self.platform, "clubId": self.club_id},
+        )
+        if isinstance(data, list):
+            return data
+        return None
+
+    async def _get_matches(self, match_type: str = "gameType13") -> Optional[list]:
+        """Fetch matches. gameType13 = friendlies, gameType9 = league, gameType5 = playoff."""
+        data = await self._fetch_json(
+            "clubs/matches",
+            {"platform": self.platform, "clubIds": self.club_id, "matchType": match_type},
+        )
+        if isinstance(data, list):
+            return data
+        return None
+
+    def _to_int(self, val, default=0) -> int:
         try:
-            await self._save_cookies()
-            if self.browser:
-                await self.browser.close()
-        except Exception:
-            pass
+            return int(float(str(val))) if val is not None else default
+        except (ValueError, TypeError):
+            return default
+
+    def _to_float(self, val, default=0.0) -> float:
+        try:
+            return float(str(val)) if val is not None else default
+        except (ValueError, TypeError):
+            return default
+
+    async def scrape_club(self) -> Optional[ClubStats]:
+        print(f"🔍 EA API scrape started for club {self.club_id} (platform: {self.platform})")
+
+        # Fetch everything concurrently
+        info_task = self._get_club_info()
+        members_task = self._get_member_stats()
+        matches_friendly_task = self._get_matches("gameType13")
+        matches_league_task = self._get_matches("gameType9")
+
+        info, members, matches_friendly, matches_league = await asyncio.gather(
+            info_task, members_task, matches_friendly_task, matches_league_task
+        )
+
+        # Merge match lists (friendlies first, then league)
+        all_matches = []
+        if matches_friendly:
+            all_matches.extend(matches_friendly)
+        if matches_league:
+            all_matches.extend(matches_league)
+
+        # If no data at all, fail
+        if not info and not members and not all_matches:
+            print(f"❌ EA API returned no data. Last error: {self._last_error}")
+            return None
+
+        club = ClubStats(club_name="Rachad L3ERGONI", last_updated=datetime.now())
+
+        # ── Club Info ──
+        if info and isinstance(info, dict):
+            club.club_name = info.get("name") or info.get("clubName") or club.club_name
+            club.division = self._to_int(info.get("divisionId") or info.get("division"), 6)
+            club.skill_rating = self._to_int(info.get("skillRating") or info.get("skillrating"), 0)
+            club.wins = self._to_int(info.get("wins"), 0)
+            club.losses = self._to_int(info.get("losses"), 0)
+            club.draws = self._to_int(info.get("ties") or info.get("draws"), 0)
+            print(
+                f"✅ Club: {club.club_name} | Div {club.division} | "
+                f"SR {club.skill_rating} | {club.wins}W {club.losses}L {club.draws}D"
+            )
+
+        # ── Players ──
+        if members and isinstance(members, list):
+            for m in members:
+                name = m.get("name") or m.get("playername") or "Unknown"
+                p = PlayerStats(name=str(name))
+
+                p.games = self._to_int(m.get("games") or m.get("matchPlayed"), 0)
+                p.goals = self._to_int(m.get("goals"), 0)
+                p.assists = self._to_int(m.get("assists"), 0)
+                p.rating = self._to_float(m.get("averageRating") or m.get("rating"), 0.0)
+
+                # Pass accuracy
+                pa = self._to_int(m.get("passattempts"), 0)
+                pm = self._to_int(m.get("passesmade"), 0)
+                p.pass_accuracy = round((pm / pa * 100), 1) if pa > 0 else 0.0
+
+                p.tackles = self._to_int(m.get("tacklesmade") or m.get("tackles"), 0)
+                p.interceptions = self._to_int(m.get("interceptions"), 0)
+                p.possession_losses = self._to_int(
+                    m.get("possessionLost") or m.get("possession_losses"), 0
+                )
+                p.motm = self._to_int(m.get("man_of_the_match") or m.get("manOfTheMatch"), 0)
+                p.minutes_played = self._to_int(m.get("secondsPlayed"), 0) // 60
+                p.shots = self._to_int(m.get("shots"), 0)
+                p.distance_covered = self._to_float(m.get("distanceCovered"), 0.0)
+
+                club.players.append(p)
+
+            print(f"✅ Parsed {len(club.players)} players from EA API")
+
+        # ── Matches ──
+        if all_matches and isinstance(all_matches, list):
+            for i, m in enumerate(all_matches[:30]):
+                try:
+                    match_id = str(m.get("matchId") or m.get("match_id") or f"m{i}")
+                    ts = m.get("timestamp") or m.get("match_timestamp")
+                    date = datetime.now()
+                    if ts:
+                        try:
+                            date = datetime.fromtimestamp(int(ts))
+                        except Exception:
+                            pass
+
+                    # The match object has a "clubs" dict: {clubId: {goals, goalsAgainst, name, ...}}
+                    teams = m.get("clubs") or m.get("teams") or {}
+                    if not teams or not isinstance(teams, dict):
+                        continue
+
+                    our_team = None
+                    opp_team = None
+                    for tid, tdata in teams.items():
+                        if str(tid) == str(self.club_id):
+                            our_team = tdata
+                        else:
+                            opp_team = tdata
+
+                    if not our_team or not opp_team:
+                        # Sometimes EA only returns one club in the dict for the opponent
+                        # Try to infer from top-level fields
+                        continue
+
+                    sf = self._to_int(our_team.get("goals"), 0)
+                    sa = self._to_int(opp_team.get("goals") or opp_team.get("goalsAgainst"), 0)
+                    res = "W" if sf > sa else "L" if sf < sa else "D"
+                    opp_name = str(opp_team.get("name") or "Unknown")
+
+                    match = MatchResult(
+                        match_id=match_id,
+                        date=date,
+                        opponent=opp_name,
+                        score_for=sf,
+                        score_against=sa,
+                        result=res,
+                    )
+                    club.matches.append(match)
+                except Exception as e:
+                    print(f"⚠️ Match parse error: {e}")
+                    continue
+
+            print(f"✅ Parsed {len(club.matches)} matches from EA API")
+
+        if club.players or club.matches:
+            return club
+
+        print("⚠️ No players or matches found in EA API response")
+        return None
+
+    async def close(self):
+        """No-op: httpx client is created per-request."""
+        pass
