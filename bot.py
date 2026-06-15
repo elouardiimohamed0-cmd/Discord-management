@@ -65,52 +65,20 @@ def find_player(query: str) -> Optional[PlayerStats]:
         return None
     return fuzzy_find_player(query, current_club.players, squad)
 
-async def ensure_data(ctx):
-    global current_club
-    if current_club and current_club.players:
-        return True
-    if not scraper:
-        await ctx.send("❌ Scraper not ready. Wait 10s.")
-        return False
-    async with ctx.typing():
-        await ctx.send("⏳ جاري جلب البيانات...")
-        try:
-            club = await scraper.scrape_club()
-            if not club or not club.players:
-                await ctx.send("❌ ما قدرتش نجيب البيانات من EA API. جرب `!sync` مرة أخرى.")
-                return False
-            current_club = club
-            current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
-            await ctx.send(f"✅ Loaded {len(club.players)} players")
-            return True
-        except Exception as e:
-            tb = traceback.format_exc()
-            print(f"SCRAPE ERROR:\n{tb}")
-            await ctx.send(f"❌ Scrape failed:\n```\n{str(e)[:800]}\n```")
-            return False
-
-async def ensure_data_interaction(interaction: discord.Interaction):
-    global current_club
-    if current_club and current_club.players:
-        return True
-    if not scraper:
-        await interaction.followup.send("❌ Scraper not ready.")
-        return False
-    try:
-        await interaction.followup.send("⏳ جاري جلب البيانات...")
-        club = await scraper.scrape_club()
-        if not club or not club.players:
-            await interaction.followup.send("❌ ما قدرتش نجيب البيانات من EA API. جرب `/sync` مرة أخرى.")
-            return False
-        current_club = club
-        current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
-        await interaction.followup.send(f"✅ Loaded {len(club.players)} players")
-        return True
-    except Exception as e:
-        tb = traceback.format_exc()
-        print(f"SCRAPE ERROR:\n{tb}")
-        await interaction.followup.send(f"❌ Scrape failed:\n```\n{str(e)[:800]}\n```")
-        return False
+@bot.command(name="debug")
+async def cmd_debug(ctx):
+    lines = [
+        f"**PCT_URL:** {Config.PCT_CLUB_URL}",
+        f"**PORT:** {Config.PORT}",
+        f"**PCT API:** `https://proclubstracker.com/api/clubs/{Config.CLUB_ID}?platform={Config.PCT_PLATFORM}`",
+        f"**Club ID:** `{Config.CLUB_ID}`",
+        f"**Platform:** `{Config.PCT_PLATFORM}`",
+        f"**Scraper ready:** {'Yes' if scraper else 'No'}",
+        f"**Data loaded:** {'Yes' if current_club and current_club.players else 'No'}",
+        f"**Players:** {len(current_club.players) if current_club and current_club.players else 0}",
+    ]
+    embed = discord.Embed(title="🔧 Debug Info", description="\n".join(lines), color=0x808080)
+    await ctx.send(embed=embed)
 
 
 # === Events ===
