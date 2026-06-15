@@ -20,30 +20,29 @@ from models import ClubStats, PlayerStats
 from utils import fuzzy_find_player
 
 
-# === Render Health Check Server ===
+# === Health Check Server ===
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Rachad L3ERGONI Bot is online")
+        self.wfile.write(b"OK")
     def log_message(self, format, *args):
         pass
 
 def start_health_server():
     try:
-        server = HTTPServer(("0.0.0.0", Config.PORT), HealthHandler)
-        t = threading.Thread(target=server.serve_forever, daemon=True)
-        t.start()
-        print(f"✅ Health server on port {Config.PORT}")
+        HTTPServer(("0.0.0.0", Config.PORT), HealthHandler).serve_forever()
     except Exception as e:
-        print(f"⚠️ Health server error: {e}")
+        print(f"Health server: {e}")
+
+threading.Thread(target=start_health_server, daemon=True).start()
+print(f"✅ Health server on port {Config.PORT}")
 
 
 # === Bot Setup ===
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
-
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # Global state
@@ -64,52 +63,49 @@ def find_player(query: str) -> Optional[PlayerStats]:
         return None
     return fuzzy_find_player(query, current_club.players, squad)
 
-async def ensure_data(ctx_or_interaction):
+async def ensure_data(ctx):
     global current_club
     if current_club and current_club.players:
         return True
     if not scraper:
-        msg = "❌ Scraper not ready. Wait 10 seconds and retry."
-        if isinstance(ctx_or_interaction, discord.Interaction):
-            if not ctx_or_interaction.response.is_done():
-                await ctx_or_interaction.response.send_message(msg)
-            else:
-                await ctx_or_interaction.followup.send(msg)
-        else:
-            await ctx_or_interaction.send(msg)
+        await ctx.send("❌ Scraper not ready. Wait 10s.")
+        return False
+    async with ctx.typing():
+        await ctx.send("⏳ جاري جلب البيانات...")
+        try:
+            club = await scraper.scrape_club()
+            if not club or not club.players:
+                await ctx.send("❌ ما قدرتش نجيب البيانات. شوف Render logs.")
+                return False
+            current_club = club
+            current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
+            await ctx.send(f"✅ Loaded {len(club.players)} players")
+            return True
+        except Exception as e:
+            traceback.print_exc()
+            await ctx.send(f"❌ Error: `{str(e)[:300]}`")
+            return False
+
+async def ensure_data_interaction(interaction: discord.Interaction):
+    global current_club
+    if current_club and current_club.players:
+        return True
+    if not scraper:
+        await interaction.followup.send("❌ Scraper not ready.")
         return False
     try:
-        msg = "⏳ جاري جلب البيانات من ProClubsTracker..."
-        if isinstance(ctx_or_interaction, discord.Interaction):
-            if not ctx_or_interaction.response.is_done():
-                await ctx_or_interaction.response.send_message(msg)
-            else:
-                await ctx_or_interaction.followup.send(msg)
-        else:
-            await ctx_or_interaction.send(msg)
+        await interaction.followup.send("⏳ جاري جلب البيانات...")
         club = await scraper.scrape_club()
         if not club or not club.players:
-            err = "❌ ما قدرتش نجيب البيانات.\n\n**أسباب:**\n1. ProClubsTracker كيحجب cloud IPs\n2. Chromium ما كيهضرش فRender (memory)\n3. الURL غالط\n\n**شوف Render logs.**"
-            if isinstance(ctx_or_interaction, discord.Interaction):
-                await ctx_or_interaction.followup.send(err)
-            else:
-                await ctx_or_interaction.send(err)
+            await interaction.followup.send("❌ ما قدرتش نجيب البيانات.")
             return False
         current_club = club
         current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
-        ok = f"✅ Data loaded: **{len(club.players)}** players"
-        if isinstance(ctx_or_interaction, discord.Interaction):
-            await ctx_or_interaction.followup.send(ok)
-        else:
-            await ctx_or_interaction.send(ok)
+        await interaction.followup.send(f"✅ Loaded {len(club.players)} players")
         return True
     except Exception as e:
         traceback.print_exc()
-        err = f"❌ Scrape error: `{str(e)[:300]}`"
-        if isinstance(ctx_or_interaction, discord.Interaction):
-            await ctx_or_interaction.followup.send(err)
-        else:
-            await ctx_or_interaction.send(err)
+        await interaction.followup.send(f"❌ Error: `{str(e)[:300]}`")
         return False
 
 
@@ -119,14 +115,14 @@ async def on_ready():
     global scraper
     print(f"✅ Bot online as {bot.user}")
     scraper = ProClubsTrackerScraper(Config.PCT_CLUB_URL, headless=Config.HEADLESS, use_stealth=Config.STEALTH)
-    await bot.change_presence(activity=discord.Game(name="Pro Clubs • /help or !help"))
+    await bot.change_presence(activity=discord.Game(name="!help or /help"))
     try:
         guild = discord.Object(id=Config.DISCORD_GUILD_ID)
         bot.tree.copy_global_to(guild=guild)
         await bot.tree.sync(guild=guild)
-        print(f"✅ Slash commands synced to guild {Config.DISCORD_GUILD_ID}")
+        print(f"✅ Slash synced to {Config.DISCORD_GUILD_ID}")
     except Exception as e:
-        print(f"❌ Slash sync error: {e}")
+        print(f"❌ Slash sync: {e}")
     asyncio.create_task(startup_scrape())
 
 async def startup_scrape():
@@ -137,11 +133,11 @@ async def startup_scrape():
         if club and club.players:
             current_club = club
             current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
-            print(f"✅ Startup OK: {len(club.players)} players")
+            print(f"✅ Startup: {len(club.players)} players")
         else:
             print("⚠️ Startup: no data")
     except Exception as e:
-        print(f"❌ Startup scrape failed: {e}")
+        print(f"❌ Startup: {e}")
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -149,7 +145,7 @@ async def on_command_error(ctx, error):
         await ctx.send("❌ هاد الكوماند ما كاينش. جرب `!help` باش تشوف الكوماندات.")
         return
     if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"❌ ناقصك parameter: `{error.param.name}`.")
+        await ctx.send(f"❌ ناقصك: `{error.param.name}`.")
         return
     print(f"Prefix error: {error}")
     traceback.print_exc()
@@ -169,13 +165,10 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
         pass
 
 
-# ============================================================
-# PREFIX COMMANDS ( !command )
-# ============================================================
-
-@bot.command(name="test")
-async def cmd_test(ctx):
-    await ctx.send("✅ Bot is working! Prefix commands registered. Try `!help` next.")
+# === PREFIX COMMANDS ===
+@bot.command(name="ping")
+async def cmd_ping(ctx):
+    await ctx.send("✅ Pong! Bot is alive. Try `!sync` next.")
 
 @bot.command(name="help")
 async def cmd_help(ctx):
@@ -185,7 +178,7 @@ async def cmd_help(ctx):
         color=0x1e90ff
     )
     cmds = [
-        ("`!test`", "تأكد من أن البوت كيهضر"),
+        ("`!ping`", "تأكد من أن البوت كيهضر"),
         ("`!sync` / `/sync`", "جلب البيانات (دير هادي الأول!)"),
         ("`!stats [player]` / `/stats`", "إحصائيات لاعب + كارطة"),
         ("`!mvp` / `/mvp`", "أفضل لاعب"),
@@ -240,8 +233,7 @@ async def cmd_sync(ctx):
 
 @bot.command(name="stats")
 async def cmd_stats(ctx, *, player: str):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     target = find_player(player)
     if not target:
         await ctx.send(f"ما لقيتش `{player}`.")
@@ -257,8 +249,7 @@ async def cmd_stats(ctx, *, player: str):
                 StatsEngine.interpret_stat("pass_accuracy", target.pass_accuracy, pos),
                 StatsEngine.interpret_stat("impact_score", target.impact_score, pos),
             ]
-            text = "\n".join(lines)
-            embed = discord.Embed(title=f"📊 {target.name} — {pos}", description=text, color=0x1e90ff)
+            embed = discord.Embed(title=f"📊 {target.name} — {pos}", description="\n".join(lines), color=0x1e90ff)
             embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
             embed.add_field(name="Clutch", value=str(target.clutch_score), inline=True)
             embed.add_field(name="Error", value=str(target.error_score), inline=True)
@@ -269,8 +260,7 @@ async def cmd_stats(ctx, *, player: str):
 
 @bot.command(name="mvp")
 async def cmd_mvp(ctx):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     async with ctx.typing():
         try:
             squad_map = get_squad_map()
@@ -290,8 +280,7 @@ async def cmd_mvp(ctx):
 
 @bot.command(name="worst")
 async def cmd_worst(ctx):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     async with ctx.typing():
         try:
             squad_map = get_squad_map()
@@ -307,8 +296,7 @@ async def cmd_worst(ctx):
 
 @bot.command(name="who_sold")
 async def cmd_who_sold(ctx):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     async with ctx.typing():
         try:
             squad_map = get_squad_map()
@@ -324,8 +312,7 @@ async def cmd_who_sold(ctx):
 
 @bot.command(name="carry")
 async def cmd_carry(ctx):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     async with ctx.typing():
         try:
             squad_map = get_squad_map()
@@ -341,8 +328,7 @@ async def cmd_carry(ctx):
 
 @bot.command(name="fraud")
 async def cmd_fraud(ctx, *, player: str):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     target = find_player(player)
     if not target:
         await ctx.send(f"ما لقيتش `{player}`.")
@@ -366,8 +352,7 @@ async def cmd_fraud(ctx, *, player: str):
 
 @bot.command(name="ballon")
 async def cmd_ballon(ctx):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     async with ctx.typing():
         try:
             squad_map = get_squad_map()
@@ -385,8 +370,7 @@ async def cmd_ballon(ctx):
 
 @bot.command(name="ghost")
 async def cmd_ghost(ctx):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     async with ctx.typing():
         try:
             squad_map = get_squad_map()
@@ -402,8 +386,7 @@ async def cmd_ghost(ctx):
 
 @bot.command(name="pass")
 async def cmd_pass(ctx):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     async with ctx.typing():
         try:
             squad_map = get_squad_map()
@@ -419,8 +402,7 @@ async def cmd_pass(ctx):
 
 @bot.command(name="leaderboard")
 async def cmd_leaderboard(ctx, metric: str = "impact"):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     metric_map = {"impact": "impact_score", "goals": "goals", "assists": "assists", "rating": "rating_pg", "clutch": "clutch_score"}
     metric_value = metric_map.get(metric.lower(), "impact_score")
     async with ctx.typing():
@@ -437,8 +419,7 @@ async def cmd_leaderboard(ctx, metric: str = "impact"):
 
 @bot.command(name="compare")
 async def cmd_compare(ctx, player1: str, player2: str):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     p1 = find_player(player1)
     p2 = find_player(player2)
     if not p1 or not p2:
@@ -460,8 +441,7 @@ async def cmd_compare(ctx, player1: str, player2: str):
 
 @bot.command(name="lastmatch")
 async def cmd_lastmatch(ctx):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     if not current_club.matches:
         await ctx.send("ما لقيتش match history.")
         return
@@ -476,8 +456,7 @@ async def cmd_lastmatch(ctx):
 
 @bot.command(name="club")
 async def cmd_club(ctx):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     async with ctx.typing():
         try:
             squad_map = get_squad_map()
@@ -503,8 +482,7 @@ async def cmd_banter(ctx):
 
 @bot.command(name="drama")
 async def cmd_drama(ctx):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     try:
         names = [p.name for p in current_club.players[:2]] if current_club.players else ["Player1", "Player2"]
         text = darija.drama(names)
@@ -536,8 +514,7 @@ async def cmd_transfer(ctx, *, player: str):
 
 @bot.command(name="predict")
 async def cmd_predict(ctx):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     try:
         names = [p.name for p in current_club.players[:2]] if current_club.players else ["Player1", "Player2"]
         text = darija.predict(names)
@@ -551,7 +528,7 @@ async def cmd_predict(ctx):
 async def cmd_personality(ctx, mode: str):
     valid = ["casablanca", "analyst", "toxic", "coach", "commentator", "cafeteria"]
     if mode.lower() not in valid:
-        await ctx.send(f"❌ Personality غير صحيح. Valid: {', '.join(valid)}")
+        await ctx.send(f"❌ غير صحيح. Valid: {', '.join(valid)}")
         return
     try:
         darija.set_personality(mode.lower())
@@ -577,8 +554,7 @@ async def cmd_stop(ctx):
 
 @bot.command(name="roastplayer")
 async def cmd_roastplayer(ctx, *, player: str):
-    if not await ensure_data(ctx):
-        return
+    if not await ensure_data(ctx): return
     target = find_player(player)
     if not target:
         await ctx.send(f"ما لقيتش `{player}`.")
@@ -597,13 +573,10 @@ async def cmd_roastplayer(ctx, *, player: str):
             await ctx.send(f"❌ Error: `{str(e)[:300]}`")
 
 
-# ============================================================
-# SLASH COMMANDS ( /command )
-# ============================================================
-
-@bot.tree.command(name="test", description="Test if bot is responding")
-async def slash_test(interaction: discord.Interaction):
-    await interaction.response.send_message("✅ Slash commands work! Try `/sync` next.")
+# === SLASH COMMANDS ===
+@bot.tree.command(name="ping", description="Test if bot is responding")
+async def slash_ping(interaction: discord.Interaction):
+    await interaction.response.send_message("✅ Pong! Try `/sync` next.")
 
 @bot.tree.command(name="sync", description="Manual sync from ProClubsTracker")
 async def slash_sync(interaction: discord.Interaction):
@@ -629,8 +602,7 @@ async def slash_sync(interaction: discord.Interaction):
 @app_commands.describe(player="Player name, PSN, or nickname")
 async def slash_stats(interaction: discord.Interaction, player: str):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     target = find_player(player)
     if not target:
         await interaction.followup.send(f"ما لقيتش `{player}`.")
@@ -645,8 +617,7 @@ async def slash_stats(interaction: discord.Interaction, player: str):
             StatsEngine.interpret_stat("pass_accuracy", target.pass_accuracy, pos),
             StatsEngine.interpret_stat("impact_score", target.impact_score, pos),
         ]
-        text = "\n".join(lines)
-        embed = discord.Embed(title=f"📊 {target.name} — {pos}", description=text, color=0x1e90ff)
+        embed = discord.Embed(title=f"📊 {target.name} — {pos}", description="\n".join(lines), color=0x1e90ff)
         embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
         embed.add_field(name="Clutch", value=str(target.clutch_score), inline=True)
         embed.add_field(name="Error", value=str(target.error_score), inline=True)
@@ -658,8 +629,7 @@ async def slash_stats(interaction: discord.Interaction, player: str):
 @bot.tree.command(name="mvp", description="MVP of the season")
 async def slash_mvp(interaction: discord.Interaction):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
@@ -679,8 +649,7 @@ async def slash_mvp(interaction: discord.Interaction):
 @bot.tree.command(name="worst", description="Worst player of the week")
 async def slash_worst(interaction: discord.Interaction):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
@@ -696,8 +665,7 @@ async def slash_worst(interaction: discord.Interaction):
 @bot.tree.command(name="who_sold", description="Who sold the match")
 async def slash_who_sold(interaction: discord.Interaction):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
@@ -713,8 +681,7 @@ async def slash_who_sold(interaction: discord.Interaction):
 @bot.tree.command(name="carry_detector", description="Who is carrying the team")
 async def slash_carry(interaction: discord.Interaction):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
@@ -731,8 +698,7 @@ async def slash_carry(interaction: discord.Interaction):
 @app_commands.describe(player="Player name, PSN, or nickname")
 async def slash_fraud_check(interaction: discord.Interaction, player: str):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     target = find_player(player)
     if not target:
         await interaction.followup.send(f"ما لقيتش `{player}`.")
@@ -756,8 +722,7 @@ async def slash_fraud_check(interaction: discord.Interaction, player: str):
 @bot.tree.command(name="ballon_dor", description="Ballon d'Or ranking")
 async def slash_ballon_dor(interaction: discord.Interaction):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
@@ -775,8 +740,7 @@ async def slash_ballon_dor(interaction: discord.Interaction):
 @bot.tree.command(name="ghost_detector", description="Detect inactive players")
 async def slash_ghost(interaction: discord.Interaction):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
@@ -792,8 +756,7 @@ async def slash_ghost(interaction: discord.Interaction):
 @bot.tree.command(name="pass_the_ball", description="Call out ball hog")
 async def slash_pass_ball(interaction: discord.Interaction):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
@@ -817,8 +780,7 @@ async def slash_pass_ball(interaction: discord.Interaction):
 ])
 async def slash_leaderboard(interaction: discord.Interaction, metric: app_commands.Choice[str]):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
@@ -834,8 +796,7 @@ async def slash_leaderboard(interaction: discord.Interaction, metric: app_comman
 @app_commands.describe(player1="First player", player2="Second player")
 async def slash_compare(interaction: discord.Interaction, player1: str, player2: str):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     p1 = find_player(player1)
     p2 = find_player(player2)
     if not p1 or not p2:
@@ -857,8 +818,7 @@ async def slash_compare(interaction: discord.Interaction, player1: str, player2:
 @bot.tree.command(name="lastmatch", description="Last match + result")
 async def slash_lastmatch(interaction: discord.Interaction):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     if not current_club.matches:
         await interaction.followup.send("ما لقيتش match history.")
         return
@@ -874,8 +834,7 @@ async def slash_lastmatch(interaction: discord.Interaction):
 @bot.tree.command(name="clubinfo", description="Club overview + match report card")
 async def slash_clubinfo(interaction: discord.Interaction):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
@@ -901,8 +860,7 @@ async def slash_banter(interaction: discord.Interaction):
 @bot.tree.command(name="drama", description="Drama / polemique")
 async def slash_drama(interaction: discord.Interaction):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     try:
         names = [p.name for p in current_club.players[:2]] if current_club.players else ["Player1", "Player2"]
         text = darija.drama(names)
@@ -938,8 +896,7 @@ async def slash_transfer(interaction: discord.Interaction, player: str):
 @bot.tree.command(name="predict", description="Match prediction")
 async def slash_predict(interaction: discord.Interaction):
     await interaction.response.defer()
-    if not await ensure_data(interaction):
-        return
+    if not await ensure_data_interaction(interaction): return
     try:
         names = [p.name for p in current_club.players[:2]] if current_club.players else ["Player1", "Player2"]
         text = darija.predict(names)
@@ -977,7 +934,7 @@ async def slash_help(interaction: discord.Interaction):
             color=0x1e90ff
         )
         cmds = [
-            ("`/test` / `!test`", "تأكد من أن البوت كيهضر"),
+            ("`/ping` / `!ping`", "تأكد من أن البوت كيهضر"),
             ("`/sync` / `!sync`", "جلب البيانات (دير هادي الأول!)"),
             ("`/stats [player]` / `!stats [player]`", "إحصائيات لاعب + كارطة"),
             ("`/mvp` / `!mvp`", "أفضل لاعب"),
@@ -1010,9 +967,6 @@ async def slash_help(interaction: discord.Interaction):
         await interaction.response.send_message(f"❌ Error: `{str(e)[:300]}`")
 
 
-def main():
-    start_health_server()
-    bot.run(Config.DISCORD_TOKEN)
-
+# Run
 if __name__ == "__main__":
-    main()
+    bot.run(Config.DISCORD_TOKEN)
