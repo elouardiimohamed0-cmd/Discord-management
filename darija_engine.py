@@ -1,489 +1,285 @@
-"""
-Rachad L3ERGONI Bot — Darija Engine v3
-Native Casablanca cyber-café gamer. Code-switches Darija/French.
-Every roast cites real stats. Never generic.
-"""
-
-import json
 import random
-from typing import Dict, List, Optional, Tuple
-from pathlib import Path
-
-
-# ── Vocabulary Layers ───────────────────────────────────────────────────────
-
-DARIJA_EXPRESSIONS = {
-    "openers": [
-        "wa 3ziz", "hakda", "b7al chi", "chi", "walo", "z3ma", "safi", "daba",
-        "yallah", "daba daba", "wa 3ziz 3liya", "hakda rak", "b7al chi wa7ed",
-    ],
-    "closers": [
-        "safi", "walo", "z3ma", "hakda", "daba", "yallah", "bon courage",
-        "c'est fini", "delete game", "trash", "garbage", "chi m3a9ed",
-    ],
-    "disappointment": [
-        "lla... c'est fini.", "bon courage.", "trash.", "garbage.", "delete game.",
-        "walo. safi.", "chi m3a9ed.", "b7al chi hwayej.", "khawya l3ba.",
-        "m3a9ed l3ba.", "l3ba khawya.", "safi walo.", "z3ma... walo.",
-        "hakda. b7al hakda.", "daba daba. walo.", "yallah. walo.",
-    ],
-    "laughter": [
-        "hahahaha", "hahahaha chi m3a9ed", "hahahaha walo", "hahahaha z3ma",
-        "hahahaha safi", "hahahaha l3ba", "hahahaha l7wayej", "hahahaha khawya",
-        "hahahaha m3a9ed", "hahahaha delete game", "hahahaha trash",
-    ],
-    "shock": [
-        "wallah!", "wallah chi m3a9ed!", "wallah l3ba khawya!", "wallah walo!",
-        "wallah delete game!", "wallah trash!", "wallah garbage!", "wallah lla...!",
-    ],
-    "thinking": [
-        "z3ma...", "z3ma... walo", "z3ma... chi m3a9ed", "z3ma... b7al chi",
-        "z3ma... hakda", "z3ma... l3ba", "z3ma... l7wayej", "z3ma... khawya",
-        "z3ma... safi", "z3ma... yallah", "z3ma... daba", "z3ma... 3ziz",
-    ],
-}
-
-# Stat-cited roast templates. {name} + stats interpolated.
-ROAST_TEMPLATES = {
-    "goals_zero": [
-        "{name}: 0 goals f {matches} matchs. b7al chi taxi khawya.",
-        "{name}: 0 goals. z3ma... striker? hahahaha.",
-        "{name}: 0 goals. walo. safi. delete game.",
-        "{name}: 0 goals. chi m3a9ed l3ba.",
-        "{name}: 0 goals. b7al chi hwayej. khawya.",
-        "{name}: 0 goals. l3ba khawya. l3adou chafek 3jbou.",
-    ],
-    "goals_low": [
-        "{name}: {goals} goals f {matches} matchs. b7al chi taxi khawya.",
-        "{name}: {goals} goals. z3ma... striker? hahahaha.",
-        "{name}: {goals} goals. chi m3a9ed l3ba.",
-        "{name}: {goals} goals. b7al chi 7wayej. khawya.",
-        "{name}: {goals} goals. l3ba khawya. l3adou chafek 3jbou.",
-    ],
-    "assists_zero": [
-        "{name}: 0 assists. walo. playmaker? z3ma...",
-        "{name}: 0 assists. b7al chi passer khawya.",
-        "{name}: 0 assists. chi m3a9ed. safi walo.",
-        "{name}: 0 assists. l3ba khawya. delete game.",
-    ],
-    "assists_low": [
-        "{name}: {assists} assists. walo. playmaker? z3ma...",
-        "{name}: {assists} assists. b7al chi passer khawya.",
-        "{name}: {assists} assists. chi m3a9ed. safi walo.",
-    ],
-    "rating_low": [
-        "{name}: {rating}/10. pathetique. find a job.",
-        "{name}: {rating}/10. z3ma... pro player? hahahaha.",
-        "{name}: {rating}/10. walo. safi. chi m3a9ed.",
-        "{name}: {rating}/10. b7al chi player khawya. trash.",
-        "{name}: {rating}/10. l3ba khawya. delete game.",
-        "{name}: {rating}/10. spectator walo. hahahaha.",
-    ],
-    "defense_low": [
-        "{name}: {tackles} tackles. b7al chi mur dial chi dar khawya.",
-        "{name}: {tackles} tackles. z3ma... defender? walo.",
-        "{name}: {tackles} tackles. chi m3a9ed. safi.",
-        "{name}: {tackles} tackles. l3adou daz mn 3ndek b7al chi tiran.",
-    ],
-    "passing_low": [
-        "{name}: {pass_accuracy}% passing. z3ma... xavi? hahahaha.",
-        "{name}: {pass_accuracy}% passing. walo. chi m3a9ed.",
-        "{name}: {pass_accuracy}% passing. b7al chi passer khawya.",
-        "{name}: {pass_accuracy}% passing. l3ba khawya. delete game.",
-        "{name}: {pass_accuracy}% passing. l3adou chafek 3jbou.",
-    ],
-    "possession_loss_high": [
-        "{name}: {possession_losses} possession losses. z3ma... ballon d'or? hahahaha.",
-        "{name}: {possession_losses} marat kayt7arrak. chi m3a9ed l3ba.",
-        "{name}: {possession_losses} marat kaydrob l3adou. walo. safi.",
-        "{name}: {possession_losses} possession losses. b7al chi hwayej. khawya.",
-        "{name}: {possession_losses} possession losses. l3ba khawya. delete game.",
-    ],
-    "general": [
-        "{name}. walo. safi.", "{name}. clown. 🤡", "{name}. npc behavior.",
-        "{name}. chi m3a9ed.", "{name}. b7al chi hwayej.", "{name}. l3ba khawya.",
-        "{name}. delete game.", "{name}. trash. garbage.", "{name}. z3ma... player? walo.",
-        "{name}. bon courage. c'est fini.", "{name}. chi 7wayej. safi.",
-        "{name}. walo z3ma. hakda.", "{name}. b7al chi m3a9ed l3ba.",
-    ],
-    "gk_low": [
-        "{name}: {saves} saves. z3ma... goalkeeper? hahahaha.",
-        "{name}: {saves} saves. b7al chi 7aris dial l3ba khawya.",
-        "{name}: {saves} saves. chi m3a9ed. safi.",
-        "{name}: {saves} saves. l3ba khawya. delete game.",
-    ],
-    "striker_wasteful": [
-        "{name}: {shots} shots, {goals} goals. b7al chi sniper khawya.",
-        "{name}: {shots} shots, {goals} goals. z3ma... shooter? walo.",
-        "{name}: {shots} shots, {goals} goals. chi m3a9ed. safi.",
-        "{name}: {shots} shots b7al chi 9ahba dial l3ba.",
-    ],
-}
-
-MATCH_RESULT_ROASTS = {
-    "win_big": [
-        "wallah! adversaire chi m3a9ed l3cha. 🤡",
-        "wallah! chi m3a9ed l3ba. hahahaha.",
-        "wallah! b7al chi hwayej. delete game.",
-        "adversaire dial chi m3a9ed. safi walo.",
-    ],
-    "win_small": [
-        "b7al chi match dial chi m3a9ed. walo.",
-        "b7al chi match khawya. safi.",
-        "z3ma... win? walo. chi m3a9ed.",
-        "win b7al chi 7wayej. hakda.",
-    ],
-    "draw": [
-        "noss noss. walo. c'est fini.",
-        "noss noss. chi m3a9ed. safi.",
-        "noss noss. l3ba khawya. delete game.",
-        "noss noss. b7al chi hwayej.",
-    ],
-    "loss": [
-        "lla... c'est fini. bon courage. 😤",
-        "trash. garbage. delete game. 🗑️",
-        "walo. safi. chi m3a9ed l3ba.",
-        "l3ba khawya. l3adou chafek 3jbou.",
-        "loss b7al chi 7wayej. delete game.",
-    ],
-}
-
-MOTM_ROASTS = [
-    "{name} motm. {rating}/10. z3ma... best of the worst. 🤡",
-    "{name} motm. {rating}/10. c'est pas serieux. clown team.",
-    "{name} motm. {rating}/10. z3ma... mvp? walo. hahahaha.",
-    "{name} motm. {rating}/10. b7al chi motm dial chi m3a9ed.",
-]
-
-POSITION_ROASTS = {
-    "ST": ["striker khawya. b7al chi 9ahba dial l3ba.", "z3ma... 9ahba? walo. hahahaha.", "striker chi m3a9ed. delete game."],
-    "LW": ["winger khawya. b7al chi 9t3a dial lferrari khawya.", "z3ma... winger? walo. hahahaha.", "winger chi m3a9ed. delete game."],
-    "RW": ["winger khawya. b7al chi 9t3a dial lferrari khawya.", "z3ma... winger? walo. hahahaha.", "winger chi m3a9ed. delete game."],
-    "CM": ["midfielder khawya. b7al chi maestro dial l7wayej.", "z3ma... maestro? walo. hahahaha.", "midfielder chi m3a9ed. delete game."],
-    "CAM": ["playmaker khawya. b7al chi 10 dial l3ba khawya.", "z3ma... playmaker? walo. hahahaha.", "playmaker chi m3a9ed. delete game."],
-    "CDM": ["destroyer khawya. b7al chi tank dial l3ba khawya.", "z3ma... destroyer? walo. hahahaha.", "destroyer chi m3a9ed. delete game."],
-    "CB": ["defender khawya. b7al chi mur dial chi dar khawya.", "z3ma... defender? walo. hahahaha.", "defender chi m3a9ed. delete game."],
-    "LB": ["defender khawya. b7al chi mur dial chi dar khawya.", "z3ma... defender? walo. hahahaha.", "defender chi m3a9ed. delete game."],
-    "RB": ["defender khawya. b7al chi mur dial chi dar khawya.", "z3ma... defender? walo. hahahaha.", "defender chi m3a9ed. delete game."],
-    "GK": ["goalkeeper khawya. b7al chi 7aris dial l3ba khawya.", "z3ma... goalkeeper? walo. hahahaha.", "goalkeeper chi m3a9ed. delete game."],
-    "LM": ["midfielder khawya. b7al chi maestro dial l7wayej.", "z3ma... midfielder? walo. hahahaha.", "midfielder chi m3a9ed. delete game."],
-    "RM": ["midfielder khawya. b7al chi maestro dial l7wayej.", "z3ma... midfielder? walo. hahahaha.", "midfielder chi m3a9ed. delete game."],
-}
-
-BANTER_TEMPLATES = [
-    "z3ma... pro clubs? walo. chi m3a9ed l3ba.",
-    "b7al chi hwayej. delete game. safi.",
-    "l3ba khawya. z3ma... football? hahahaha.",
-    "chi m3a9ed. walo. bon courage.",
-    "trash. garbage. l7wayej. walo.",
-    "z3ma... team? b7al chi m3a9ed. safi.",
-]
-
-DRAMA_TEMPLATES = [
-    "z3ma... drama? walo. chi m3a9ed l7wayej.",
-    "b7al chi polemique khawya. delete game.",
-    "l7wayej. z3ma... drama? hahahaha walo.",
-    "chi m3a9ed. walo. safi. bon courage.",
-]
-
-MEME_TEMPLATES = [
-    "hahahaha chi m3a9ed. delete game.",
-    "hahahaha l3ba khawya. walo. safi.",
-    "hahahaha z3ma... meme? walo. chi 7wayej.",
-    "hahahaha b7al chi hwayej. trash.",
-]
-
-TRANSFER_TEMPLATES = [
-    "z3ma... transfer? walo. chi m3a9ed l7wayej.",
-    "b7al chi transfer khawya. delete game.",
-    "l7wayej. z3ma... move? hahahaha walo.",
-    "chi m3a9ed. walo. safi. bon courage.",
-]
-
-PREDICTION_TEMPLATES = {
-    "win": [
-        "z3ma... win? walo. chi m3a9ed l3ba.",
-        "b7al chi prediction khawya. delete game.",
-        "l3ba khawya. z3ma... victory? hahahaha walo.",
-    ],
-    "loss": [
-        "wallah! loss. chi m3a9ed l3ba. delete game.",
-        "b7al chi prediction khawya. walo. safi.",
-        "l3ba khawya. z3ma... loss? hahahaha.",
-    ],
-    "draw": [
-        "noss noss. z3ma... draw? walo. chi m3a9ed.",
-        "b7al chi prediction khawya. delete game.",
-        "l3ba khawya. z3ma... noss noss? hahahaha walo.",
-    ],
-}
-
-PERSONALITIES = {
-    "casablanca": {
-        "prefixes": ["wa 3ziz", "hakda", "b7al chi", "chi", "walo", "z3ma", "safi", "daba"],
-        "suffixes": ["safi", "walo", "z3ma", "hakda", "daba", "yallah"],
-        "intensity": 1.0,
-    },
-    "analyst": {
-        "prefixes": ["z3ma...", "b7al chi", "chi", "walo"],
-        "suffixes": ["safi", "walo", "z3ma", "hakda"],
-        "intensity": 0.7,
-    },
-    "toxic": {
-        "prefixes": ["wallah!", "trash", "garbage", "delete game", "chi m3a9ed"],
-        "suffixes": ["delete game", "trash", "garbage", "walo", "safi"],
-        "intensity": 1.2,
-    },
-    "coach": {
-        "prefixes": ["bon courage", "z3ma...", "b7al chi", "chi"],
-        "suffixes": ["bon courage", "safi", "walo", "z3ma"],
-        "intensity": 0.6,
-    },
-    "commentator": {
-        "prefixes": ["wallah!", "hahahaha", "z3ma...", "b7al chi"],
-        "suffixes": ["hahahaha", "walo", "z3ma", "safi"],
-        "intensity": 0.9,
-    },
-    "cafeteria": {
-        "prefixes": ["hahahaha", "z3ma...", "b7al chi", "chi", "walo"],
-        "suffixes": ["hahahaha", "walo", "z3ma", "safi", "daba"],
-        "intensity": 1.1,
-    },
-}
-
+from typing import List, Dict, Optional
+from models import PlayerStats, ClubStats
 
 class DarijaEngine:
-    def __init__(self, squad_path: str = "squad.json"):
-        self.squad = self._load_squad(squad_path)
-        self.roast_mode = 0.95
-        self.current_personality = "casablanca"
-        self.memory_path = Path("darija_memory.json")
-        self.memory = self._load_memory()
-
-    def _load_squad(self, path: str) -> dict:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-
-    def _load_memory(self) -> dict:
-        if self.memory_path.exists():
-            try:
-                with open(self.memory_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {"roast_counts": {}, "mvp_counts": {}, "worst_counts": {}, "historic_lows": {}}
-
-    def save_memory(self):
-        with open(self.memory_path, "w", encoding="utf-8") as f:
-            json.dump(self.memory, f, indent=2, ensure_ascii=False)
-
-    def set_personality(self, personality: str):
-        if personality in PERSONALITIES:
-            self.current_personality = personality
-
-    def _get_prefix(self) -> str:
-        p = PERSONALITIES.get(self.current_personality, PERSONALITIES["casablanca"])
-        if random.random() < p["intensity"]:
-            return random.choice(p["prefixes"])
-        return ""
-
-    def _get_suffix(self) -> str:
-        p = PERSONALITIES.get(self.current_personality, PERSONALITIES["casablanca"])
-        if random.random() < p["intensity"]:
-            return random.choice(p["suffixes"])
-        return ""
-
-    def _format(self, template: str, **kwargs) -> str:
-        text = template.format(**kwargs)
-        prefix = self._get_prefix()
-        suffix = self._get_suffix()
-        if prefix and not text.lower().startswith(prefix.lower()):
-            text = f"{prefix}. {text}"
-        if suffix and not text.lower().endswith(suffix.lower()):
-            text = f"{text} {suffix}."
-        return text
-
-    def _get_nickname(self, name: str) -> str:
-        info = self.squad.get(name.lower(), {})
-        return info.get("nickname", name)
-
-    def _get_position(self, name: str) -> str:
-        info = self.squad.get(name.lower(), {})
-        return info.get("position", "CM")
-
-    def roast_player(self, name: str, stats: dict, matches: int = 5) -> List[str]:
+    PERSONALITIES = {
+        "casablanca": {
+            "prefixes": ["آش هادا", "واخا", "صافي", "هادشي", "ياك", "أودي"],
+            "suffixes": ["آ صاحبي", "يا لعيب", "يا fraud", "يا ghost", "يا باطل"],
+            "style": "street_casablanca"
+        },
+        "analyst": {
+            "prefixes": ["من ناحية تحليلية", "إحصائياً", "بناءً على البيانات"],
+            "suffixes": ["هادا التحليل العلمي", "الأرقام ما كتكذبش"],
+            "style": "analytical"
+        },
+        "toxic": {
+            "prefixes": ["أودي", "ياك", "واش كنتي", "بغيت نفهم"],
+            "suffixes": ["يا باطل", "يا خايب", "يا مسكين", "يا فاشل"],
+            "style": "toxic_teammate"
+        },
+        "coach": {
+            "prefixes": ["غادي نقوللك شي حاجة", "سمع مني", "هادشي باش تتعلم"],
+            "suffixes": ["غادي تحتاج تتمرن", "هادا مشكل ديال mindset", "غادي نبدلوك position"],
+            "style": "coach"
+        },
+        "commentator": {
+            "prefixes": ["يا سلام", "يا لطيف", "يا ربي", "شوف شوف"],
+            "suffixes": ["هادا مستوى", "هادا فن", "هادا كارثة"],
+            "style": "commentator"
+        },
+        "cafeteria": {
+            "prefixes": ["سمعتيه", "الناس كتهضر", "فالكافيتيريا", "الراجل"],
+            "suffixes": ["هادا لي كاين", "هادا شنو واقع", "هادا رأي العامة"],
+            "style": "gossip"
+        }
+    }
+    
+    # Core roast templates with {slots} for data injection
+    ROAST_TEMPLATES = {
+        "rating_low": [
+            "Rating {rating}؟ هادي ماشي note، هادي warning آ {name}.",
+            "{rating}؟ اليوم كنتي NPC رسمي يا {name}.",
+            "واش كنتي لاعب ولا كنتي كتشوف المباراة من التلفون يا {name}؟ Rating {rating} هادي عيب.",
+            "Rating {rating} — المدافع ديال الخصم لعب ضدك وتهنى يا {name}.",
+            "{rating}؟ الله يعطيك الصحة، درتي cardio مزيان ولكن الكرة بقات كتسناك يا {name}.",
+        ],
+        "rating_high": [
+            "Rating {rating} — هادا Ballon d'Or ولا غير lucky game يا {name}؟",
+            "{rating}؟ آش بغيتي نصقفو ليك ولا شنو؟ هادي مرة واحة ما غاديش تعاود يا {name}.",
+            "Rating {rating} — الكاميرا كتصورك اليوم يا {name}.",
+        ],
+        "goals_zero": [
+            "جبت {goals} أهداف — الحارس دار save أكثر منك يا {name}.",
+            "{goals} goals فـ {games} games؟ واش كنتي لاعب ولا referee يا {name}؟",
+            "المشكل ماشي فالفريق، المشكل فداك لي لابس رقمك يا {name}. {goals} goals هادي كارثة.",
+            "الكرة كانت عندك أكثر من اللازم وهادشي كارثة يا {name}. {goals} goals؟",
+        ],
+        "goals_good": [
+            "جبت {goals} أهداف — مزيان، ولكن داك 11% الباقي خاصو تحقيق يا {name}.",
+            "{goals} goals — كتسجل بحال Haaland ولكن فالدفاع كتبان بحال Maguire يا {name}.",
+        ],
+        "assists_zero": [
+            "0 assists — واش كتباصي للخصم ولا شنو يا {name}؟",
+            "0 assists فـ {games} games — هادا ماشي teamwork، هادا solo queue يا {name}.",
+            "كتحتاج تفهم: الكرة ماشي ديالك وحدك يا {name}. 0 assists هادي عيب.",
+        ],
+        "possession_losses": [
+            "ضيعتي {possession_losses} كرة — يعني سجلتي وكملتي المهمة ديالك فتخريب الفريق يا {name}.",
+            "{possession_losses} possession losses؟ كتجري فالتيران بحال إلا عندك 300 ping يا {name}.",
+            "ضيعتي {possession_losses} كرة — هادا ماشي Pro Clubs، هادا charity يا {name}.",
+            "كل مرة كتضيع الكرة، الحارس ديالنا كيتصل ب insurance يا {name}. {possession_losses} مرات.",
+        ],
+        "fraud": [
+            "Throwing score {throwing_score} — هادا رسمي fraud يا {name}.",
+            "Error score {error_score} — كتضرب فريقك أكثر من الخصم يا {name}.",
+            "Impact score {impact_score} — واش كتجبد الteam لتحت ولا شنو يا {name}؟",
+            "Clutch score {clutch_score} — فالضغط كتختفي بحال Casper يا {name}.",
+        ],
+        "ghost": [
+            "لعبتي {games} games و {minutes} minutes — واش كتجي تشوف المباراة ولا تلعب يا {name}؟",
+            "{minutes} minutes فـ {games} games — هادا substitute ديال substitute يا {name}.",
+            "غادي نسقو ليك taxi باش تجي تلعب، ماشي غير تشوف يا {name}.",
+        ],
+        "ball_hog": [
+            "Possession losses {possession_losses} و assists {assists} — كتباغي تلعب وحدك وكتخسر وحدك يا {name}.",
+            "Pass the ball يا {name}! {possession_losses} مرة ضيعتيها و {assists} باصة صحيحة.",
+            "كتباصي بحال إلا كتدير Morse code يا {name}. {assists} assists هادي ماشي كافية.",
+        ],
+        "carry": [
+            "Impact score {impact_score} — كتجبد الفريق فظهرك يا {name}.",
+            "Clutch score {clutch_score} — كتبان فالضغط بحال Messi يا {name}.",
+            "هادا لي كيسميو carry — {name} بلا ما يتكلم.",
+            "{name} كيلعب و 10 كيتفرجو — هادا الواقع.",
+        ],
+        "win_rate": [
+            "Win rate {win_rate}% — فريقك كيخسر بسببك يا {name}.",
+            "{win_rate}% wins — هادا ماشي win rate، هادا survival rate يا {name}.",
+            "فالgames لي كتفوز فيهم، كون غير ما كتلعبش يا {name}.",
+        ],
+        "pass_accuracy": [
+            "Pass accuracy {pass_accuracy}% — كتباصي الكرة بحال إلا كتدير raffle يا {name}.",
+            "{pass_accuracy}% — 3ndak {fail_pct}% ديال التخربيق فكل باصة يا {name}.",
+            "{pass_accuracy}% pass accuracy — يعني فالأغلبية كنتي صاحي، ولكن داك {fail_pct}% الباقي خاصو تحقيق يا {name}.",
+        ],
+        "defender_bad": [
+            "{tackles} tackles و {interceptions} interceptions — المدافع ديال الخصم كيتضحك عليك يا {name}.",
+            "Clean sheets {clean_sheets} — الحارس كيتسنا منك أكثر من ما كتسنا منو يا {name}.",
+            "Goals conceded {goals_conceded} — واش كتدافع ولا كتفتح باب ليهم يا {name}؟",
+        ],
+        "general": [
+            "هاد رابع أسبوع وانت كتضيع performance يا {name}.",
+            "آخر clean sheet عندك قديم أكثر من بعض أعضاء السيرفر يا {name}.",
+            "{name} — كتبان بحال لاعب فريق مقهى، ماشي Pro Clubs.",
+            "واش كتجي تلعب ولا تجي تدير social experiment يا {name}؟",
+            "الفريق كيحتاج 11 player، ماشي 10 + {name} يتفرج.",
+            "يا {name}، EA Sports كتسول عليك: واش باقي كتلعب ولا retired؟",
+        ]
+    }
+    
+    def __init__(self, personality: str = "casablanca"):
+        self.personality = personality if personality in self.PERSONALITIES else "casablanca"
+        self.style = self.PERSONALITIES[self.personality]
+    
+    def set_personality(self, p: str):
+        if p in self.PERSONALITIES:
+            self.personality = p
+            self.style = self.PERSONALITIES[p]
+    
+    def _format(self, template: str, player: PlayerStats, extra: Dict = None) -> str:
+        data = {
+            "name": player.name,
+            "rating": round(player.rating_pg, 1),
+            "goals": player.goals,
+            "games": player.games,
+            "assists": player.assists,
+            "possession_losses": player.possession_losses,
+            "throwing_score": player.throwing_score,
+            "error_score": player.error_score,
+            "impact_score": player.impact_score,
+            "clutch_score": player.clutch_score,
+            "win_rate": player.win_rate,
+            "pass_accuracy": round(player.pass_accuracy, 1),
+            "fail_pct": round(100 - player.pass_accuracy, 1),
+            "tackles": player.tackles,
+            "interceptions": player.interceptions,
+            "clean_sheets": player.clean_sheets,
+            "goals_conceded": player.goals_conceded,
+            "minutes": player.minutes_played,
+        }
+        if extra:
+            data.update(extra)
+        return template.format(**data)
+    
+    def _add_personality(self, text: str) -> str:
+        prefix = random.choice(self.style["prefixes"]) if random.random() < 0.3 else ""
+        suffix = random.choice(self.style["suffixes"]) if random.random() < 0.4 else ""
+        
+        # Human-like imperfections
+        text = text.lower() if random.random() < 0.15 else text
+        text = text.replace("،", ",") if random.random() < 0.1 else text
+        text = text.replace(".", "") if random.random() < 0.2 else text
+        
+        parts = [p for p in [prefix, text, suffix] if p]
+        return " ".join(parts)
+    
+    def roast(self, player: PlayerStats, position: str = "CM") -> str:
         roasts = []
-        nick = self._get_nickname(name)
-        position = self._get_position(name)
-
+        
+        # Rating-based
+        if player.rating_pg < 5.5:
+            roasts.extend(self.ROAST_TEMPLATES["rating_low"])
+        elif player.rating_pg > 8.0:
+            roasts.extend(self.ROAST_TEMPLATES["rating_high"])
+        
         # Goals
-        if stats.get("goals", 0) == 0:
-            if position in ("ST", "LW", "RW", "CAM"):
-                roasts.append(self._format(random.choice(ROAST_TEMPLATES["goals_zero"]), name=nick, matches=matches))
-        elif stats.get("goals", 0) < matches * 0.3:
-            roasts.append(self._format(random.choice(ROAST_TEMPLATES["goals_low"]), name=nick, goals=stats["goals"], matches=matches))
-
+        if player.goals == 0 and player.games > 3:
+            roasts.extend(self.ROAST_TEMPLATES["goals_zero"])
+        elif player.goals_pg > 1.0:
+            roasts.extend(self.ROAST_TEMPLATES["goals_good"])
+        
         # Assists
-        if stats.get("assists", 0) == 0 and position in ("CAM", "CM", "LW", "RW"):
-            roasts.append(self._format(random.choice(ROAST_TEMPLATES["assists_zero"]), name=nick))
-        elif stats.get("assists", 0) < matches * 0.2 and position in ("CAM", "CM", "LW", "RW"):
-            roasts.append(self._format(random.choice(ROAST_TEMPLATES["assists_low"]), name=nick, assists=stats["assists"]))
-
-        # Rating
-        if stats.get("rating", 10) < 6.5:
-            roasts.append(self._format(random.choice(ROAST_TEMPLATES["rating_low"]), name=nick, rating=stats["rating"]))
-        elif stats.get("rating", 10) < 7.0:
-            roasts.append(self._format(random.choice(ROAST_TEMPLATES["rating_low"]), name=nick, rating=stats["rating"]))
-
-        # Defense
-        if position in ("CB", "LB", "RB", "CDM", "GK") and stats.get("tackles", 999) < 2:
-            roasts.append(self._format(random.choice(ROAST_TEMPLATES["defense_low"]), name=nick, tackles=stats["tackles"]))
-
-        # Passing
-        if stats.get("pass_accuracy", 100) < 70:
-            roasts.append(self._format(random.choice(ROAST_TEMPLATES["passing_low"]), name=nick, pass_accuracy=stats["pass_accuracy"]))
-
+        if player.assists == 0 and player.games > 3:
+            roasts.extend(self.ROAST_TEMPLATES["assists_zero"])
+        
         # Possession losses
-        if stats.get("possession_losses", 0) > 12:
-            roasts.append(self._format(random.choice(ROAST_TEMPLATES["possession_loss_high"]), name=nick, possession_losses=stats["possession_losses"]))
-
-        # GK specific
-        if position == "GK" and stats.get("saves", 0) < 2 and matches >= 3:
-            roasts.append(self._format(random.choice(ROAST_TEMPLATES["gk_low"]), name=nick, saves=stats["saves"]))
-
-        # Wasteful striker
-        if stats.get("shots", 0) > 8 and stats.get("goals", 0) == 0:
-            roasts.append(self._format(random.choice(ROAST_TEMPLATES["striker_wasteful"]), name=nick, shots=stats["shots"], goals=stats["goals"]))
-
-        # Position roast
-        if position in POSITION_ROASTS:
-            roasts.append(self._format(random.choice(POSITION_ROASTS[position])))
-
-        # Memory-based: frequent ball loser
-        if stats.get("possession_losses", 0) > 15:
-            count = self.memory["roast_counts"].get(name.lower(), 0)
-            if count >= 3:
-                roasts.append(self._format(f"هاد ثالث أسبوع وانت فالترتيب ديال أكثر واحد كيضيع الكرة. {nick}. chi m3a9ed."))
-            self.memory["roast_counts"][name.lower()] = count + 1
-
+        if player.possession_losses > 10:
+            roasts.extend(self.ROAST_TEMPLATES["possession_losses"])
+        
+        # Fraud metrics
+        if player.throwing_score > 3.0:
+            roasts.extend(self.ROAST_TEMPLATES["fraud"])
+        
+        # Ghost
+        if player.games > 0 and player.minutes_played / max(player.games, 1) < 60:
+            roasts.extend(self.ROAST_TEMPLATES["ghost"])
+        
+        # Ball hog
+        if player.possession_losses > player.assists * 5 and player.assists < 3:
+            roasts.extend(self.ROAST_TEMPLATES["ball_hog"])
+        
+        # Win rate
+        if player.win_rate < 40 and player.games > 5:
+            roasts.extend(self.ROAST_TEMPLATES["win_rate"])
+        
+        # Pass accuracy
+        if player.pass_accuracy < 70 and player.games > 3:
+            roasts.extend(self.ROAST_TEMPLATES["pass_accuracy"])
+        elif player.pass_accuracy > 90:
+            roasts.extend(self.ROAST_TEMPLATES["pass_accuracy"])
+        
+        # Defender specific
+        if position in ["CB", "LB", "RB", "GK"] and player.tackles + player.interceptions < 5 and player.games > 3:
+            roasts.extend(self.ROAST_TEMPLATES["defender_bad"])
+        
+        # Always add general
+        roasts.extend(self.ROAST_TEMPLATES["general"])
+        
         if not roasts:
-            roasts.append(self._format(random.choice(ROAST_TEMPLATES["general"]), name=nick))
-
-        self.save_memory()
-        return roasts[:3]
-
-    def roast_match_result(self, team_goals: int, opponent_goals: int, opponent_name: str = "") -> str:
-        if team_goals > opponent_goals:
-            if team_goals - opponent_goals >= 3:
-                return self._format(random.choice(MATCH_RESULT_ROASTS["win_big"]))
-            return self._format(random.choice(MATCH_RESULT_ROASTS["win_small"]))
-        elif team_goals == opponent_goals:
-            return self._format(random.choice(MATCH_RESULT_ROASTS["draw"]))
-        return self._format(random.choice(MATCH_RESULT_ROASTS["loss"]))
-
-    def roast_motm(self, name: str, rating: float) -> str:
-        return self._format(random.choice(MOTM_ROASTS), name=name, rating=rating)
-
-    def banter(self) -> str:
-        return self._format(random.choice(BANTER_TEMPLATES))
-
-    def drama(self) -> str:
-        return self._format(random.choice(DRAMA_TEMPLATES))
-
-    def meme(self) -> str:
-        return self._format(random.choice(MEME_TEMPLATES))
-
-    def transfer(self) -> str:
-        return self._format(random.choice(TRANSFER_TEMPLATES))
-
-    def predict(self, prediction: str) -> str:
-        return self._format(random.choice(PREDICTION_TEMPLATES.get(prediction, PREDICTION_TEMPLATES["loss"])))
-
-    def compare_players(self, p1_name: str, p1_stats: dict, p2_name: str, p2_stats: dict) -> str:
-        p1_nick = self._get_nickname(p1_name)
-        p2_nick = self._get_nickname(p2_name)
-        p1_score = p1_stats.get("rating", 0) + p1_stats.get("goals", 0) * 2 + p1_stats.get("assists", 0)
-        p2_score = p2_stats.get("rating", 0) + p2_stats.get("goals", 0) * 2 + p2_stats.get("assists", 0)
-        winner, loser = (p1_nick, p2_nick) if p1_score > p2_score else (p2_nick, p1_nick)
-        return self._format(
-            "{winner} vs {loser}. z3ma... comparison? walo. chi m3a9ed l3ba. {loser} delete game.",
-            winner=winner, loser=loser,
+            roasts = ["{name} — ما عنديش شي حاجة نقولها، وهادا فشل فحدو."]
+        
+        chosen = random.choice(roasts)
+        text = self._format(chosen, player)
+        return self._add_personality(text)
+    
+    def praise(self, player: PlayerStats, position: str = "CM") -> str:
+        # 5% serious mode - rare praise
+        praises = [
+            "Impact score {impact_score} — {name} كيلعب مزيان اليوم، صافي.",
+            "Rating {rating} — {name} كتبان لي كتعرف شنو كتدير.",
+            "{name} — هادا لي كيسميو performance.",
+            "Win rate {win_rate}% — {name} كيجيب الwins، ماشي غير الexcuses.",
+        ]
+        chosen = random.choice(praises)
+        return self._format(chosen, player)
+    
+    def generate(self, player: PlayerStats, position: str = "CM", roast_freq: float = 0.95) -> str:
+        if random.random() < roast_freq:
+            return self.roast(player, position)
+        return self.praise(player, position)
+    
+    def compare(self, p1: PlayerStats, p2: PlayerStats, pos1: str = "CM", pos2: str = "CM") -> str:
+        winner = p1 if p1.impact_score > p2.impact_score else p2
+        loser = p2 if winner == p1 else p1
+        
+        templates = [
+            "{winner} كيدر {loser} فجيبو — Impact {w_score} vs {l_score}.",
+            "هادا 1v1: {winner} كيفوز بلا مناقشة. {loser} كيبقى يتفرج.",
+            "{winner} كيلعب football، {loser} كيلعب something else.",
+            "Statistics ما كتكذبش: {winner} ({w_score}) >>> {loser} ({l_score}).",
+        ]
+        chosen = random.choice(templates)
+        return chosen.format(
+            winner=winner.name,
+            loser=loser.name,
+            w_score=winner.impact_score,
+            l_score=loser.impact_score
         )
-
-    def get_worst_player(self, players_stats: dict) -> Tuple[str, str]:
-        worst = None
-        worst_score = float("inf")
-        for name, stats in players_stats.items():
-            score = stats.get("rating", 10) - stats.get("goals", 0) * 2 - stats.get("assists", 0)
-            if score < worst_score:
-                worst_score = score
-                worst = name
-        if worst:
-            nick = self._get_nickname(worst)
-            roast = self._format(
-                "{name}. worst of the week. z3ma... player? walo. delete game.", name=nick
-            )
-            self.memory["worst_counts"][worst.lower()] = self.memory["worst_counts"].get(worst.lower(), 0) + 1
-            self.save_memory()
-            return worst, roast
-        return "", ""
-
-    def get_mvp(self, players_stats: dict) -> Tuple[str, str]:
-        best = None
-        best_score = -1
-        for name, stats in players_stats.items():
-            score = stats.get("rating", 0) + stats.get("goals", 0) * 2 + stats.get("assists", 0)
-            if score > best_score:
-                best_score = score
-                best = name
-        if best:
-            nick = self._get_nickname(best)
-            rating = players_stats[best].get("rating", 0)
-            return best, self.roast_motm(nick, rating)
-        return "", ""
-
-    def roast_leaderboard(self, leaderboard: List) -> List[str]:
-        roasts = []
-        for i, (name, stats) in enumerate(leaderboard[:5]):
-            nick = self._get_nickname(name)
-            if i == 0:
-                roasts.append(self._format("{name}. #1. z3ma... best? walo. chi m3a9ed.", name=nick))
-            elif i == len(leaderboard) - 1:
-                roasts.append(self._format("{name}. last. trash. garbage. delete game.", name=nick))
-            else:
-                roasts.append(self._format("{name}. #{rank}. b7al chi hwayej. walo.", name=nick, rank=i + 1))
-        return roasts
-
-    def fraud_check(self, name: str, stats: dict) -> Tuple[bool, str]:
-        nick = self._get_nickname(name)
-        fraud_score = 0
-        reasons = []
-        if stats.get("goals", 0) == 0 and stats.get("assists", 0) == 0:
-            fraud_score += 50
-            reasons.append("0 goals, 0 assists")
-        if stats.get("rating", 10) < 6.0:
-            fraud_score += 30
-            reasons.append(f"Rating {stats['rating']:.1f}")
-        if stats.get("possession_losses", 0) > 15:
-            fraud_score += 20
-            reasons.append(f"{stats['possession_losses']} possession losses")
-        is_fraud = fraud_score >= 50
-        if is_fraud:
-            roast = self._format(
-                "{name}. FRAUD DETECTED. z3ma... player? walo. delete game. trash. garbage. 🗑️", name=nick
-            )
-        else:
-            roast = self._format("{name}. z3ma... fraud? walo. chi m3a9ed. safi.", name=nick)
-        return is_fraud, roast, fraud_score, reasons
-
-
-_engine = None
-
-def get_engine(squad_path: str = "squad.json") -> DarijaEngine:
-    global _engine
-    if _engine is None:
-        _engine = DarijaEngine(squad_path)
-    return _engine
+    
+    def match_summary(self, club: ClubStats, motm: PlayerStats) -> str:
+        templates = [
+            "الفوز {wins}، الخسارة {losses}، التعادل {draws}. MOTM: {motm} بـ Impact {impact}.",
+            "Season summary: {wins} wins، {losses} defeats. {motm} كيجبد الفريق.",
+            "Division {division}، Skill {skill}. {motm} كيلعب و 10 كيتفرجو.",
+        ]
+        chosen = random.choice(templates)
+        return chosen.format(
+            wins=club.wins,
+            losses=club.losses,
+            draws=club.draws,
+            motm=motm.name,
+            impact=round(motm.impact_score, 1),
+            division=club.division,
+            skill=club.skill_rating
+        )
+    
+    def banter(self) -> str:
+        banters = [
+            "سمعتيه؟ الفريق ديالنا كيفوز بلا ما يلعبو — هادا التأثير ديال الpresence.",
+            "الكافيتيريا كتهضر: الcoach غادي يبدل formation.",
+            "واش كتعرف شنو فرق بيننا و Barça؟ هوما كيفوزو.",
+            "هدفنا الموسم الجاي: نلعبو 11 player فنفس الوقت.",
+            "الفريق ديالنا بحال WiFi ديال الدار — كيتقطع من فترة لفترة.",
+        ]
+        return random.choice(banters)
