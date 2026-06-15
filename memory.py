@@ -18,6 +18,7 @@ class SquadMemory:
             total_games INTEGER DEFAULT 0,
             total_goals INTEGER DEFAULT 0,
             total_assists INTEGER DEFAULT 0,
+            total_possession_losses INTEGER DEFAULT 0,
             mvps INTEGER DEFAULT 0,
             frauds INTEGER DEFAULT 0,
             last_rating REAL DEFAULT 0,
@@ -65,36 +66,42 @@ class SquadMemory:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         
-        # Get existing
         c.execute("SELECT * FROM player_memories WHERE player_name = ?", (name,))
         row = c.fetchone()
         
+        rating = stats.get('rating', 0)
+        
         if not row:
             c.execute('''INSERT INTO player_memories 
-                (player_name, total_games, total_goals, total_assists, last_rating, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)''',
+                (player_name, total_games, total_goals, total_assists, total_possession_losses,
+                 last_rating, best_rating, worst_rating, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (name, stats.get('games', 0), stats.get('goals', 0), stats.get('assists', 0),
-                 stats.get('rating', 0), datetime.now()))
+                 stats.get('possession_losses', 0), rating, rating, rating, datetime.now()))
         else:
-            # Update totals
+            # Replace totals (PCT returns cumulative season stats, not incremental)
             c.execute('''UPDATE player_memories SET
-                total_games = total_games + ?,
-                total_goals = total_goals + ?,
-                total_assists = total_assists + ?,
+                total_games = ?,
+                total_goals = ?,
+                total_assists = ?,
+                total_possession_losses = ?,
                 last_rating = ?,
                 updated_at = ?
                 WHERE player_name = ?''',
                 (stats.get('games', 0), stats.get('goals', 0), stats.get('assists', 0),
-                 stats.get('rating', 0), datetime.now(), name))
+                 stats.get('possession_losses', 0), rating, datetime.now(), name))
             
-            # Update best/worst
-            rating = stats.get('rating', 0)
-            if rating > row[7]:  # best_rating
+            # Update best/worst historic ratings
+            if rating > row[7]:
                 c.execute("UPDATE player_memories SET best_rating = ? WHERE player_name = ?", (rating, name))
-            if rating < row[8]:  # worst_rating
+            if rating < row[8]:
                 c.execute("UPDATE player_memories SET worst_rating = ? WHERE player_name = ?", (rating, name))
+            if rating > row[13]:
+                c.execute("UPDATE player_memories SET historic_high_rating = ? WHERE player_name = ?", (rating, name))
+            if rating < row[14]:
+                c.execute("UPDATE player_memories SET historic_low_rating = ? WHERE player_name = ?", (rating, name))
             
-            # Consecutive tracking
+            # Consecutive streaks
             if rating < 5.5:
                 c.execute("UPDATE player_memories SET consecutive_bad_games = consecutive_bad_games + 1, consecutive_good_games = 0 WHERE player_name = ?", (name,))
             elif rating > 7.5:
@@ -120,15 +127,16 @@ class SquadMemory:
             "total_games": row[1],
             "total_goals": row[2],
             "total_assists": row[3],
-            "mvps": row[4],
-            "frauds": row[5],
-            "last_rating": row[6],
-            "best_rating": row[7],
-            "worst_rating": row[8],
-            "consecutive_bad": row[14],
-            "consecutive_good": row[15],
-            "rivalries": json.loads(row[16]),
-            "nicknames": json.loads(row[17]),
+            "total_possession_losses": row[4],
+            "mvps": row[5],
+            "frauds": row[6],
+            "last_rating": row[7],
+            "best_rating": row[8],
+            "worst_rating": row[9],
+            "consecutive_bad": row[15],
+            "consecutive_good": row[16],
+            "rivalries": json.loads(row[17]),
+            "nicknames": json.loads(row[18]),
         }
     
     def add_event(self, match_id: str, player_name: str, event_type: str, data: dict):
@@ -161,7 +169,6 @@ class SquadMemory:
         conn.close()
     
     def get_rivalry(self, p1: str, p2: str) -> str:
-        # Compare head-to-head stats
         m1 = self.get_player_memory(p1)
         m2 = self.get_player_memory(p2)
         
