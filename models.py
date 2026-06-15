@@ -46,6 +46,16 @@ class PlayerStats(BaseModel):
     defensive_contribution: float = 0.0
     offensive_contribution: float = 0.0
 
+class MatchResult(BaseModel):
+    match_id: str
+    date: datetime
+    opponent: str
+    score_for: int
+    score_against: int
+    result: str  # W, L, D
+    player_stats: Dict[str, dict] = {}
+    motm: Optional[str] = None
+
 class ClubStats(BaseModel):
     club_name: str
     division: int = 6
@@ -59,14 +69,5 @@ class ClubStats(BaseModel):
     current_streak: int = 0
     best_streak: int = 0
     players: List[PlayerStats] = []
+    matches: List[MatchResult] = []
     last_updated: datetime = Field(default_factory=datetime.now)
-
-class MatchResult(BaseModel):
-    match_id: str
-    date: datetime
-    opponent: str
-    score_for: int
-    score_against: int
-    result: str  # W, L, D
-    player_stats: Dict[str, dict] = {}  # name -> raw stats
-    motm: Optional[str] = None
