@@ -24,12 +24,12 @@ class Config:
     MATCH_DB = os.getenv("MATCH_DB", "matches.db")
     MEMORY_DB = os.getenv("MEMORY_DB", "memory.db")
     ASSETS_DIR = os.getenv("ASSETS_DIR", "assets")
+    PORT = int(os.getenv("PORT", "8080"))
     
     @classmethod
     def load_squad(cls):
         with open(cls.SQUAD_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # Support both dict format (your current squad.json) and proper list format
         if isinstance(data, dict) and "players" not in data:
             players = []
             for key, player in data.items():
