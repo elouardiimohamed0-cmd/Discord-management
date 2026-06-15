@@ -60,7 +60,6 @@ class RachadBot(commands.Bot):
         self._session_active = False
         self._last_match_count = 0
         self._fonts_ok = False
-        self._startup_scraped = False
         
     async def setup_hook(self):
         self.scraper = ProClubsTrackerScraper(
@@ -74,37 +73,72 @@ class RachadBot(commands.Bot):
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
         
-        # Try to pre-scrape on startup (background, non-blocking)
+        # Background startup scrape
         asyncio.create_task(self._startup_scrape())
     
     async def _startup_scrape(self):
-        """Try to scrape once on startup so data is ready immediately."""
         try:
             print("🔄 Startup scrape attempt...")
             club = await self.scraper.scrape_club()
-            if club:
+            if club and club.players:
                 self.current_club = club
                 squad_map = self._get_squad_map()
                 self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
-                self._startup_scraped = True
-                print(f"✅ Startup scrape OK: {len(club.players)} players loaded")
+                print(f"✅ Startup OK: {len(club.players)} players")
             else:
-                print("⚠️ Startup scrape returned None")
+                print("⚠️ Startup scrape: no players found")
         except Exception as e:
             print(f"❌ Startup scrape failed: {e}")
             traceback.print_exc()
     
     async def on_ready(self):
         print(f"Rachad L3ERGONI Bot online as {self.user}")
-        
         try:
-            test_font = self.imgen._get_font(20)
+            self.imgen._get_font(20)
             self._fonts_ok = True
         except Exception:
             self._fonts_ok = False
-            print("⚠️ WARNING: Arabic fonts not found. Cards will use fallback font.")
-        
+            print("⚠️ Arabic fonts not found")
         await self.change_presence(activity=discord.Game(name="Pro Clubs • /help"))
+    
+    async def on_command_error(self, ctx, error):
+        """Handle prefix command errors gracefully."""
+        if isinstance(error, commands.CommandNotFound):
+            await ctx.send("❌ هاد الكوماند ما كاينش. جرب `/help` ولا `!help` باش تشوف الكوماندات.")
+            return
+        if isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send(f"❌ ناقصك parameter: `{error.param.name}`. جرب `!help` باش تشوف كيفاش تستعمل.")
+            return
+        if isinstance(error, commands.CommandOnCooldown):
+            await ctx.send(f"⏳ صبر {error.retry_after:.1f} seconds.")
+            return
+        # Log unknown errors
+        print(f"Prefix command error: {error}")
+        traceback.print_exc()
+        await ctx.send(f"❌ Error: {str(error)[:300]}")
+    
+    async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """Handle slash command errors gracefully."""
+        if isinstance(error, app_commands.CommandNotFound):
+            return
+        if isinstance(error, app_commands.MissingPermissions):
+            if interaction.response.is_done():
+                await interaction.followup.send("❌ ما عندكش الصلاحية.")
+            else:
+                await interaction.response.send_message("❌ ما عندكش الصلاحية.")
+            return
+        
+        print(f"Slash command error: {error}")
+        traceback.print_exc()
+        
+        msg = f"❌ Error: {str(error)[:500]}"
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg)
+            else:
+                await interaction.response.send_message(msg)
+        except Exception:
+            pass
     
     async def close(self):
         if self.scraper:
@@ -120,17 +154,26 @@ class RachadBot(commands.Bot):
             return None
         return fuzzy_find_player(query, self.current_club.players, self.squad)
     
-    async def _ensure_scraped(self, interaction: discord.Interaction) -> bool:
-        """Returns True if data is available. Sends error message to user if not."""
+    async def _ensure_scraped(self, ctx_or_interaction) -> bool:
+        """Returns True if data is available. Sends error message if not."""
         if self.current_club and self.current_club.players:
             return True
         
         # Try to scrape now
         try:
-            await interaction.followup.send("⏳ جاري جلب البيانات من ProClubsTracker... صبر شوية.")
+            msg = "⏳ جاري جلب البيانات من ProClubsTracker... صبر شوية."
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.followup.send(msg)
+            else:
+                await ctx_or_interaction.send(msg)
+            
             club = await self.scraper.scrape_club()
             if not club or not club.players:
-                await interaction.followup.send("❌ ما قدرتش نجيب البيانات. ProClubsTracker ما بانش ليا.")
+                err = "❌ ما قدرتش نجيب البيانات. ProClubsTracker ما بانش ليا."
+                if isinstance(ctx_or_interaction, discord.Interaction):
+                    await ctx_or_interaction.followup.send(err)
+                else:
+                    await ctx_or_interaction.send(err)
                 return False
             
             self.current_club = club
@@ -139,35 +182,31 @@ class RachadBot(commands.Bot):
             return True
             
         except Exception as e:
-            print(f"Scrape error in command: {e}")
+            print(f"Scrape error: {e}")
             traceback.print_exc()
-            await interaction.followup.send(
-                "❌ كاين مشكل فالscraper. جرب /sync مرة أخرى.\n"
-                f"```Error: {str(e)[:200]}```"
-            )
+            err = f"❌ كاين مشكل فالscraper.\n```\n{str(e)[:300]}\n```"
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.followup.send(err)
+            else:
+                await ctx_or_interaction.send(err)
             return False
     
     @tasks.loop(minutes=Config.SCRAPE_INTERVAL)
     async def auto_scraper(self):
         if not self._session_active:
             return
-        
         try:
             club = await self.scraper.scrape_club()
             if not club:
                 return
-            
             self.current_club = club
             squad_map = self._get_squad_map()
             club.players = StatsEngine.compute_all(club.players, squad_map)
             
             for p in club.players:
                 self.memory.update_player(p.name, {
-                    "games": p.games,
-                    "goals": p.goals,
-                    "assists": p.assists,
-                    "rating": p.rating_pg,
-                    "possession_losses": p.possession_losses,
+                    "games": p.games, "goals": p.goals, "assists": p.assists,
+                    "rating": p.rating_pg, "possession_losses": p.possession_losses,
                 })
             
             current_match_count = len(club.matches)
@@ -179,7 +218,6 @@ class RachadBot(commands.Bot):
                     motm = StatsEngine.get_mvp(club.players)
                     embed = discord.Embed(
                         title=f"📊 New Match — {last.score_for}-{last.score_against} vs {last.opponent}",
-                        description=f"Division {club.division} • {club.wins}W {club.losses}L {club.draws}D",
                         color=0x00ff00 if last.result == "W" else 0xff0000 if last.result == "L" else 0xffff00
                     )
                     embed.add_field(name="MVP", value=f"{motm.name} (Impact: {motm.impact_score})", inline=False)
@@ -192,58 +230,539 @@ class RachadBot(commands.Bot):
     async def before_auto_scraper(self):
         await self.wait_until_ready()
     
-    # === PREFIX COMMAND: !help ===
+    # ============================================================
+    # PREFIX COMMANDS (for !command style)
+    # ============================================================
+    
     @commands.command(name="help")
-    async def prefix_help(self, ctx):
+    async def cmd_help(self, ctx):
         embed = discord.Embed(
-            title="🎮 Rachad L3ERGONI Bot — Commands",
-            description="The Moroccan Pro Clubs AI that roasts with real data\n\n**Use slash commands** (type `/` then the command name)",
+            title="🎮 Rachad L3ERGONI Bot",
+            description="**الخطوة الأولى: دير `!sync` أو `/sync` باش يجيب البيانات**\n\nبعدها تقدر تستعمل كل شي:",
             color=0x1e90ff
         )
-        commands_list = [
-            "/sync — جلب البيانات من ProClubsTracker (دير هادي الأول!)",
-            "/stats [player] — إحصائيات لاعب + كارطة",
-            "/roastplayer [player] — Roast واحد اللاعب",
-            "/mvp — أفضل لاعب فالموسم",
-            "/worst — أسوأ لاعب فالأسبوع",
-            "/who_sold — شكون باع الماتش",
-            "/carry_detector — شكون كيجرّ الفريق",
-            "/fraud_check [player] — فحص الفريق",
-            "/ballon_dor — ترتيب Ballon d'Or",
-            "/ghost_detector — كشف اللاعبين الغيّاب",
-            "/pass_the_ball — نادِي على اللي كيضيع الكورة",
-            "/leaderboard [metric] — لوحة المتصدرين",
-            "/compare [p1] [p2] — مقارنة 1v1",
-            "/lastmatch — آخر ماتش",
-            "/clubinfo — معلومات النادي",
-            "/banter — هضرة رياضية",
-            "/drama — دراما / بوليميك",
-            "/meme [player] — ميم بالدارجة",
-            "/transfer [player] — إشاعة انتقال",
-            "/predict — توقع الماتش الجاي",
-            "/personality [mode] — تبديل الشخصية",
-            "/roast — بدء session monitoring",
-            "/stop — إيقاف session",
-            "/help — هادي",
+        cmds = [
+            ("`!sync` / `/sync`", "جلب البيانات من ProClubsTracker (دير هادي الأول!)"),
+            ("`!stats [player]` / `/stats`", "إحصائيات لاعب + كارطة"),
+            ("`!mvp` / `/mvp`", "أفضل لاعب فالموسم"),
+            ("`!worst` / `/worst`", "أسوأ لاعب فالأسبوع"),
+            ("`!who_sold` / `/who_sold`", "شكون باع الماتش"),
+            ("`!carry` / `/carry_detector`", "شكون كيجرّ الفريق"),
+            ("`!fraud [player]` / `/fraud_check`", "فحص الفريق"),
+            ("`!ballon` / `/ballon_dor`", "ترتيب Ballon d'Or"),
+            ("`!ghost` / `/ghost_detector`", "كشف اللاعبين الغيّاب"),
+            ("`!pass` / `/pass_the_ball`", "نادِي على اللي كيضيع الكورة"),
+            ("`!leaderboard` / `/leaderboard`", "لوحة المتصدرين"),
+            ("`!compare p1 p2` / `/compare`", "مقارنة 1v1"),
+            ("`!lastmatch` / `/lastmatch`", "آخر ماتش"),
+            ("`!club` / `/clubinfo`", "معلومات النادي"),
+            ("`!banter` / `/banter`", "هضرة رياضية"),
+            ("`!drama` / `/drama`", "دراما / بوليميك"),
+            ("`!meme [player]` / `/meme`", "ميم بالدارجة"),
+            ("`!transfer [player]` / `/transfer`", "إشاعة انتقال"),
+            ("`!predict` / `/predict`", "توقع الماتش الجاي"),
+            ("`!personality [mode]` / `/personality`", "تبديل الشخصية"),
+            ("`!roast` / `/roast`", "بدء session monitoring"),
+            ("`!stop` / `/stop`", "إيقاف session"),
         ]
-        for cmd in commands_list:
-            embed.add_field(name=cmd, value="‎", inline=False)
+        for cmd, desc in cmds:
+            embed.add_field(name=cmd, value=desc, inline=False)
         await ctx.send(embed=embed)
     
-    # === SLASH COMMANDS ===
+    @commands.command(name="sync")
+    async def cmd_sync(self, ctx):
+        async with ctx.typing():
+            try:
+                club = await self.scraper.scrape_club()
+                if not club or not club.players:
+                    await ctx.send("❌ ما قدرتش نجيب البيانات من ProClubsTracker.")
+                    return
+                
+                self.current_club = club
+                squad_map = self._get_squad_map()
+                self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+                
+                embed = discord.Embed(
+                    title="🔄 Sync Complete",
+                    description=f"**{len(club.players)}** players loaded\nClub: {club.club_name} | Div {club.division}\nRecord: {club.wins}W — {club.losses}L — {club.draws}D",
+                    color=0x00ff00
+                )
+                await ctx.send(embed=embed)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Sync failed.\n```\n{str(e)[:500]}\n```")
     
-    @app_commands.command(name="roast", description="Start session monitoring + auto-roast mode")
-    async def slash_roast(self, interaction: discord.Interaction):
+    @commands.command(name="stats")
+    async def cmd_stats(self, ctx, *, player: str):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        target = self._find_player(player)
+        if not target:
+            await ctx.send(f"ما لقيتش `{player}`.")
+            return
+        
+        squad_map = self._get_squad_map()
+        pos = squad_map.get(target.name, {}).get("position", "CM")
+        
+        async with ctx.typing():
+            try:
+                card = self.imgen.generate_player_card(target, pos, division=self.current_club.division)
+                file = discord.File(card, filename=f"{target.name}_card.png")
+                
+                lines = [
+                    StatsEngine.interpret_stat("rating", target.rating_pg, pos),
+                    StatsEngine.interpret_stat("pass_accuracy", target.pass_accuracy, pos),
+                    StatsEngine.interpret_stat("impact_score", target.impact_score, pos),
+                ]
+                text = "\n".join(lines)
+                
+                embed = discord.Embed(
+                    title=f"📊 {target.name} — {pos}",
+                    description=text,
+                    color=0x1e90ff
+                )
+                embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
+                embed.add_field(name="Clutch", value=str(target.clutch_score), inline=True)
+                embed.add_field(name="Error", value=str(target.error_score), inline=True)
+                
+                await ctx.send(embed=embed, file=file)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="mvp")
+    async def cmd_mvp(self, ctx):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        async with ctx.typing():
+            try:
+                squad_map = self._get_squad_map()
+                self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+                mvp = StatsEngine.get_mvp(self.current_club.players)
+                pos = squad_map.get(mvp.name, {}).get("position", "CM")
+                
+                card = self.imgen.generate_motm_card(mvp, pos)
+                file = discord.File(card, filename="mvp.png")
+                
+                embed = discord.Embed(
+                    title="🏆 MAN OF THE MATCH",
+                    description=f"**{mvp.name}** — Impact: {mvp.impact_score}",
+                    color=0xffd700
+                )
+                embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
+                embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
+                embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
+                await ctx.send(embed=embed, file=file)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="worst")
+    async def cmd_worst(self, ctx):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        async with ctx.typing():
+            try:
+                squad_map = self._get_squad_map()
+                self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+                worst = StatsEngine.get_worst(self.current_club.players)
+                pos = squad_map.get(worst.name, {}).get("position", "CM")
+                roast = self.darija.roast(worst, pos)
+                
+                embed = discord.Embed(
+                    title="🗑️ WORST PLAYER",
+                    description=f"**{worst.name}** — Impact: {worst.impact_score}\n\n{roast}",
+                    color=0x8b0000
+                )
+                await ctx.send(embed=embed)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="who_sold")
+    async def cmd_who_sold(self, ctx):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        async with ctx.typing():
+            try:
+                squad_map = self._get_squad_map()
+                self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+                fraud = StatsEngine.get_fraud(self.current_club.players)
+                pos = squad_map.get(fraud.name, {}).get("position", "CM")
+                roast = self.darija.roast(fraud, pos)
+                
+                embed = discord.Embed(
+                    title="🎭 FRAUD DETECTED",
+                    description=f"**{fraud.name}** — Throwing: {fraud.throwing_score}\n\n{roast}",
+                    color=0xff4500
+                )
+                await ctx.send(embed=embed)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="carry")
+    async def cmd_carry(self, ctx):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        async with ctx.typing():
+            try:
+                squad_map = self._get_squad_map()
+                self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+                carry = StatsEngine.get_carry(self.current_club.players)
+                pos = squad_map.get(carry.name, {}).get("position", "CM")
+                praise = self.darija.praise(carry, pos)
+                
+                embed = discord.Embed(
+                    title="💪 CARRY DETECTED",
+                    description=f"**{carry.name}** — Impact: {carry.impact_score}\n\n{praise}",
+                    color=0x00ff00
+                )
+                await ctx.send(embed=embed)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="fraud")
+    async def cmd_fraud(self, ctx, *, player: str):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        target = self._find_player(player)
+        if not target:
+            await ctx.send(f"ما لقيتش `{player}`.")
+            return
+        
+        async with ctx.typing():
+            try:
+                squad_map = self._get_squad_map()
+                pos = squad_map.get(target.name, {}).get("position", "CM")
+                is_fraud = target.throwing_score > 3.0
+                
+                if is_fraud:
+                    text = f"🚨 FRAUD CONFIRMED\n\n{target.name} — Throwing: {target.throwing_score}\n\n{self.darija.roast(target, pos)}"
+                    color = 0xff0000
+                else:
+                    text = f"✅ CLEAN\n\n{target.name} — Throwing: {target.throwing_score}\n\nهادا لاعب صحيح."
+                    color = 0x00ff00
+                
+                embed = discord.Embed(title="FRAUD CHECK", description=text, color=color)
+                await ctx.send(embed=embed)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="ballon")
+    async def cmd_ballon(self, ctx):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        async with ctx.typing():
+            try:
+                squad_map = self._get_squad_map()
+                self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+                ranked = sorted(self.current_club.players,
+                               key=lambda p: p.impact_score + p.clutch_score + p.goals * 2,
+                               reverse=True)
+                
+                embed = discord.Embed(title="🏆 BALLON D'OR", color=0xffd700)
+                medals = ["🥇", "🥈", "🥉"]
+                for i, p in enumerate(ranked[:5]):
+                    medal = medals[i] if i < 3 else f"{i+1}."
+                    embed.add_field(
+                        name=f"{medal} {p.name}",
+                        value=f"Impact: {p.impact_score} | Goals: {p.goals} | Rating: {round(p.rating_pg, 1)}",
+                        inline=False
+                    )
+                await ctx.send(embed=embed)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="ghost")
+    async def cmd_ghost(self, ctx):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        async with ctx.typing():
+            try:
+                squad_map = self._get_squad_map()
+                self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+                ghost = StatsEngine.get_ghost(self.current_club.players)
+                pos = squad_map.get(ghost.name, {}).get("position", "CM")
+                roast = self.darija.roast(ghost, pos)
+                
+                embed = discord.Embed(
+                    title="👻 GHOST DETECTED",
+                    description=f"**{ghost.name}** — {ghost.minutes_played}min / {ghost.games} games\n\n{roast}",
+                    color=0x9370db
+                )
+                await ctx.send(embed=embed)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="pass")
+    async def cmd_pass(self, ctx):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        async with ctx.typing():
+            try:
+                squad_map = self._get_squad_map()
+                self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+                hog = StatsEngine.get_ball_hog(self.current_club.players)
+                pos = squad_map.get(hog.name, {}).get("position", "CM")
+                roast = self.darija.roast(hog, pos)
+                
+                embed = discord.Embed(
+                    title="⚽ PASS THE BALL!",
+                    description=f"**{hog.name}** — {hog.possession_losses} lost / {hog.assists} assists\n\n{roast}",
+                    color=0xffa500
+                )
+                await ctx.send(embed=embed)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="leaderboard")
+    async def cmd_leaderboard(self, ctx, metric: str = "impact"):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        metric_map = {
+            "impact": "impact_score",
+            "goals": "goals",
+            "assists": "assists",
+            "rating": "rating_pg",
+            "clutch": "clutch_score",
+        }
+        metric_value = metric_map.get(metric.lower(), "impact_score")
+        metric_name = metric.capitalize()
+        
+        async with ctx.typing():
+            try:
+                squad_map = self._get_squad_map()
+                self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+                
+                card = self.imgen.generate_leaderboard(self.current_club.players, metric_value)
+                file = discord.File(card, filename="leaderboard.png")
+                
+                embed = discord.Embed(
+                    title=f"📊 Leaderboard — {metric_name}",
+                    color=0x1e90ff
+                )
+                await ctx.send(embed=embed, file=file)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="compare")
+    async def cmd_compare(self, ctx, player1: str, player2: str):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        p1 = self._find_player(player1)
+        p2 = self._find_player(player2)
+        if not p1 or not p2:
+            await ctx.send("ما لقيتش واحد من players.")
+            return
+        
+        async with ctx.typing():
+            try:
+                squad_map = self._get_squad_map()
+                pos1 = squad_map.get(p1.name, {}).get("position", "CM")
+                pos2 = squad_map.get(p2.name, {}).get("position", "CM")
+                text = self.darija.compare(p1, p2, pos1, pos2)
+                
+                embed = discord.Embed(title="⚔️ 1v1 COMPARISON", description=text, color=0xff4500)
+                embed.add_field(name=p1.name,
+                               value=f"Impact: {p1.impact_score}\nGoals: {p1.goals}\nAssists: {p1.assists}\nRating: {round(p1.rating_pg, 1)}",
+                               inline=True)
+                embed.add_field(name=p2.name,
+                               value=f"Impact: {p2.impact_score}\nGoals: {p2.goals}\nAssists: {p2.assists}\nRating: {round(p2.rating_pg, 1)}",
+                               inline=True)
+                await ctx.send(embed=embed)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="lastmatch")
+    async def cmd_lastmatch(self, ctx):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        if not self.current_club.matches:
+            await ctx.send("ما لقيتش match history.")
+            return
+        
+        try:
+            last = self.current_club.matches[0]
+            color = 0x00ff00 if last.result == "W" else 0xff0000 if last.result == "L" else 0xffff00
+            embed = discord.Embed(
+                title=f"⚽ Last Match: {last.score_for} - {last.score_against} vs {last.opponent}",
+                description=f"Result: {last.result} • {last.date.strftime('%d/%m/%Y')}",
+                color=color
+            )
+            await ctx.send(embed=embed)
+        except Exception as e:
+            traceback.print_exc()
+            await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="club")
+    async def cmd_club(self, ctx):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        async with ctx.typing():
+            try:
+                squad_map = self._get_squad_map()
+                self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+                motm = StatsEngine.get_mvp(self.current_club.players)
+                
+                card = self.imgen.generate_match_report(self.current_club, motm)
+                file = discord.File(card, filename="club_report.png")
+                
+                embed = discord.Embed(
+                    title=f"🏟️ {self.current_club.club_name}",
+                    description=f"Division {self.current_club.division} • Skill {self.current_club.skill_rating}",
+                    color=0x00ff00
+                )
+                await ctx.send(embed=embed, file=file)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="banter")
+    async def cmd_banter(self, ctx):
+        try:
+            text = self.darija.banter()
+            embed = discord.Embed(title="☕ Cafeteria Banter", description=text, color=0xffa500)
+            await ctx.send(embed=embed)
+        except Exception as e:
+            traceback.print_exc()
+            await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="drama")
+    async def cmd_drama(self, ctx):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        try:
+            names = [p.name for p in self.current_club.players[:2]] if self.current_club.players else ["Player1", "Player2"]
+            text = self.darija.drama(names)
+            embed = discord.Embed(title="🍿 Drama Alert", description=text, color=0xff1493)
+            await ctx.send(embed=embed)
+        except Exception as e:
+            traceback.print_exc()
+            await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="meme")
+    async def cmd_meme(self, ctx, *, player: str = "Player"):
+        try:
+            text = self.darija.meme(player)
+            embed = discord.Embed(title="😂 Darija Meme", description=text, color=0x00ff7f)
+            await ctx.send(embed=embed)
+        except Exception as e:
+            traceback.print_exc()
+            await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="transfer")
+    async def cmd_transfer(self, ctx, *, player: str):
+        try:
+            text = self.darija.transfer(player)
+            embed = discord.Embed(title="📰 Transfer News", description=text, color=0x1e90ff)
+            await ctx.send(embed=embed)
+        except Exception as e:
+            traceback.print_exc()
+            await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="predict")
+    async def cmd_predict(self, ctx):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        try:
+            names = [p.name for p in self.current_club.players[:2]] if self.current_club.players else ["Player1", "Player2"]
+            text = self.darija.predict(names)
+            embed = discord.Embed(title="🔮 Match Prediction", description=text, color=0x9400d3)
+            await ctx.send(embed=embed)
+        except Exception as e:
+            traceback.print_exc()
+            await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="personality")
+    async def cmd_personality(self, ctx, mode: str):
+        valid = ["casablanca", "analyst", "toxic", "coach", "commentator", "cafeteria"]
+        if mode.lower() not in valid:
+            await ctx.send(f"❌ Personality غير صحيح. Valid: {', '.join(valid)}")
+            return
+        
+        try:
+            self.darija.set_personality(mode.lower())
+            embed = discord.Embed(
+                title="🎭 Personality Switch",
+                description=f"Changed to: **{mode.capitalize()}**",
+                color=0x9370db
+            )
+            await ctx.send(embed=embed)
+        except Exception as e:
+            traceback.print_exc()
+            await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    @commands.command(name="roast")
+    async def cmd_roast(self, ctx):
         self._session_active = True
         self.darija.set_personality("casablanca")
-        await interaction.response.send_message(
-            "🔥 ROAST MODE ACTIVATED\nSession monitoring started. Auto-updates every 5 minutes."
+        embed = discord.Embed(
+            title="🔥 ROAST MODE ACTIVATED",
+            description="Session monitoring started. Auto-updates every 5 minutes.",
+            color=0xff4500
         )
+        await ctx.send(embed=embed)
     
-    @app_commands.command(name="stop", description="Stop session monitoring")
-    async def slash_stop(self, interaction: discord.Interaction):
+    @commands.command(name="stop")
+    async def cmd_stop(self, ctx):
         self._session_active = False
-        await interaction.response.send_message("⏹️ Session Stopped.")
+        await ctx.send("⏹️ Session Stopped.")
+    
+    @commands.command(name="roastplayer")
+    async def cmd_roastplayer(self, ctx, *, player: str):
+        if not await self._ensure_scraped(ctx):
+            return
+        
+        target = self._find_player(player)
+        if not target:
+            await ctx.send(f"ما لقيتش `{player}`.")
+            return
+        
+        squad_map = self._get_squad_map()
+        pos = squad_map.get(target.name, {}).get("position", "CM")
+        
+        async with ctx.typing():
+            try:
+                roast = self.darija.roast(target, pos)
+                card = self.imgen.generate_roast_card(target, roast, pos)
+                file = discord.File(card, filename=f"{target.name}_roast.png")
+                
+                embed = discord.Embed(
+                    title=f"🔥 ROAST REPORT — {target.name}",
+                    description=roast,
+                    color=0xff0000
+                )
+                await ctx.send(embed=embed, file=file)
+            except Exception as e:
+                traceback.print_exc()
+                await ctx.send(f"❌ Error: {str(e)[:300]}")
+    
+    # ============================================================
+    # SLASH COMMANDS (same logic, wrapped for /command style)
+    # ============================================================
     
     @app_commands.command(name="stats", description="Player stats + premium card")
     @app_commands.describe(player="Player name, PSN, or nickname")
@@ -254,7 +773,7 @@ class RachadBot(commands.Bot):
         
         target = self._find_player(player)
         if not target:
-            await interaction.followup.send(f"ما لقيتش player باسم `{player}`. جرب اسم آخر.")
+            await interaction.followup.send(f"ما لقيتش `{player}`.")
             return
         
         squad_map = self._get_squad_map()
@@ -283,7 +802,7 @@ class RachadBot(commands.Bot):
             await interaction.followup.send(embed=embed, file=file)
         except Exception as e:
             traceback.print_exc()
-            await interaction.followup.send(f"❌ Error generating card: {str(e)[:300]}")
+            await interaction.followup.send(f"❌ Error: {str(e)[:300]}")
     
     @app_commands.command(name="roastplayer", description="Roast a specific player")
     @app_commands.describe(player="Player name, PSN, or nickname")
@@ -324,7 +843,6 @@ class RachadBot(commands.Bot):
         try:
             squad_map = self._get_squad_map()
             self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
-            
             mvp = StatsEngine.get_mvp(self.current_club.players)
             pos = squad_map.get(mvp.name, {}).get("position", "CM")
             
@@ -333,17 +851,16 @@ class RachadBot(commands.Bot):
             
             embed = discord.Embed(
                 title="🏆 MAN OF THE MATCH",
-                description=f"**{mvp.name}** — Impact Score: {mvp.impact_score}",
+                description=f"**{mvp.name}** — Impact: {mvp.impact_score}",
                 color=0xffd700
             )
             embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
             embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
             embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
-            
             await interaction.followup.send(embed=embed, file=file)
         except Exception as e:
             traceback.print_exc()
-            await interaction.followup.send(f"❌ Error generating MVP: {str(e)[:300]}")
+            await interaction.followup.send(f"❌ Error: {str(e)[:300]}")
     
     @app_commands.command(name="worst", description="Worst player of the week")
     async def slash_worst(self, interaction: discord.Interaction):
@@ -354,13 +871,12 @@ class RachadBot(commands.Bot):
         try:
             squad_map = self._get_squad_map()
             self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
-            
             worst = StatsEngine.get_worst(self.current_club.players)
             pos = squad_map.get(worst.name, {}).get("position", "CM")
             roast = self.darija.roast(worst, pos)
             
             embed = discord.Embed(
-                title="🗑️ WORST PLAYER OF THE WEEK",
+                title="🗑️ WORST PLAYER",
                 description=f"**{worst.name}** — Impact: {worst.impact_score}\n\n{roast}",
                 color=0x8b0000
             )
@@ -378,14 +894,13 @@ class RachadBot(commands.Bot):
         try:
             squad_map = self._get_squad_map()
             self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
-            
             fraud = StatsEngine.get_fraud(self.current_club.players)
             pos = squad_map.get(fraud.name, {}).get("position", "CM")
             roast = self.darija.roast(fraud, pos)
             
             embed = discord.Embed(
                 title="🎭 FRAUD DETECTED",
-                description=f"**{fraud.name}** — Throwing Score: {fraud.throwing_score}\n\n{roast}",
+                description=f"**{fraud.name}** — Throwing: {fraud.throwing_score}\n\n{roast}",
                 color=0xff4500
             )
             await interaction.followup.send(embed=embed)
@@ -402,14 +917,13 @@ class RachadBot(commands.Bot):
         try:
             squad_map = self._get_squad_map()
             self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
-            
             carry = StatsEngine.get_carry(self.current_club.players)
             pos = squad_map.get(carry.name, {}).get("position", "CM")
             praise = self.darija.praise(carry, pos)
             
             embed = discord.Embed(
                 title="💪 CARRY DETECTED",
-                description=f"**{carry.name}** — Impact: {carry.impact_score} / Clutch: {carry.clutch_score}\n\n{praise}",
+                description=f"**{carry.name}** — Impact: {carry.impact_score}\n\n{praise}",
                 color=0x00ff00
             )
             await interaction.followup.send(embed=embed)
@@ -432,12 +946,10 @@ class RachadBot(commands.Bot):
         try:
             squad_map = self._get_squad_map()
             pos = squad_map.get(target.name, {}).get("position", "CM")
-            
-            fraud_threshold = 3.0
-            is_fraud = target.throwing_score > fraud_threshold
+            is_fraud = target.throwing_score > 3.0
             
             if is_fraud:
-                text = f"🚨 FRAUD CONFIRMED\n\n{target.name} — Throwing: {target.throwing_score}\n\n{self.darija.roast(target, pos)}"
+                text = f"🚨 FRAUD\n\n{target.name} — Throwing: {target.throwing_score}\n\n{self.darija.roast(target, pos)}"
                 color = 0xff0000
             else:
                 text = f"✅ CLEAN\n\n{target.name} — Throwing: {target.throwing_score}\n\nهادا لاعب صحيح."
@@ -458,12 +970,11 @@ class RachadBot(commands.Bot):
         try:
             squad_map = self._get_squad_map()
             self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
-            
             ranked = sorted(self.current_club.players,
                            key=lambda p: p.impact_score + p.clutch_score + p.goals * 2,
                            reverse=True)
             
-            embed = discord.Embed(title="🏆 BALLON D'OR — Rachad L3ERGONI", color=0xffd700)
+            embed = discord.Embed(title="🏆 BALLON D'OR", color=0xffd700)
             medals = ["🥇", "🥈", "🥉"]
             for i, p in enumerate(ranked[:5]):
                 medal = medals[i] if i < 3 else f"{i+1}."
@@ -486,7 +997,6 @@ class RachadBot(commands.Bot):
         try:
             squad_map = self._get_squad_map()
             self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
-            
             ghost = StatsEngine.get_ghost(self.current_club.players)
             pos = squad_map.get(ghost.name, {}).get("position", "CM")
             roast = self.darija.roast(ghost, pos)
@@ -510,7 +1020,6 @@ class RachadBot(commands.Bot):
         try:
             squad_map = self._get_squad_map()
             self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
-            
             hog = StatsEngine.get_ball_hog(self.current_club.players)
             pos = squad_map.get(hog.name, {}).get("position", "CM")
             roast = self.darija.roast(hog, pos)
@@ -565,23 +1074,17 @@ class RachadBot(commands.Bot):
         
         p1 = self._find_player(player1)
         p2 = self._find_player(player2)
-        
         if not p1 or not p2:
-            await interaction.followup.send("ما لقيتش واحد من players. جرب أسماء أخرى.")
+            await interaction.followup.send("ما لقيتش players.")
             return
         
         try:
             squad_map = self._get_squad_map()
             pos1 = squad_map.get(p1.name, {}).get("position", "CM")
             pos2 = squad_map.get(p2.name, {}).get("position", "CM")
-            
             text = self.darija.compare(p1, p2, pos1, pos2)
             
-            embed = discord.Embed(
-                title="⚔️ 1v1 COMPARISON",
-                description=text,
-                color=0xff4500
-            )
+            embed = discord.Embed(title="⚔️ 1v1 COMPARISON", description=text, color=0xff4500)
             embed.add_field(name=p1.name,
                            value=f"Impact: {p1.impact_score}\nGoals: {p1.goals}\nAssists: {p1.assists}\nRating: {round(p1.rating_pg, 1)}",
                            inline=True)
@@ -606,7 +1109,6 @@ class RachadBot(commands.Bot):
         try:
             last = self.current_club.matches[0]
             color = 0x00ff00 if last.result == "W" else 0xff0000 if last.result == "L" else 0xffff00
-            
             embed = discord.Embed(
                 title=f"⚽ Last Match: {last.score_for} - {last.score_against} vs {last.opponent}",
                 description=f"Result: {last.result} • {last.date.strftime('%d/%m/%Y')}",
@@ -626,7 +1128,6 @@ class RachadBot(commands.Bot):
         try:
             squad_map = self._get_squad_map()
             self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
-            
             motm = StatsEngine.get_mvp(self.current_club.players)
             
             card = self.imgen.generate_match_report(self.current_club, motm)
@@ -720,7 +1221,7 @@ class RachadBot(commands.Bot):
             self.darija.set_personality(mode.value)
             embed = discord.Embed(
                 title="🎭 Personality Switch",
-                description=f"Bot personality changed to: **{mode.name}**",
+                description=f"Changed to: **{mode.name}**",
                 color=0x9370db
             )
             await interaction.response.send_message(embed=embed)
@@ -735,7 +1236,7 @@ class RachadBot(commands.Bot):
         try:
             club = await self.scraper.scrape_club()
             if not club or not club.players:
-                await interaction.followup.send("❌ ما قدرتش نجيب البيانات من ProClubsTracker. الصفحة ربما محمية أو كاين مشكل فالscraper.")
+                await interaction.followup.send("❌ ما قدرتش نجيب البيانات.")
                 return
             
             self.current_club = club
@@ -744,9 +1245,7 @@ class RachadBot(commands.Bot):
             
             embed = discord.Embed(
                 title="🔄 Sync Complete",
-                description=f"**{len(club.players)}** players loaded from ProClubsTracker\n"
-                           f"Club: {club.club_name} | Division {club.division}\n"
-                           f"Record: {club.wins}W — {club.losses}L — {club.draws}D",
+                description=f"**{len(club.players)}** players loaded\nClub: {club.club_name} | Div {club.division}\nRecord: {club.wins}W — {club.losses}L — {club.draws}D",
                 color=0x00ff00
             )
             await interaction.followup.send(embed=embed)
@@ -754,48 +1253,43 @@ class RachadBot(commands.Bot):
             traceback.print_exc()
             await interaction.followup.send(
                 f"❌ Sync failed.\n```\n{str(e)[:500]}\n```\n"
-                "جرب تتاكد من:\n"
-                "1. `PLAYWRIGHT_HEADLESS=true` فالenv vars\n"
-                "2. ProClubsTracker URL صحيح\n"
-                "3. البوت عندو ذاكرة كافية (Standard plan على الأقل)"
+                "Check Render logs for full error."
             )
     
     @app_commands.command(name="help", description="Show all commands")
     async def slash_help(self, interaction: discord.Interaction):
         try:
             embed = discord.Embed(
-                title="🎮 Rachad L3ERGONI Bot — Commands",
+                title="🎮 Rachad L3ERGONI Bot",
                 description="**الخطوة الأولى: دير `/sync` باش يجيب البيانات**\n\nبعدها تقدر تستعمل كل شي:",
                 color=0x1e90ff
             )
-            commands_list = [
-                ("`/sync`", "جلب البيانات من ProClubsTracker (دير هادي الأول!)"),
-                ("`/stats [player]`", "إحصائيات لاعب + كارطة"),
-                ("`/roastplayer [player]`", "Roast واحد اللاعب"),
-                ("`/mvp`", "أفضل لاعب فالموسم"),
-                ("`/worst`", "أسوأ لاعب فالأسبوع"),
-                ("`/who_sold`", "شكون باع الماتش"),
-                ("`/carry_detector`", "شكون كيجرّ الفريق"),
-                ("`/fraud_check [player]`", "فحص الفريق"),
-                ("`/ballon_dor`", "ترتيب Ballon d'Or"),
-                ("`/ghost_detector`", "كشف اللاعبين الغيّاب"),
-                ("`/pass_the_ball`", "نادِي على اللي كيضيع الكورة"),
-                ("`/leaderboard [metric]`", "لوحة المتصدرين"),
-                ("`/compare [p1] [p2]`", "مقارنة 1v1"),
-                ("`/lastmatch`", "آخر ماتش"),
-                ("`/clubinfo`", "معلومات النادي"),
-                ("`/banter`", "هضرة رياضية"),
-                ("`/drama`", "دراما / بوليميك"),
-                ("`/meme [player]`", "ميم بالدارجة"),
-                ("`/transfer [player]`", "إشاعة انتقال"),
-                ("`/predict`", "توقع الماتش الجاي"),
-                ("`/personality [mode]`", "تبديل الشخصية"),
-                ("`/roast`", "بدء session monitoring"),
-                ("`/stop`", "إيقاف session"),
+            cmds = [
+                ("`/sync` / `!sync`", "جلب البيانات (دير هادي الأول!)"),
+                ("`/stats [player]` / `!stats [player]`", "إحصائيات لاعب + كارطة"),
+                ("`/mvp` / `!mvp`", "أفضل لاعب"),
+                ("`/worst` / `!worst`", "أسوأ لاعب"),
+                ("`/who_sold` / `!who_sold`", "شكون باع الماتش"),
+                ("`/carry_detector` / `!carry`", "شكون كيجرّ الفريق"),
+                ("`/fraud_check [player]` / `!fraud [player]`", "فحص الفريق"),
+                ("`/ballon_dor` / `!ballon`", "ترتيب Ballon d'Or"),
+                ("`/ghost_detector` / `!ghost`", "كشف الغيّاب"),
+                ("`/pass_the_ball` / `!pass`", "نادِي على اللي كيضيع الكورة"),
+                ("`/leaderboard` / `!leaderboard [metric]`", "لوحة المتصدرين"),
+                ("`/compare [p1] [p2]` / `!compare p1 p2`", "مقارنة 1v1"),
+                ("`/lastmatch` / `!lastmatch`", "آخر ماتش"),
+                ("`/clubinfo` / `!club`", "معلومات النادي"),
+                ("`/banter` / `!banter`", "هضرة رياضية"),
+                ("`/drama` / `!drama`", "دراما"),
+                ("`/meme [player]` / `!meme [player]`", "ميم بالدارجة"),
+                ("`/transfer [player]` / `!transfer [player]`", "إشاعة انتقال"),
+                ("`/predict` / `!predict`", "توقع الماتش"),
+                ("`/personality [mode]` / `!personality [mode]`", "تبديل الشخصية"),
+                ("`/roast` / `!roast`", "بدء session monitoring"),
+                ("`/stop` / `!stop`", "إيقاف session"),
             ]
-            for cmd, desc in commands_list:
+            for cmd, desc in cmds:
                 embed.add_field(name=cmd, value=desc, inline=False)
-            
             await interaction.response.send_message(embed=embed)
         except Exception as e:
             traceback.print_exc()
