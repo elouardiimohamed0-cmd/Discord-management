@@ -2,8 +2,10 @@ import os
 import asyncio
 import json
 import random
+import threading
 from datetime import datetime
 from typing import Optional
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import discord
 from discord import app_commands
@@ -17,6 +19,25 @@ from image_gen import ImageGenerator
 from memory import SquadMemory
 from models import ClubStats, PlayerStats
 from utils import fuzzy_find_player
+
+
+# === Render Health Check Server ===
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Rachad L3ERGONI Bot is online")
+    
+    def log_message(self, format, *args):
+        pass  # suppress health check spam
+
+def start_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"Health check server running on port {port}")
+
 
 class RachadBot(commands.Bot):
     def __init__(self):
@@ -51,7 +72,6 @@ class RachadBot(commands.Bot):
     async def on_ready(self):
         print(f"Rachad L3ERGONI Bot online as {self.user}")
         
-        # Font check
         try:
             test_font = self.imgen._get_font(20)
             self._fonts_ok = True
@@ -95,7 +115,6 @@ class RachadBot(commands.Bot):
             squad_map = self._get_squad_map()
             club.players = StatsEngine.compute_all(club.players, squad_map)
             
-            # Update memory (store current totals, not incremental)
             for p in club.players:
                 self.memory.update_player(p.name, {
                     "games": p.games,
@@ -105,7 +124,6 @@ class RachadBot(commands.Bot):
                     "possession_losses": p.possession_losses,
                 })
             
-            # Only announce if new matches detected
             current_match_count = len(club.matches)
             if current_match_count > self._last_match_count:
                 self._last_match_count = current_match_count
@@ -178,7 +196,6 @@ class RachadBot(commands.Bot):
         card = self.imgen.generate_player_card(target, pos, division=self.current_club.division)
         file = discord.File(card, filename=f"{target.name}_card.png")
         
-        # Use Darija interpretation instead of raw numbers
         lines = [
             StatsEngine.interpret_stat("rating", target.rating_pg, pos),
             StatsEngine.interpret_stat("pass_accuracy", target.pass_accuracy, pos),
@@ -621,9 +638,12 @@ class RachadBot(commands.Bot):
         
         await interaction.response.send_message(embed=embed)
 
+
 def main():
+    start_health_server()  # <-- Health check for Render
     bot = RachadBot()
     bot.run(Config.DISCORD_TOKEN)
+
 
 if __name__ == "__main__":
     main()
