@@ -1,105 +1,181 @@
-"""
-Rachad L3ERGONI Bot — Memory System
-Tracks legends, disasters, rivalries, weekly frauds.
-"""
-
+import sqlite3
 import json
-import time
-from dataclasses import dataclass, asdict
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Optional
-
+from typing import List, Dict, Optional
+from config import Config
 
 class SquadMemory:
-    def __init__(self, path: str = "squad_memory.json"):
-        self.path = Path(path)
-        self.data = self._load()
-
-    def _load(self) -> dict:
-        if self.path.exists():
-            try:
-                with open(self.path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {
-            "historic_disasters": [],
-            "weekly_frauds": [],
-            "mvp_history": [],
-            "rivalries": {},
-            "legends": {},
-            "funny_moments": [],
-            "last_updated": datetime.now().isoformat(),
-        }
-
-    def save(self):
-        self.data["last_updated"] = datetime.now().isoformat()
-        with open(self.path, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, indent=2, ensure_ascii=False)
-
-    def record_match(self, match_result: dict, player_stats: dict):
-        """Analyze a match and record notable events."""
-        # Disaster: loss by 3+ goals
-        if match_result.get("team_goals", 0) < match_result.get("opponent_goals", 0) - 2:
-            self.data["historic_disasters"].append({
-                "date": datetime.now().isoformat(),
-                "opponent": match_result.get("opponent", "Unknown"),
-                "score": f"{match_result['team_goals']}-{match_result['opponent_goals']}",
-                "note": "Historic disaster",
-            })
-            # Keep last 20
-            self.data["historic_disasters"] = self.data["historic_disasters"][-20:]
-
-        # Weekly fraud: worst rating with 0 G/A
-        for name, stats in player_stats.items():
-            if stats.get("rating", 10) < 5.5 and stats.get("goals", 0) == 0 and stats.get("assists", 0) == 0:
-                self.data["weekly_frauds"].append({
-                    "date": datetime.now().isoformat(),
-                    "player": name,
-                    "rating": stats.get("rating", 0),
-                    "note": "Weekly fraud candidate",
-                })
-                self.data["weekly_frauds"] = self.data["weekly_frauds"][-50:]
-
-        self.save()
-
-    def get_fraud_streak(self, name: str) -> int:
-        """How many recent weeks this player appeared as fraud."""
-        count = 0
-        for f in reversed(self.data.get("weekly_frauds", [])):
-            if f["player"] == name:
-                count += 1
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path or Config.MEMORY_DB
+        self._init_db()
+    
+    def _init_db(self):
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS player_memories (
+            player_name TEXT PRIMARY KEY,
+            total_games INTEGER DEFAULT 0,
+            total_goals INTEGER DEFAULT 0,
+            total_assists INTEGER DEFAULT 0,
+            mvps INTEGER DEFAULT 0,
+            frauds INTEGER DEFAULT 0,
+            last_rating REAL DEFAULT 0,
+            best_rating REAL DEFAULT 0,
+            worst_rating REAL DEFAULT 10,
+            penalty_misses INTEGER DEFAULT 0,
+            own_goals INTEGER DEFAULT 0,
+            red_cards INTEGER DEFAULT 0,
+            historic_low_rating REAL DEFAULT 10,
+            historic_high_rating REAL DEFAULT 0,
+            consecutive_bad_games INTEGER DEFAULT 0,
+            consecutive_good_games INTEGER DEFAULT 0,
+            rivalries TEXT DEFAULT '[]',
+            nicknames TEXT DEFAULT '[]',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS match_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            match_id TEXT,
+            player_name TEXT,
+            event_type TEXT,
+            event_data TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS session_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_date TEXT,
+            games_played INTEGER,
+            wins INTEGER,
+            losses INTEGER,
+            top_scorer TEXT,
+            top_fraud TEXT,
+            motm TEXT,
+            notes TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        conn.commit()
+        conn.close()
+    
+    def update_player(self, name: str, stats: dict):
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        
+        # Get existing
+        c.execute("SELECT * FROM player_memories WHERE player_name = ?", (name,))
+        row = c.fetchone()
+        
+        if not row:
+            c.execute('''INSERT INTO player_memories 
+                (player_name, total_games, total_goals, total_assists, last_rating, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)''',
+                (name, stats.get('games', 0), stats.get('goals', 0), stats.get('assists', 0),
+                 stats.get('rating', 0), datetime.now()))
+        else:
+            # Update totals
+            c.execute('''UPDATE player_memories SET
+                total_games = total_games + ?,
+                total_goals = total_goals + ?,
+                total_assists = total_assists + ?,
+                last_rating = ?,
+                updated_at = ?
+                WHERE player_name = ?''',
+                (stats.get('games', 0), stats.get('goals', 0), stats.get('assists', 0),
+                 stats.get('rating', 0), datetime.now(), name))
+            
+            # Update best/worst
+            rating = stats.get('rating', 0)
+            if rating > row[7]:  # best_rating
+                c.execute("UPDATE player_memories SET best_rating = ? WHERE player_name = ?", (rating, name))
+            if rating < row[8]:  # worst_rating
+                c.execute("UPDATE player_memories SET worst_rating = ? WHERE player_name = ?", (rating, name))
+            
+            # Consecutive tracking
+            if rating < 5.5:
+                c.execute("UPDATE player_memories SET consecutive_bad_games = consecutive_bad_games + 1, consecutive_good_games = 0 WHERE player_name = ?", (name,))
+            elif rating > 7.5:
+                c.execute("UPDATE player_memories SET consecutive_good_games = consecutive_good_games + 1, consecutive_bad_games = 0 WHERE player_name = ?", (name,))
             else:
-                break
-        return count
-
-    def get_disaster_count(self) -> int:
-        return len(self.data.get("historic_disasters", []))
-
-    def get_last_disaster(self) -> Optional[dict]:
-        disasters = self.data.get("historic_disasters", [])
-        return disasters[-1] if disasters else None
-
-    def add_funny_moment(self, text: str):
-        self.data["funny_moments"].append({
-            "date": datetime.now().isoformat(),
-            "text": text,
-        })
-        self.data["funny_moments"] = self.data["funny_moments"][-100:]
-        self.save()
-
-    def get_random_moment(self) -> Optional[str]:
-        moments = self.data.get("funny_moments", [])
-        return random.choice(moments)["text"] if moments else None
-
-
-import random
-
-_memory = None
-
-def get_memory(path: str = "squad_memory.json") -> SquadMemory:
-    global _memory
-    if _memory is None:
-        _memory = SquadMemory(path)
-    return _memory
+                c.execute("UPDATE player_memories SET consecutive_bad_games = 0, consecutive_good_games = 0 WHERE player_name = ?", (name,))
+        
+        conn.commit()
+        conn.close()
+    
+    def get_player_memory(self, name: str) -> Optional[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute("SELECT * FROM player_memories WHERE player_name = ?", (name,))
+        row = c.fetchone()
+        conn.close()
+        
+        if not row:
+            return None
+        
+        return {
+            "name": row[0],
+            "total_games": row[1],
+            "total_goals": row[2],
+            "total_assists": row[3],
+            "mvps": row[4],
+            "frauds": row[5],
+            "last_rating": row[6],
+            "best_rating": row[7],
+            "worst_rating": row[8],
+            "consecutive_bad": row[14],
+            "consecutive_good": row[15],
+            "rivalries": json.loads(row[16]),
+            "nicknames": json.loads(row[17]),
+        }
+    
+    def add_event(self, match_id: str, player_name: str, event_type: str, data: dict):
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''INSERT INTO match_events (match_id, player_name, event_type, event_data)
+                     VALUES (?, ?, ?, ?)''',
+                  (match_id, player_name, event_type, json.dumps(data)))
+        conn.commit()
+        conn.close()
+    
+    def get_historical_roasts(self, player_name: str, limit: int = 5) -> List[str]:
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''SELECT event_data FROM match_events 
+                     WHERE player_name = ? AND event_type = 'roast'
+                     ORDER BY timestamp DESC LIMIT ?''', (player_name, limit))
+        rows = c.fetchall()
+        conn.close()
+        return [json.loads(r[0]).get("text", "") for r in rows]
+    
+    def record_session(self, games: int, wins: int, losses: int, top_scorer: str, top_fraud: str, motm: str, notes: str = ""):
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''INSERT INTO session_stats 
+                     (session_date, games_played, wins, losses, top_scorer, top_fraud, motm, notes)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (datetime.now().strftime("%Y-%m-%d"), games, wins, losses, top_scorer, top_fraud, motm, notes))
+        conn.commit()
+        conn.close()
+    
+    def get_rivalry(self, p1: str, p2: str) -> str:
+        # Compare head-to-head stats
+        m1 = self.get_player_memory(p1)
+        m2 = self.get_player_memory(p2)
+        
+        if not m1 or not m2:
+            return ""
+        
+        diff_goals = m1["total_goals"] - m2["total_goals"]
+        diff_rating = m1["best_rating"] - m2["best_rating"]
+        
+        if diff_goals > 10:
+            return f"{p1} كيدر {p2} فالتسجيل بـ {diff_goals} هدف."
+        elif diff_goals < -10:
+            return f"{p2} كيدر {p1} فالتسجيل بـ {abs(diff_goals)} هدف."
+        elif diff_rating > 1:
+            return f"{p1} وصل rating {m1['best_rating']}، {p2} ما وصلش لـ {m2['best_rating']}."
+        else:
+            return f"{p1} و {p2} بحال بحال — rivalry ماشي واضحة."
