@@ -7,8 +7,12 @@ from datetime import datetime
 from typing import Optional
 from models import ClubStats, PlayerStats, MatchResult
 
-# Force full Chromium, not headless shell (which is often missing on cloud)
+# CRITICAL: Set these BEFORE importing playwright
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/app/ms-playwright"
 os.environ["PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL"] = "0"
+
+print(f"🔧 PLAYWRIGHT_BROWSERS_PATH set to: {os.environ.get('PLAYWRIGHT_BROWSERS_PATH')}")
+print(f"🔧 PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL set to: {os.environ.get('PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL')}")
 
 try:
     import httpx
@@ -114,26 +118,19 @@ class ProClubsTrackerScraper:
         if not HAS_PLAYWRIGHT:
             raise RuntimeError("Playwright not installed")
         print("🎭 Initializing Playwright browser...")
+        
+        # Check if browser exists before launching
+        browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+        print(f"🎭 Looking for browsers in: {browsers_path}")
+        if browsers_path and os.path.exists(browsers_path):
+            import glob
+            chrome_files = glob.glob(f"{browsers_path}/**/chrome*", recursive=True)
+            print(f"🎭 Found {len(chrome_files)} chrome files: {chrome_files[:3]}")
+        else:
+            print(f"⚠️ Browsers path does not exist: {browsers_path}")
+        
         pw = await async_playwright().start()
         print("🎭 Playwright started")
-        
-        # Check if browser executable exists
-        try:
-            browser_path = pw.chromium.executable_path
-            print(f"🎭 Browser executable path: {browser_path}")
-            if not os.path.exists(browser_path):
-                print(f"❌ Browser executable NOT FOUND at {browser_path}")
-                # Try to find it
-                import glob
-                possible_paths = glob.glob("/app/ms-playwright/**/chrome*", recursive=True)
-                possible_paths += glob.glob("/root/.cache/ms-playwright/**/chrome*", recursive=True)
-                possible_paths += glob.glob("/opt/render/.cache/ms-playwright/**/chrome*", recursive=True)
-                if possible_paths:
-                    print(f"🔍 Found possible browsers: {possible_paths}")
-                else:
-                    print("🔍 No browser executables found anywhere")
-        except Exception as e:
-            print(f"⚠️ Could not check browser path: {e}")
         
         print("🎭 Launching Chromium...")
         self.browser = await pw.chromium.launch(
