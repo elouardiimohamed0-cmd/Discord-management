@@ -1,628 +1,580 @@
-"""
-Rachad L3ERGONI Bot — Main Discord Bot v14
-ProClubsTracker as primary data source. Playwright rendering.
-"""
-
-import asyncio
-import io
-import json
-import logging
 import os
+import asyncio
+import json
 from datetime import datetime
 from typing import Optional
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
-from dotenv import load_dotenv
 
-from darija_engine import get_engine, PERSONALITIES
-from stats_engine import get_stats_engine
-from image_gen import get_image_generator
-from scraper import get_scraper
-from memory import get_memory
+from config import Config, load_squad
+from scraper import ProClubsTrackerScraper
+from stats_engine import StatsEngine
+from darija_engine import DarijaEngine
+from image_gen import ImageGenerator
+from memory import SquadMemory
+from models import ClubStats, PlayerStats
 
-load_dotenv()
-
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-MATCH_CHANNEL_ID = int(os.getenv("MATCH_CHANNEL_ID", "0"))
-LEADERBOARD_CHANNEL_ID = int(os.getenv("LEADERBOARD_CHANNEL_ID", "0"))
-CLUB_ID = os.getenv("CLUB_ID", "1427607")
-PLATFORM = os.getenv("PLATFORM", "common-gen5")
-PORT = int(os.getenv("PORT", "10000"))
-
-darija = get_engine("squad.json")
-stats_engine = get_stats_engine("bot_data.db")
-image_gen = get_image_generator("assets")
-scraper = get_scraper(CLUB_ID, PLATFORM)
-memory = get_memory("squad_memory.json")
-
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-
-class L3ERGONIBot(commands.Bot):
+class RachadBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix="!", intents=intents, help_command=None)
-        self.darija = darija
-        self.stats = stats_engine
-        self.images = image_gen
-        self.scraper = scraper
-        self.memory = memory
-        self.squad = self._load_squad()
-        self.session_active = False
-
-    def _load_squad(self) -> dict:
-        try:
-            with open("squad.json", "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error("Squad load error: %s", e)
-            return {}
-
-    def _find_squad_key(self, name: str) -> Optional[str]:
-        name_clean = name.lower().strip()
-        if name_clean in self.squad:
-            return name_clean
-        for key, info in self.squad.items():
-            if info.get("name", "").lower().strip() == name_clean:
-                return key
-            if info.get("psn", "").lower().strip() == name_clean:
-                return key
-            if info.get("nickname", "").lower().strip() == name_clean:
-                return key
-            if name_clean in key or key in name_clean:
-                return key
-            if name_clean in info.get("name", "").lower():
-                return key
-            if name_clean in info.get("nickname", "").lower():
-                return key
-        return None
-
+        intents = discord.Intents.default()
+        intents.message_content = True
+        intents.members = True
+        
+        super().__init__(command_prefix="!", intents=intents)
+        
+        self.squad = load_squad()
+        self.scraper: Optional[ProClubsTrackerScraper] = None
+        self.darija = DarijaEngine(Config.DEFAULT_PERSONALITY)
+        self.imgen = ImageGenerator(Config.ASSETS_DIR)
+        self.memory = SquadMemory()
+        self.current_club: Optional[ClubStats] = None
+        self._session_active = False
+        
     async def setup_hook(self):
-        self.auto_leaderboard.start()
-        self.auto_match_check.start()
-        await self.tree.sync()
-
+        self.scraper = ProClubsTrackerScraper(Config.PCT_CLUB_URL, headless=Config.HEADLESS, use_stealth=Config.STEALTH)
+        self.auto_scraper.start()
+        
+        # Sync slash commands
+        guild = discord.Object(id=Config.DISCORD_GUILD_ID)
+        self.tree.copy_global_to(guild=guild)
+        await self.tree.sync(guild=guild)
+    
     async def on_ready(self):
-        logger.info("Logged in as %s | Guilds: %d | Club: %s", self.user, len(self.guilds), CLUB_ID)
-        await self.change_presence(
-            activity=discord.Activity(type=discord.ActivityType.watching, name="Rachad L3ERGONI | !help")
-        )
-
-    @tasks.loop(hours=24)
-    async def auto_leaderboard(self):
-        now = datetime.now()
-        if now.hour == 20 and now.minute < 5:
-            channel = self.get_channel(LEADERBOARD_CHANNEL_ID)
-            if channel:
-                await self._post_leaderboard(channel, "daily", 5)
-
-    @auto_leaderboard.before_loop
-    async def before_auto_leaderboard(self):
-        await self.wait_until_ready()
-
-    @tasks.loop(minutes=10)
-    async def auto_match_check(self):
-        if not self.session_active:
+        print(f"Rachad L3ERGONI Bot online as {self.user}")
+        await self.change_presence(activity=discord.Game(name="Pro Clubs • /help"))
+    
+    async def close(self):
+        if self.scraper:
+            await self.scraper.close()
+        await super().close()
+    
+    @tasks.loop(minutes=Config.SCRAPE_INTERVAL)
+    async def auto_scraper(self):
+        if not self._session_active:
             return
+        
         try:
-            data = await self.scraper.scrape_all(max_matches=5)
-            matches = data.get("matches", [])
-            added = 0
-            for match in matches:
-                if not self.stats.match_exists(match["match_id"]):
-                    from ea_api import EAMatch
-                    em = EAMatch(
-                        match_id=match["match_id"],
-                        date_iso=match.get("date", "—"),
-                        opponent_name=match.get("opponent", "Unknown"),
-                        team_goals=match.get("team_goals", 0),
-                        opponent_goals=match.get("opponent_goals", 0),
-                        match_type=match.get("match_type", "friendlyMatch"),
-                    )
-                    self.stats.add_match(em)
-                    added += 1
-            if added > 0:
-                logger.info("Auto-sync: added %d new matches from PCT", added)
-                channel = self.get_channel(MATCH_CHANNEL_ID)
+            club = await self.scraper.scrape_club()
+            if club:
+                self.current_club = club
+                
+                # Compute stats
+                squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+                club.players = StatsEngine.compute_all(club.players, squad_map)
+                
+                # Update memory
+                for p in club.players:
+                    self.memory.update_player(p.name, {
+                        "games": p.games, "goals": p.goals, "assists": p.assists, "rating": p.rating_pg
+                    })
+                
+                # Check for new matches to announce
+                channel = self.get_channel(Config.DISCORD_STATS_CHANNEL_ID)
                 if channel:
-                    await self._post_match_result(channel)
+                    motm = StatsEngine.get_mvp(club.players)
+                    embed = discord.Embed(
+                        title=f"📊 Rachad L3ERGONI — Auto Update",
+                        description=f"Division {club.division} • {club.wins}W {club.losses}L {club.draws}D",
+                        color=0x00ff00
+                    )
+                    embed.add_field(name="MVP", value=f"{motm.name} (Impact: {motm.impact_score})", inline=False)
+                    await channel.send(embed=embed)
+                    
         except Exception as e:
-            logger.error("Auto match check error: %s", e)
-
-    @auto_match_check.before_loop
-    async def before_auto_match_check(self):
+            print(f"Auto-scrape error: {e}")
+    
+    @auto_scraper.before_loop
+    async def before_auto_scraper(self):
         await self.wait_until_ready()
-
-    async def _post_match_result(self, channel: discord.TextChannel):
-        match = self.stats.get_last_match()
-        if not match:
-            return
-        roast = self.darija.roast_match_result(match.team_goals, match.opponent_goals, match.opponent)
-        card = self.images.generate_match_report_card(match.to_dict())
-        card_bytes = self.images.to_bytes(card)
+    
+    # --- SLASH COMMANDS ---
+    
+    @app_commands.command(name="roast", description="Start session monitoring + auto-roast mode")
+    async def slash_roast(self, interaction: discord.Interaction):
+        self._session_active = True
+        self.darija.set_personality("casablanca")
+        
+        # Initial scrape
+        await interaction.response.defer()
+        club = await self.scraper.scrape_club()
+        self.current_club = club
+        
         embed = discord.Embed(
-            title=f"{match.team_goals}-{match.opponent_goals} vs {match.opponent}",
-            description=roast,
-            color=0x00FF00 if match.result == "win" else 0xFF0000 if match.result == "loss" else 0xFFD700,
+            title="🔥 ROAST MODE ACTIVATED",
+            description="Session monitoring started. Auto-updates every 5 minutes.",
+            color=0xff4500
         )
-        motm_name = next((n for n, p in match.player_stats.items() if p.motm), "")
-        for name, ps in list(match.player_stats.items())[:6]:
-            info = self.squad.get(name.lower(), {})
-            nick = info.get("nickname", name)
-            motm = "👑 " if ps.motm else ""
-            embed.add_field(
-                name=f"{motm}{nick}",
-                value=f"{ps.goals}G {ps.assists}A | ⭐{ps.rating:.1f} | {ps.shots} shots",
-                inline=True,
-            )
-        if motm_name:
-            info = self.squad.get(motm_name.lower(), {})
-            nick = info.get("nickname", motm_name)
-            roast_motm = self.darija.roast_motm(nick, match.player_stats[motm_name].rating)
-            embed.add_field(name="MOTM", value=roast_motm, inline=False)
-        file = discord.File(io.BytesIO(card_bytes), filename="match.png")
-        embed.set_image(url="attachment://match.png")
-        await channel.send(embed=embed, file=file)
-
-    async def _post_leaderboard(self, channel: discord.TextChannel, period: str, matches: int):
-        leaderboard = self.stats.get_leaderboard(matches, "impact_score")
-        if not leaderboard:
-            await channel.send("z3ma... leaderboard? walo. chi m3a9ed. safi.")
+        embed.add_field(name="Status", value="✅ Active", inline=True)
+        embed.add_field(name="Personality", value="Casablanca Street", inline=True)
+        embed.add_field(name="Frequency", value="95% Roast / 5% Praise", inline=True)
+        
+        await interaction.followup.send(embed=embed)
+    
+    @app_commands.command(name="stop", description="Stop session monitoring")
+    async def slash_stop(self, interaction: discord.Interaction):
+        self._session_active = False
+        embed = discord.Embed(
+            title="⏹️ Session Stopped",
+            description="Auto-monitoring disabled. See you next session.",
+            color=0x808080
+        )
+        await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="stats", description="Player stats + premium card")
+    @app_commands.describe(player="Player name (or @mention)")
+    async def slash_stats(self, interaction: discord.Interaction, player: str):
+        await interaction.response.defer()
+        
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+        
+        target = None
+        for p in self.current_club.players:
+            if player.lower() in p.name.lower():
+                target = p
+                break
+        
+        if not target:
+            await interaction.followup.send(f"ما لقيتش player باسم {player} آ صاحبي.")
             return
-        card = self.images.generate_leaderboard_card(leaderboard, period)
-        card_bytes = self.images.to_bytes(card)
-        roasts = self.darija.roast_leaderboard(leaderboard)
-        embed = discord.Embed(title=f"Leaderboard — {period.upper()}", description="\n".join(roasts[:3]), color=0xFFD700)
-        file = discord.File(io.BytesIO(card_bytes), filename="leaderboard.png")
-        embed.set_image(url="attachment://leaderboard.png")
-        await channel.send(embed=embed, file=file)
-
-
-bot = L3ERGONIBot()
-
-
-@bot.command(name="roast")
-async def roast_cmd(ctx):
-    bot.session_active = True
-    await ctx.send(f"Session started! {bot.darija.banter()}\nMonitoring matches every 10 minutes...")
-
-
-@bot.command(name="stop")
-async def stop_cmd(ctx):
-    bot.session_active = False
-    await ctx.send("Session stopped. walo. safi.")
-
-
-@bot.command(name="lastmatch")
-async def lastmatch_cmd(ctx):
-    match = bot.stats.get_last_match()
-    if not match:
-        await ctx.send("z3ma... last match? walo. chi m3a9ed. safi.\nTry: !sync")
-        return
-    await bot._post_match_result(ctx.channel)
-
-
-@bot.command(name="stats")
-async def stats_cmd(ctx, *, player_name: str):
-    key = bot._find_squad_key(player_name)
-    if not key:
-        await ctx.send(f"z3ma... {player_name}? walo. chi m3a9ed. safi.")
-        return
-    info = bot.squad[key]
-    name = info.get("name", player_name)
-    stats = bot.stats.get_player_stats(name, 5)
-    if not stats:
-        await ctx.send(f"z3ma... stats dial {name}? walo. chi m3a9ed. safi.\nTry: !sync")
-        return
-    card = bot.images.generate_player_card(name, stats, info)
-    card_bytes = bot.images.to_bytes(card)
-    roasts = bot.darija.roast_player(name, stats, 5)
-    embed = discord.Embed(title=f"{info.get('nickname', name)} — Stats Card", description="\n".join(roasts), color=0xFF6B35)
-    file = discord.File(io.BytesIO(card_bytes), filename="player.png")
-    embed.set_image(url="attachment://player.png")
-    await ctx.send(embed=embed, file=file)
-
-
-@bot.command(name="roastplayer")
-async def roastplayer_cmd(ctx, *, player_name: str):
-    key = bot._find_squad_key(player_name)
-    if not key:
-        await ctx.send(f"z3ma... {player_name}? walo. chi m3a9ed. safi.")
-        return
-    info = bot.squad[key]
-    name = info.get("name", player_name)
-    stats = bot.stats.get_player_stats(name, 5)
-    if not stats:
-        await ctx.send(f"z3ma... roast dial {name}? walo. chi m3a9ed. safi.")
-        return
-    roasts = bot.darija.roast_player(name, stats, 5)
-    for roast in roasts:
-        await ctx.send(roast)
-
-
-@bot.command(name="mvp")
-async def mvp_cmd(ctx):
-    mvp_name, mvp_stats = bot.stats.get_mvp(5)
-    if not mvp_name:
-        await ctx.send("z3ma... mvp? walo. chi m3a9ed. safi.")
-        return
-    info = bot.squad.get(mvp_name.lower(), {})
-    nick = info.get("nickname", mvp_name)
-    card = bot.images.generate_motm_card(mvp_name, mvp_stats, info)
-    card_bytes = bot.images.to_bytes(card)
-    roast = bot.darija.roast_motm(nick, mvp_stats.get("rating", 6.0))
-    embed = discord.Embed(title="MVP — Last 5 Matches", description=roast, color=0xFFD700)
-    file = discord.File(io.BytesIO(card_bytes), filename="mvp.png")
-    embed.set_image(url="attachment://mvp.png")
-    await ctx.send(embed=embed, file=file)
-
-
-@bot.command(name="compare")
-async def compare_cmd(ctx, p1: str, p2: str):
-    k1, k2 = bot._find_squad_key(p1), bot._find_squad_key(p2)
-    if not k1 or not k2:
-        await ctx.send("z3ma... players? walo. chi m3a9ed. safi.")
-        return
-    i1, i2 = bot.squad[k1], bot.squad[k2]
-    n1, n2 = i1.get("name", p1), i2.get("name", p2)
-    s1, s2 = bot.stats.get_player_stats(n1, 10), bot.stats.get_player_stats(n2, 10)
-    if not s1 or not s2:
-        await ctx.send("z3ma... stats? walo. chi m3a9ed. safi.")
-        return
-    card = bot.images.generate_comparison_card(n1, s1, i1, n2, s2, i2)
-    card_bytes = bot.images.to_bytes(card)
-    roast = bot.darija.compare_players(n1, s1, n2, s2)
-    embed = discord.Embed(title=f"{i1.get('nickname', n1)} VS {i2.get('nickname', n2)}", description=roast, color=0xFF6B35)
-    file = discord.File(io.BytesIO(card_bytes), filename="compare.png")
-    embed.set_image(url="attachment://compare.png")
-    await ctx.send(embed=embed, file=file)
-
-
-@bot.command(name="leaderboard")
-async def leaderboard_cmd(ctx, period: str = "week"):
-    period_map = {"day": 5, "week": 20, "month": 50, "all": 999}
-    matches = period_map.get(period.lower(), 20)
-    await bot._post_leaderboard(ctx.channel, period, matches)
-
-
-@bot.command(name="banter")
-async def banter_cmd(ctx):
-    await ctx.send(bot.darija.banter())
-
-
-@bot.command(name="drama")
-async def drama_cmd(ctx):
-    await ctx.send(bot.darija.drama())
-
-
-@bot.command(name="meme")
-async def meme_cmd(ctx):
-    await ctx.send(bot.darija.meme())
-
-
-@bot.command(name="transfer")
-async def transfer_cmd(ctx):
-    await ctx.send(bot.darija.transfer())
-
-
-@bot.command(name="predict")
-async def predict_cmd(ctx, *, opponent: str):
-    import random
-    pred = random.choice(["win", "loss", "draw"])
-    roast = bot.darija.predict(pred)
-    embed = discord.Embed(title=f"Prediction: vs {opponent}", description=roast, color=0xFF6B35)
-    await ctx.send(embed=embed)
-
-
-@bot.command(name="clubinfo")
-async def clubinfo_cmd(ctx):
-    try:
-        info = await bot.scraper.get_club_info()
-    except Exception as e:
-        await ctx.send(f"z3ma... club info? walo. Scraper error: {e}")
-        return
-
-    if not info:
-        await ctx.send("z3ma... club info? walo. chi m3a9ed. safi.")
-        return
-
-    embed = discord.Embed(title="Rachad L3ERGONI — Club Info (PCT)", description="z3ma... club? walo. chi m3a9ed l3ba.", color=0xFF6B35)
-
-    for key, val in info.items():
-        embed.add_field(name=key.replace("_", " ").title(), value=str(val), inline=True)
-
-    await ctx.send(embed=embed)
-
-
-@bot.command(name="worst")
-async def worst_cmd(ctx):
-    worst_name, worst_stats = bot.stats.get_worst_player(7)
-    if not worst_name:
-        await ctx.send("z3ma... worst player? walo. chi m3a9ed. safi.")
-        return
-    info = bot.squad.get(worst_name.lower(), {})
-    nick = info.get("nickname", worst_name)
-    roast = bot.darija._format("{name}. worst of the week. z3ma... player? walo. delete game.", name=nick)
-    embed = discord.Embed(title="Worst Player of the Week 🗑️", description=roast, color=0xFF0000)
-    embed.add_field(name="Rating", value=f"{worst_stats.get('rating', 0):.1f}", inline=True)
-    embed.add_field(name="Error Score", value=f"{worst_stats.get('error_score', 0)}", inline=True)
-    embed.add_field(name="Possession Losses", value=worst_stats.get("possession_losses", 0), inline=True)
-    await ctx.send(embed=embed)
-
-
-@bot.command(name="who_sold")
-async def who_sold_cmd(ctx):
-    worst_name, worst_stats = bot.stats.get_worst_player(1)
-    if not worst_name:
-        await ctx.send("z3ma... who sold? walo. chi m3a9ed. safi.")
-        return
-    info = bot.squad.get(worst_name.lower(), {})
-    nick = info.get("nickname", worst_name)
-    roast = bot.darija._format(
-        "{name}. sold the match. z3ma... player? walo. delete game. trash. garbage.", name=nick
-    )
-    await ctx.send(roast)
-
-
-@bot.command(name="carry_detector")
-async def carry_detector_cmd(ctx):
-    mvp_name, mvp_stats = bot.stats.get_mvp(10)
-    if not mvp_name:
-        await ctx.send("z3ma... carry? walo. chi m3a9ed. safi.")
-        return
-    info = bot.squad.get(mvp_name.lower(), {})
-    nick = info.get("nickname", mvp_name)
-    roast = bot.darija._format(
-        "{name}. carrying the team. z3ma... rest of the team? walo. chi m3a9ed l3ba.", name=nick
-    )
-    embed = discord.Embed(title="Carry Detector 🏋️", description=roast, color=0xFFD700)
-    embed.add_field(name="Impact Score", value=f"{mvp_stats.get('impact_score', 0):.1f}", inline=True)
-    embed.add_field(name="Goals", value=mvp_stats.get("goals", 0), inline=True)
-    embed.add_field(name="Assists", value=mvp_stats.get("assists", 0), inline=True)
-    await ctx.send(embed=embed)
-
-
-@bot.command(name="fraud_check")
-async def fraud_check_cmd(ctx, *, player_name: str):
-    key = bot._find_squad_key(player_name)
-    if not key:
-        await ctx.send(f"z3ma... {player_name}? walo. chi m3a9ed. safi.")
-        return
-    info = bot.squad[key]
-    name = info.get("name", player_name)
-    stats = bot.stats.get_player_stats(name, 10)
-    if not stats:
-        await ctx.send(f"z3ma... fraud check dial {name}? walo. chi m3a9ed. safi.")
-        return
-    is_fraud, roast, score, reasons = bot.darija.fraud_check(name, stats)
-    embed = discord.Embed(title=f"Fraud Check — {info.get('nickname', name)}", description=roast, color=0xFF0000 if is_fraud else 0x00FF00)
-    embed.add_field(name="Fraud Score", value=f"{score}/100", inline=True)
-    embed.add_field(name="Reasons", value="\n".join(reasons) if reasons else "None", inline=True)
-    await ctx.send(embed=embed)
-
-
-@bot.command(name="ballon_dor")
-async def ballon_dor_cmd(ctx):
-    leaderboard = bot.stats.get_leaderboard(50, "impact_score")
-    if not leaderboard:
-        await ctx.send("z3ma... ballon d'or? walo. chi m3a9ed. safi.")
-        return
-    winner_name, winner_stats = leaderboard[0]
-    info = bot.squad.get(winner_name.lower(), {})
-    nick = info.get("nickname", winner_name)
-    roast = bot.darija._format(
-        "{name}. ballon d'or. z3ma... best? walo. chi m3a9ed l3ba. clown team.", name=nick
-    )
-    embed = discord.Embed(title="Ballon d'Or 🏆", description=roast, color=0xFFD700)
-    embed.add_field(name="Winner", value=nick, inline=True)
-    embed.add_field(name="Impact Score", value=f"{winner_stats.get('impact_score', 0):.1f}", inline=True)
-    embed.add_field(name="Goals", value=winner_stats.get("goals", 0), inline=True)
-    embed.add_field(name="Assists", value=winner_stats.get("assists", 0), inline=True)
-    embed.add_field(name="Rating", value=f"{winner_stats.get('rating', 0):.1f}", inline=True)
-    await ctx.send(embed=embed)
-
-
-@bot.command(name="ghost_detector")
-async def ghost_detector_cmd(ctx):
-    ghosts = []
-    for key, info in bot.squad.items():
-        stats = bot.stats.get_player_stats(info.get("name", key), 10)
-        if not stats or stats.get("matches", 0) < 3:
-            ghosts.append(key)
-    if not ghosts:
-        await ctx.send("z3ma... ghosts? walo. kolchi kayl3b. safi.")
-        return
-    ghost_names = [bot.squad[g].get("nickname", g) for g in ghosts]
-    roast = bot.darija._format(
-        "{ghosts}. ghosts detected. z3ma... players? walo. delete game.", ghosts=", ".join(ghost_names)
-    )
-    embed = discord.Embed(title="Ghost Detector 👻", description=roast, color=0x808080)
-    for ghost in ghosts:
-        stats = bot.stats.get_player_stats(bot.squad[ghost].get("name", ghost), 10)
-        matches = stats.get("matches", 0) if stats else 0
-        embed.add_field(name=bot.squad[ghost].get("nickname", ghost), value=f"{matches} matches", inline=True)
-    await ctx.send(embed=embed)
-
-
-@bot.command(name="pass_the_ball")
-async def pass_the_ball_cmd(ctx, *, player_name: str):
-    key = bot._find_squad_key(player_name)
-    if not key:
-        await ctx.send(f"z3ma... {player_name}? walo. chi m3a9ed. safi.")
-        return
-    info = bot.squad[key]
-    name = info.get("name", player_name)
-    stats = bot.stats.get_player_stats(name, 5)
-    if not stats:
-        await ctx.send(f"z3ma... stats dial {name}? walo. chi m3a9ed. safi.")
-        return
-    dribbles = stats.get("dribbles_attempted", 0)
-    passes = stats.get("passes_attempted", 0)
-    if dribbles > passes * 0.5:
-        roast = bot.darija._format(
-            "{name}. pass the ball! z3ma... dribbler? walo. chi m3a9ed l3ba. team sport.", name=info.get("nickname", name)
+        
+        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        pos = squad_map.get(target.name, {}).get("position", "CM")
+        
+        # Generate card
+        card = self.imgen.generate_player_card(target, pos)
+        file = discord.File(card, filename=f"{target.name}_card.png")
+        
+        # Darija interpretation
+        text = self.darija.generate(target, pos, roast_freq=0.3)  # More stats, less roast
+        
+        embed = discord.Embed(
+            title=f"📊 {target.name} — {pos}",
+            description=text,
+            color=0x1e90ff
         )
-    else:
-        roast = bot.darija._format(
-            "{name}. z3ma... ball hog? walo. chi m3a9ed. safi.", name=info.get("nickname", name)
+        embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
+        embed.add_field(name="Clutch", value=str(target.clutch_score), inline=True)
+        embed.add_field(name="Error", value=str(target.error_score), inline=True)
+        
+        await interaction.followup.send(embed=embed, file=file)
+    
+    @app_commands.command(name="roastplayer", description="Roast a specific player")
+    @app_commands.describe(player="Player name")
+    async def slash_roastplayer(self, interaction: discord.Interaction, player: str):
+        await interaction.response.defer()
+        
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+        
+        target = None
+        for p in self.current_club.players:
+            if player.lower() in p.name.lower():
+                target = p
+                break
+        
+        if not target:
+            await interaction.followup.send(f"ما لقيتش {player} فالفريق.")
+            return
+        
+        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        pos = squad_map.get(target.name, {}).get("position", "CM")
+        
+        roast = self.darija.roast(target, pos)
+        card = self.imgen.generate_roast_card(target, roast, pos)
+        file = discord.File(card, filename=f"{target.name}_roast.png")
+        
+        embed = discord.Embed(
+            title=f"🔥 ROAST REPORT — {target.name}",
+            description=roast,
+            color=0xff0000
         )
-    await ctx.send(roast)
-
-
-@bot.command(name="personality")
-async def personality_cmd(ctx, mode: str):
-    if mode.lower() in PERSONALITIES:
-        bot.darija.set_personality(mode.lower())
-        await ctx.send(f"Personality switched to {mode.upper()}. z3ma... change? walo. safi.")
-    else:
-        modes = ", ".join(PERSONALITIES.keys())
-        await ctx.send(f"z3ma... personality? walo. Available: {modes}")
-
-
-@bot.command(name="sync")
-async def sync_cmd(ctx, count: int = 20):
-    await ctx.send("🔥 Syncing from ProClubsTracker...")
-    try:
-        added = await bot.scraper.sync_to_stats_engine(bot.stats, count=count)
-        if added > 0:
-            await ctx.send(f"Synced {added} new matches from PCT. z3ma... data? walo. safi.")
+        
+        await interaction.followup.send(embed=embed, file=file)
+    
+    @app_commands.command(name="mvp", description="MVP of last 5 matches / season")
+    async def slash_mvp(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+        
+        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+        
+        mvp = StatsEngine.get_mvp(self.current_club.players)
+        pos = squad_map.get(mvp.name, {}).get("position", "CM")
+        
+        card = self.imgen.generate_motm_card(mvp, pos)
+        file = discord.File(card, filename="mvp.png")
+        
+        embed = discord.Embed(
+            title="🏆 MAN OF THE MATCH",
+            description=f"**{mvp.name}** — Impact Score: {mvp.impact_score}",
+            color=0xffd700
+        )
+        embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
+        embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
+        embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
+        
+        await interaction.followup.send(embed=embed, file=file)
+    
+    @app_commands.command(name="worst", description="Worst player of the week")
+    async def slash_worst(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+        
+        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+        
+        worst = StatsEngine.get_worst(self.current_club.players)
+        pos = squad_map.get(worst.name, {}).get("position", "CM")
+        
+        roast = self.darija.roast(worst, pos)
+        
+        embed = discord.Embed(
+            title="🗑️ WORST PLAYER OF THE WEEK",
+            description=f"**{worst.name}** — Impact: {worst.impact_score}\n\n{roast}",
+            color=0x8b0000
+        )
+        
+        await interaction.followup.send(embed=embed)
+    
+    @app_commands.command(name="who_sold", description="Who sold the match")
+    async def slash_who_sold(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+        
+        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+        
+        fraud = StatsEngine.get_fraud(self.current_club.players)
+        pos = squad_map.get(fraud.name, {}).get("position", "CM")
+        
+        roast = self.darija.roast(fraud, pos)
+        
+        embed = discord.Embed(
+            title="🎭 FRAUD DETECTED",
+            description=f"**{fraud.name}** — Throwing Score: {fraud.throwing_score}\n\n{roast}",
+            color=0xff4500
+        )
+        
+        await interaction.followup.send(embed=embed)
+    
+    @app_commands.command(name="carry_detector", description="Who is carrying the team")
+    async def slash_carry(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+        
+        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+        
+        carry = StatsEngine.get_carry(self.current_club.players)
+        pos = squad_map.get(carry.name, {}).get("position", "CM")
+        
+        praise = self.darija.praise(carry, pos)
+        
+        embed = discord.Embed(
+            title="💪 CARRY DETECTED",
+            description=f"**{carry.name}** — Impact: {carry.impact_score} / Clutch: {carry.clutch_score}\n\n{praise}",
+            color=0x00ff00
+        )
+        
+        await interaction.followup.send(embed=embed)
+    
+    @app_commands.command(name="fraud_check", description="Check if a player is fraud")
+    @app_commands.describe(player="Player name")
+    async def slash_fraud_check(self, interaction: discord.Interaction, player: str):
+        await interaction.response.defer()
+        
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+        
+        target = None
+        for p in self.current_club.players:
+            if player.lower() in p.name.lower():
+                target = p
+                break
+        
+        if not target:
+            await interaction.followup.send(f"ما لقيتش {player}.")
+            return
+        
+        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        pos = squad_map.get(target.name, {}).get("position", "CM")
+        
+        fraud_threshold = 3.0
+        is_fraud = target.throwing_score > fraud_threshold
+        
+        if is_fraud:
+            text = f"🚨 FRAUD CONFIRMED\n\n{target.name} — Throwing Score: {target.throwing_score}\n\n{self.darija.roast(target, pos)}"
+            color = 0xff0000
         else:
-            await ctx.send("z3ma... new matches? walo. kolchi up-to-date. safi.")
-    except Exception as e:
-        await ctx.send(f"z3ma... sync? walo. Error: {e}")
-
-
-@bot.command(name="force_sync")
-async def force_sync_cmd(ctx):
-    await ctx.send("🔥 Drilling ProClubsTracker for ALL matches...")
-    try:
-        data = await bot.scraper.scrape_all(max_matches=50, force=True)
-        matches = data.get("matches", [])
-        added = 0
-        for match in matches:
-            if not bot.stats.match_exists(match["match_id"]):
-                from ea_api import EAMatch
-                em = EAMatch(
-                    match_id=match["match_id"],
-                    date_iso=match.get("date", "—"),
-                    opponent_name=match.get("opponent", "Unknown"),
-                    team_goals=match.get("team_goals", 0),
-                    opponent_goals=match.get("opponent_goals", 0),
-                    match_type=match.get("match_type", "friendlyMatch"),
-                )
-                bot.stats.add_match(em)
-                added += 1
-        await ctx.send(f"🔥 Force synced {added} new matches from PCT!")
-    except Exception as e:
-        await ctx.send(f"z3ma... force sync? walo. Error: {e}")
-
-
-@bot.command(name="test_api")
-async def test_api_cmd(ctx):
-    await ctx.send("Testing ProClubsTracker connection...")
-    try:
-        data = await bot.scraper.scrape_all(max_matches=5, force=True)
-        matches = data.get("matches", [])
-        club_info = data.get("club_info", {})
-        status = [
-            f"✅ Source: ProClubsTracker (Playwright)",
-            f"✅ Matches found: {len(matches)}",
-            f"✅ Club info fields: {len(club_info)}",
+            text = f"✅ CLEAN\n\n{target.name} — Throwing Score: {target.throwing_score}\n\nهادا لاعب صحيح، ما كيخونش."
+            color = 0x00ff00
+        
+        embed = discord.Embed(title="FRAUD CHECK", description=text, color=color)
+        await interaction.followup.send(embed=embed)
+    
+    @app_commands.command(name="ballon_dor", description="Ballon d'Or ranking")
+    async def slash_ballon_dor(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+        
+        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+        
+        # Sort by impact + clutch + goals
+        ranked = sorted(self.current_club.players, 
+                       key=lambda p: p.impact_score + p.clutch_score + p.goals * 2, 
+                       reverse=True)
+        
+        embed = discord.Embed(title="🏆 BALLON D'OR — Rachad L3ERGONI", color=0xffd700)
+        
+        medals = ["🥇", "🥈", "🥉"]
+        for i, p in enumerate(ranked[:5]):
+            medal = medals[i] if i < 3 else f"{i+1}."
+            embed.add_field(
+                name=f"{medal} {p.name}",
+                value=f"Impact: {p.impact_score} | Goals: {p.goals} | Rating: {round(p.rating_pg, 1)}",
+                inline=False
+            )
+        
+        await interaction.followup.send(embed=embed)
+    
+    @app_commands.command(name="ghost_detector", description="Detect inactive players")
+    async def slash_ghost(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+        
+        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+        
+        ghost = StatsEngine.get_ghost(self.current_club.players)
+        pos = squad_map.get(ghost.name, {}).get("position", "CM")
+        
+        roast = self.darija.roast(ghost, pos)
+        
+        embed = discord.Embed(
+            title="👻 GHOST DETECTED",
+            description=f"**{ghost.name}** — {ghost.minutes_played}min / {ghost.games} games\n\n{roast}",
+            color=0x9370db
+        )
+        
+        await interaction.followup.send(embed=embed)
+    
+    @app_commands.command(name="pass_the_ball", description="Call out ball hog")
+    async def slash_pass_ball(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+        
+        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+        
+        hog = StatsEngine.get_ball_hog(self.current_club.players)
+        pos = squad_map.get(hog.name, {}).get("position", "CM")
+        
+        roast = self.darija.roast(hog, pos)
+        
+        embed = discord.Embed(
+            title="⚽ PASS THE BALL!",
+            description=f"**{hog.name}** — {hog.possession_losses} lost / {hog.assists} assists\n\n{roast}",
+            color=0xffa500
+        )
+        
+        await interaction.followup.send(embed=embed)
+    
+    @app_commands.command(name="leaderboard", description="Leaderboard with visual card")
+    @app_commands.describe(metric="Metric to rank by", period="Time period")
+    @app_commands.choices(metric=[
+        app_commands.Choice(name="Impact Score", value="impact_score"),
+        app_commands.Choice(name="Goals", value="goals"),
+        app_commands.Choice(name="Assists", value="assists"),
+        app_commands.Choice(name="Rating", value="rating_pg"),
+        app_commands.Choice(name="Clutch", value="clutch_score"),
+    ])
+    async def slash_leaderboard(self, interaction: discord.Interaction, 
+                               metric: app_commands.Choice[str], 
+                               period: str = "all"):
+        await interaction.response.defer()
+        
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+        
+        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+        
+        card = self.imgen.generate_leaderboard(self.current_club.players, metric.value)
+        file = discord.File(card, filename="leaderboard.png")
+        
+        embed = discord.Embed(
+            title=f"📊 Leaderboard — {metric.name}",
+            description=f"Period: {period}",
+            color=0x1e90ff
+        )
+        
+        await interaction.followup.send(embed=embed, file=file)
+    
+    @app_commands.command(name="compare", description="1v1 player comparison")
+    @app_commands.describe(player1="First player", player2="Second player")
+    async def slash_compare(self, interaction: discord.Interaction, player1: str, player2: str):
+        await interaction.response.defer()
+        
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+        
+        p1 = next((p for p in self.current_club.players if player1.lower() in p.name.lower()), None)
+        p2 = next((p for p in self.current_club.players if player2.lower() in p.name.lower()), None)
+        
+        if not p1 or not p2:
+            await interaction.followup.send("ما لقيتش واحد من players. جرب أسماء أخرى.")
+            return
+        
+        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        pos1 = squad_map.get(p1.name, {}).get("position", "CM")
+        pos2 = squad_map.get(p2.name, {}).get("position", "CM")
+        
+        text = self.darija.compare(p1, p2, pos1, pos2)
+        
+        embed = discord.Embed(
+            title="⚔️ 1v1 COMPARISON",
+            description=text,
+            color=0xff4500
+        )
+        
+        embed.add_field(name=p1.name, 
+                       value=f"Impact: {p1.impact_score}\nGoals: {p1.goals}\nAssists: {p1.assists}\nRating: {round(p1.rating_pg, 1)}",
+                       inline=True)
+        embed.add_field(name=p2.name,
+                       value=f"Impact: {p2.impact_score}\nGoals: {p2.goals}\nAssists: {p2.assists}\nRating: {round(p2.rating_pg, 1)}",
+                       inline=True)
+        
+        await interaction.followup.send(embed=embed)
+    
+    @app_commands.command(name="clubinfo", description="Club overview + match report card")
+    async def slash_clubinfo(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        if not self.current_club:
+            self.current_club = await self.scraper.scrape_club()
+        
+        squad_map = {p["name"]: p for p in self.squad.get("players", [])}
+        self.current_club.players = StatsEngine.compute_all(self.current_club.players, squad_map)
+        
+        motm = StatsEngine.get_mvp(self.current_club.players)
+        
+        card = self.imgen.generate_match_report(self.current_club, motm)
+        file = discord.File(card, filename="club_report.png")
+        
+        embed = discord.Embed(
+            title=f"🏟️ {self.current_club.club_name}",
+            description=f"Division {self.current_club.division} • Skill {self.current_club.skill_rating}",
+            color=0x00ff00
+        )
+        
+        await interaction.followup.send(embed=embed, file=file)
+    
+    @app_commands.command(name="banter", description="Football trash talk")
+    async def slash_banter(self, interaction: discord.Interaction):
+        text = self.darija.banter()
+        embed = discord.Embed(title="☕ Cafeteria Banter", description=text, color=0xffa500)
+        await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="personality", description="Switch bot personality")
+    @app_commands.describe(mode="Personality mode")
+    @app_commands.choices(mode=[
+        app_commands.Choice(name="Casablanca Street", value="casablanca"),
+        app_commands.Choice(name="Football Analyst", value="analyst"),
+        app_commands.Choice(name="Toxic Teammate", value="toxic"),
+        app_commands.Choice(name="Coach", value="coach"),
+        app_commands.Choice(name="Commentator", value="commentator"),
+        app_commands.Choice(name="Cafeteria Banter", value="cafeteria"),
+    ])
+    async def slash_personality(self, interaction: discord.Interaction, mode: app_commands.Choice[str]):
+        self.darija.set_personality(mode.value)
+        embed = discord.Embed(
+            title="🎭 Personality Switch",
+            description=f"Bot personality changed to: **{mode.name}**",
+            color=0x9370db
+        )
+        await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="sync", description="Manual sync from ProClubsTracker")
+    async def slash_sync(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        club = await self.scraper.scrape_club()
+        self.current_club = club
+        
+        embed = discord.Embed(
+            title="🔄 Manual Sync Complete",
+            description=f"Synced {len(club.players)} players from ProClubsTracker",
+            color=0x00ff00
+        )
+        
+        await interaction.followup.send(embed=embed)
+    
+    @app_commands.command(name="help", description="Show all commands")
+    async def slash_help(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="🎮 Rachad L3ERGONI Bot — Commands",
+            description="The Moroccan Pro Clubs AI that roasts with real data",
+            color=0x1e90ff
+        )
+        
+        commands_list = [
+            ("/roast", "Start session monitoring"),
+            ("/stop", "Stop session"),
+            ("/stats [player]", "Player stats + premium card"),
+            ("/roastplayer [player]", "Roast specific player"),
+            ("/mvp", "MVP of the season"),
+            ("/worst", "Worst player of the week"),
+            ("/who_sold", "Who sold the match"),
+            ("/carry_detector", "Who is carrying"),
+            ("/fraud_check [player]", "Check if fraud"),
+            ("/ballon_dor", "Ballon d'Or ranking"),
+            ("/ghost_detector", "Detect inactive players"),
+            ("/pass_the_ball", "Call out ball hog"),
+            ("/leaderboard [metric]", "Visual leaderboard"),
+            ("/compare [p1] [p2]", "1v1 comparison"),
+            ("/clubinfo", "Club overview card"),
+            ("/banter", "Football trash talk"),
+            ("/personality [mode]", "Switch personality"),
+            ("/sync", "Manual sync from ProClubsTracker"),
         ]
-        if matches:
-            m = matches[0]
-            status.append(f"✅ Latest: {m.get('team_goals', 0)}-{m.get('opponent_goals', 0)} vs {m.get('opponent', 'Unknown')}")
-        await ctx.send("\n".join(status))
-    except Exception as e:
-        await ctx.send(f"❌ PCT test failed: {e}")
+        
+        for cmd, desc in commands_list:
+            embed.add_field(name=cmd, value=desc, inline=False)
+        
+        await interaction.response.send_message(embed=embed)
 
+# Legacy text commands for compatibility
+    @commands.command(name="roast")
+    async def cmd_roast(self, ctx):
+        await self.slash_roast.callback(self, ctx)
+    
+    @commands.command(name="stats")
+    async def cmd_stats(self, ctx, *, player: str):
+        # Create a fake interaction or call directly
+        pass
 
-@bot.command(name="help")
-async def help_cmd(ctx):
-    embed = discord.Embed(
-        title="Rachad L3ERGONI Bot — Commands",
-        description="95% roast mode | Native Darija | ProClubsTracker | Real Photos | Premium Visuals",
-        color=0xFF6B35,
-    )
-    categories = {
-        "Core 📊": "!stats <player>, !mvp, !compare <p1> <p2>, !leaderboard <period>",
-        "Match ⚽": "!sync, !lastmatch, !clubinfo, !test_api",
-        "Roast 🔥": "!roastplayer <player>, !worst, !who_sold, !carry_detector, !fraud_check <player>, !ghost_detector, !pass_the_ball <player>",
-        "Fun 😂": "!banter, !drama, !meme, !transfer, !predict <opponent>, !ballon_dor",
-        "Session 🎮": "!roast, !stop, !personality <mode>",
-    }
-    for cat, cmds in categories.items():
-        embed.add_field(name=cat, value=cmds, inline=False)
-    embed.set_footer(text="Rachad L3ERGONI Pro Clubs | ProClubsTracker | Made with 🔥 for the squad")
-    await ctx.send(embed=embed)
-
-
-# Slash commands
-@bot.tree.command(name="stats", description="Show player stats with premium card")
-@app_commands.describe(player="Player name (e.g., Shark, Dictator, Modamir)")
-async def slash_stats(interaction: discord.Interaction, player: str):
-    await interaction.response.defer()
-    ctx = await commands.Context.from_interaction(interaction)
-    await stats_cmd(ctx, player_name=player)
-
-
-@bot.tree.command(name="roast", description="Roast a player")
-@app_commands.describe(player="Player name")
-async def slash_roast(interaction: discord.Interaction, player: str):
-    await interaction.response.defer()
-    ctx = await commands.Context.from_interaction(interaction)
-    await roastplayer_cmd(ctx, player_name=player)
-
-
-@bot.tree.command(name="mvp", description="MVP of last 5 matches")
-async def slash_mvp(interaction: discord.Interaction):
-    await interaction.response.defer()
-    ctx = await commands.Context.from_interaction(interaction)
-    await mvp_cmd(ctx)
-
-
-@bot.tree.command(name="compare", description="Compare two players")
-@app_commands.describe(player1="First player", player2="Second player")
-async def slash_compare(interaction: discord.Interaction, player1: str, player2: str):
-    await interaction.response.defer()
-    ctx = await commands.Context.from_interaction(interaction)
-    await compare_cmd(ctx, p1=player1, p2=player2)
-
-
-@bot.tree.command(name="leaderboard", description="Show leaderboard")
-@app_commands.describe(period="Time period (day/week/month/all)")
-async def slash_leaderboard(interaction: discord.Interaction, period: str = "week"):
-    await interaction.response.defer()
-    ctx = await commands.Context.from_interaction(interaction)
-    await leaderboard_cmd(ctx, period=period)
-
-
-# Health server
-async def start_health_server():
-    from aiohttp import web
-    async def health(request):
-        return web.Response(text="Rachad L3ERGONI Bot is alive! 🔥")
-    app = web.Application()
-    app.router.add_get("/", health)
-    app.router.add_get("/health", health)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    logger.info("[Health] Server running on port %d", PORT)
-
-
-async def main():
-    await start_health_server()
-    await asyncio.sleep(1)
-    await bot.start(DISCORD_TOKEN)
-
+def main():
+    bot = RachadBot()
+    bot.run(Config.DISCORD_TOKEN)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
