@@ -28,7 +28,15 @@ class Config:
     @classmethod
     def load_squad(cls):
         with open(cls.SQUAD_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        # Support both dict format (your current squad.json) and proper list format
+        if isinstance(data, dict) and "players" not in data:
+            players = []
+            for key, player in data.items():
+                player["_key"] = key
+                players.append(player)
+            return {"players": players}
+        return data
 
 def load_squad():
     return Config.load_squad()
