@@ -23,7 +23,9 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers
+# Install Playwright browsers to PROJECT directory (persisted, not /root/.cache)
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
+RUN mkdir -p /app/ms-playwright
 RUN playwright install chromium
 RUN playwright install-deps chromium
 
@@ -33,7 +35,7 @@ COPY . .
 # Create directories
 RUN mkdir -p assets/players assets/backgrounds assets/fonts
 
-# Expose health check port for Render
+# Expose health check port
 EXPOSE 8080
 
 # Run
