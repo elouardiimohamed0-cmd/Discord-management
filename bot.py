@@ -77,7 +77,7 @@ async def ensure_data(ctx):
         try:
             club = await scraper.scrape_club()
             if not club or not club.players:
-                await ctx.send("❌ ما قدرتش نجيب البيانات. ProClubsTracker محمي أو Chromium ما كيهضرش.")
+                await ctx.send("❌ ما قدرتش نجيب البيانات من EA API. جرب `!sync` مرة أخرى.")
                 return False
             current_club = club
             current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
@@ -100,7 +100,7 @@ async def ensure_data_interaction(interaction: discord.Interaction):
         await interaction.followup.send("⏳ جاري جلب البيانات...")
         club = await scraper.scrape_club()
         if not club or not club.players:
-            await interaction.followup.send("❌ ما قدرتش نجيب البيانات.")
+            await interaction.followup.send("❌ ما قدرتش نجيب البيانات من EA API. جرب `/sync` مرة أخرى.")
             return False
         current_club = club
         current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
@@ -118,7 +118,7 @@ async def ensure_data_interaction(interaction: discord.Interaction):
 async def on_ready():
     global scraper
     print(f"✅ Bot online as {bot.user}")
-    scraper = ProClubsTrackerScraper(Config.PCT_CLUB_URL, headless=Config.HEADLESS, use_stealth=Config.STEALTH)
+    scraper = ProClubsTrackerScraper(Config.PCT_CLUB_URL)
     await bot.change_presence(activity=discord.Game(name="!help or /help"))
     try:
         guild = discord.Object(id=Config.DISCORD_GUILD_ID)
@@ -180,12 +180,12 @@ async def cmd_ping(ctx):
 
 @bot.command(name="debug")
 async def cmd_debug(ctx):
-    import os
     lines = [
         f"**PCT_URL:** {Config.PCT_CLUB_URL}",
         f"**PORT:** {Config.PORT}",
-        f"**PLAYWRIGHT_BROWSERS_PATH:** `{os.environ.get('PLAYWRIGHT_BROWSERS_PATH', 'NOT SET')}`",
-        f"**PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL:** `{os.environ.get('PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL', 'NOT SET')}`",
+        f"**EA API Base:** `https://proclubs.ea.com/api/fc`",
+        f"**Club ID:** `{Config.CLUB_ID}`",
+        f"**Platform:** `{Config.PCT_PLATFORM}`",
         f"**Scraper ready:** {'Yes' if scraper else 'No'}",
         f"**Data loaded:** {'Yes' if current_club and current_club.players else 'No'}",
         f"**Players:** {len(current_club.players) if current_club and current_club.players else 0}",
@@ -608,12 +608,12 @@ async def slash_ping(interaction: discord.Interaction):
 
 @bot.tree.command(name="debug", description="Show bot state for troubleshooting")
 async def slash_debug(interaction: discord.Interaction):
-    import os
     lines = [
         f"**PCT_URL:** {Config.PCT_CLUB_URL}",
         f"**PORT:** {Config.PORT}",
-        f"**PLAYWRIGHT_BROWSERS_PATH:** `{os.environ.get('PLAYWRIGHT_BROWSERS_PATH', 'NOT SET')}`",
-        f"**PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL:** `{os.environ.get('PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL', 'NOT SET')}`",
+        f"**EA API Base:** `https://proclubs.ea.com/api/fc`",
+        f"**Club ID:** `{Config.CLUB_ID}`",
+        f"**Platform:** `{Config.PCT_PLATFORM}`",
         f"**Scraper ready:** {'Yes' if scraper else 'No'}",
         f"**Data loaded:** {'Yes' if current_club and current_club.players else 'No'}",
         f"**Players:** {len(current_club.players) if current_club and current_club.players else 0}",
@@ -621,7 +621,7 @@ async def slash_debug(interaction: discord.Interaction):
     embed = discord.Embed(title="🔧 Debug Info", description="\n".join(lines), color=0x808080)
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="sync", description="Manual sync from ProClubsTracker")
+@bot.tree.command(name="sync", description="Manual sync from EA API")
 async def slash_sync(interaction: discord.Interaction):
     await interaction.response.defer()
     try:
