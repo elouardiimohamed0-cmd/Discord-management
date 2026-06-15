@@ -19,9 +19,12 @@ ENV PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL=0
 RUN mkdir -p /app/ms-playwright
 RUN playwright install chromium
 RUN playwright install-deps chromium
-# Verify installation
-RUN ls -la /app/ms-playwright/ || echo "Browser dir not found"
-RUN find /app/ms-playwright -name "chrome*" -type f 2>/dev/null | head -5 || echo "No chrome executables found"
+
+# VERIFY installation - this will show in build logs
+RUN echo "=== Browser verification ===" && \
+    ls -la /app/ms-playwright/ && \
+    find /app/ms-playwright -name "chrome*" -type f 2>/dev/null | head -10 && \
+    echo "=== End verification ==="
 
 # Copy app
 COPY . .
