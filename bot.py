@@ -645,8 +645,7 @@ async def rankings_cmd(interaction: Interaction, stat: str = "overall"):
 
         embed = Embed(
             title=f"📊 Rankings - {stat.upper()}",
-            description="
-".join(lines),
+            description="\n".join(lines),
             color=discord.Color.blue(),
         )
 
@@ -866,8 +865,7 @@ async def audit_cmd(ctx):
         if data["errors"]:
             lines.append(f"  Recent errors: {', '.join(data['errors'][-3:])}")
 
-    await ctx.send("
-".join(lines))
+await ctx.send("\n".join(lines))
 
 # ============== MAIN ==============
 
