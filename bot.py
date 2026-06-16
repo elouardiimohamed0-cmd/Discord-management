@@ -336,51 +336,17 @@ async def cmd_help(ctx):
         description="الخطوة الأولى: دير !sync أو /sync\n\nبعدها تقدر تستعمل كل شي:",
         color=0x1e90ff
     )
-    cmds = [
-        ("!ping", "تأكد من أن البوت كيهضر"),
-        ("!debug", "معلومات تقنية"),
-        ("!resync", "إصلاح slash commands"),
-        ("!sync / /sync", "جلب البيانات"),
-        ("!stats [player] / /stats", "إحصائيات لاعب + anime card"),
-        ("!player [player] / /player", "البروفيل الكامل"),
-        ("!mvp / /mvp", "أفضل لاعب + anime MVP card"),
-        ("!worst / /worst", "أسوأ لاعب"),
-        ("!who_sold / /who_sold", "شكون باع الماتش"),
-        ("!carry / /carry_detector", "شكون كيجرّ الفريق"),
-        ("!fraud [player] / /fraud_check", "فحص الفريق + anime fraud card"),
-        ("!ballon / /ballon_dor", "ترتيب Ballon d Or"),
-        ("!ghost / /ghost_detector", "كشف الغيّاب + anime ghost card"),
-        ("!pass / /pass_the_ball", "نادِي على اللي كيضيع الكورة"),
-        ("!ball_loser / /ball_loser", "أكثر واحد كيضيع الكورة"),
-        ("!playmaker / /playmaker", "أحسن creator"),
-        ("!sniper / /sniper", "أحسن finisher"),
-        ("!keeper / /keeper", "أحسن حارس"),
-        ("!leaderboard [metric] / /leaderboard", "لوحة المتصدرين anime style"),
-        ("!compare p1 p2 / /compare", "مقارنة 1v1"),
-        ("!lastmatch / /lastmatch", "آخر ماتش"),
-        ("!club / /clubinfo", "معلومات النادي"),
-        ("!history [player] / /history", "تاريخ اللاعب"),
-        ("!rankings / /rankings", "كل الترتيبات"),
-        ("!awards / /awards", "جوائز الموسم"),
-        ("!anime_card [player] / /anime_card", "كارطة anime premium"),
-        ("!beast_mode [player] / /beast_mode", "Beast Mode card"),
-        ("!court_case [player] / /court_case", "محاكمة اللاعب"),
-        ("!serial_offender [player] / /serial_offender", "المجرم المتسلسل"),
-        ("!hall_of_shame / /hall_of_shame", "صالة العار"),
-        ("!daily / /daily", "Stat of the Day يدوي"),
-        ("!story / /story", "قصة اليوم"),
-        ("!banter / /banter", "هضرة رياضية"),
-        ("!drama / /drama", "دراما"),
-        ("!meme [player] / /meme", "ميم بالدارجة"),
-        ("!transfer [player] / /transfer", "إشاعة انتقال"),
-        ("!predict / /predict", "توقع الماتش"),
-        ("!personality [mode] / /personality", "تبديل الشخصية"),
-        ("!roast / /roast", "بدء session monitoring"),
-        ("!stop / /stop", "إيقاف session"),
-        ("!roastplayer [player] / /roastplayer", "Roast لاعب"),
-    ]
-    for cmd, desc in cmds:
-        embed.add_field(name=cmd, value=desc, inline=False)
+    text = (
+        "**Basic:** `!ping` `!debug` `!resync` `!sync`\n\n"
+        "**Player Cards:** `!stats [player]` `!player [player]` `!anime_card [player]` `!beast_mode [player]`\n\n"
+        "**Rankings:** `!mvp` `!worst` `!carry` `!ballon` `!ghost` `!ball_loser` `!playmaker` `!sniper` `!keeper`\n\n"
+        "**Roast Engine:** `!fraud [player]` `!who_sold` `!pass` `!court_case [player]` `!serial_offender [player]` `!hall_of_shame`\n\n"
+        "**Compare:** `!compare p1 p2` `!lastmatch` `!club` `!leaderboard [metric]`\n\n"
+        "**History:** `!history [player]` `!rankings` `!awards`\n\n"
+        "**Fun:** `!daily` `!story` `!banter` `!drama` `!meme [player]` `!transfer [player]` `!predict`\n\n"
+        "**Settings:** `!personality [mode]` `!roast` `!stop` `!roastplayer [player]`"
+    )
+    embed.add_field(name="All Commands", value=text, inline=False)
     await ctx.send(embed=embed)
 
 @bot.command(name="sync")
@@ -758,11 +724,14 @@ async def cmd_roastplayer(ctx, *, player: str):
 # === NEW PHASE 3 COMMANDS ===
 
 @bot.command(name="serial_offender")
-async def cmd_serial_offender(ctx, *, player: str):
+async def cmd_serial_offender(ctx, *, player: str = None):
     if not await ensure_data(ctx): return
-    target = find_player(player)
+    if not player:
+        target = min(current_club.players, key=lambda p: p.rating_pg)
+    else:
+        target = find_player(player)
     if not target:
-        await ctx.send(f"ما لقيتش `{player}`.")
+        await ctx.send("ما لقيتش player.")
         return
     async with ctx.typing():
         try:
@@ -1704,6 +1673,77 @@ async def slash_personality(interaction: discord.Interaction, mode: app_commands
         traceback.print_exc()
         await interaction.response.send_message(f"Error: {str(e)[:300]}")
 
+@bot.tree.command(name="roast", description="Activate roast mode")
+async def slash_roast(interaction: discord.Interaction):
+    global _session_active
+    _session_active = True
+    darija.set_personality("casablanca")
+    embed = discord.Embed(title="🔥 ROAST MODE ACTIVATED", description="Session monitoring started.", color=0xff4500)
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="stop", description="Stop roast session")
+async def slash_stop(interaction: discord.Interaction):
+    global _session_active
+    _session_active = False
+    await interaction.response.send_message("⏹️ Session Stopped.")
+
+@bot.tree.command(name="roastplayer", description="Roast a specific player")
+@app_commands.describe(player="Player name")
+async def slash_roastplayer(interaction: discord.Interaction, player: str):
+    await interaction.response.defer()
+    if not await ensure_data_interaction(interaction): return
+    target = find_player(player)
+    if not target:
+        await interaction.followup.send(f"ما لقيتش `{player}`.")
+        return
+    squad_map = get_squad_map()
+    pos = squad_map.get(target.name, {}).get("position", "CM")
+    try:
+        roast = darija.roast(target, pos)
+        card = imgen.generate_roast_card(target, roast, pos)
+        file = discord.File(card, filename=f"{target.name}_roast.png")
+        embed = discord.Embed(title=f"🔥 ROAST REPORT — {target.name}", description=roast, color=0xff0000)
+        await interaction.followup.send(embed=embed, file=file)
+    except Exception as e:
+        traceback.print_exc()
+        await interaction.followup.send(f"Error: {str(e)[:300]}")
+
+@bot.tree.command(name="serial_offender", description="Player with repeated bad performances")
+@app_commands.describe(player="Player to investigate (optional)")
+async def slash_serial_offender(interaction: discord.Interaction, player: str = None):
+    await interaction.response.defer()
+    if not await ensure_data_interaction(interaction): return
+    if not player:
+        target = min(current_club.players, key=lambda p: p.rating_pg)
+    else:
+        target = find_player(player)
+    if not target:
+        await interaction.followup.send("ما لقيتش player.")
+        return
+    try:
+        bad_games = memory.get_consecutive_bad_games(target.name) if hasattr(memory, 'get_consecutive_bad_games') else 0
+        text = darija.serial_offender(target, bad_games)
+        embed = discord.Embed(title=f"🚨 Serial Offender — {target.name}", description=text, color=0x8b0000)
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        traceback.print_exc()
+        await interaction.followup.send(f"Error: {str(e)[:300]}")
+
+@bot.tree.command(name="hall_of_shame", description="Worst performances ever recorded")
+async def slash_hall_of_shame(interaction: discord.Interaction):
+    await interaction.response.defer()
+    if not await ensure_data_interaction(interaction): return
+    try:
+        squad_map = get_squad_map()
+        current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)
+        text = darija.hall_of_shame(current_club.players)
+        embed = discord.Embed(title="🏛️ Hall of Shame", description=text, color=0x8b0000)
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        traceback.print_exc()
+        await interaction.followup.send(f"Error: {str(e)[:300]}")
+
 @bot.tree.command(name="help", description="Show all commands")
 async def slash_help(interaction: discord.Interaction):
     try:
@@ -1712,51 +1752,17 @@ async def slash_help(interaction: discord.Interaction):
             description="الخطوة الأولى: دير /sync أو !sync\n\nبعدها تقدر تستعمل كل شي:",
             color=0x1e90ff
         )
-        cmds = [
-            ("/ping / !ping", "تأكد من أن البوت كيهضر"),
-            ("/debug / !debug", "معلومات تقنية"),
-            ("/resync / !resync", "إصلاح slash commands"),
-            ("/sync / !sync", "جلب البيانات"),
-            ("/stats [player] / !stats [player]", "إحصائيات + anime card"),
-            ("/player [player] / !player [player]", "البروفيل الكامل"),
-            ("/mvp / !mvp", "أفضل لاعب + anime MVP"),
-            ("/worst / !worst", "أسوأ لاعب"),
-            ("/who_sold / !who_sold", "شكون باع الماتش"),
-            ("/carry_detector / !carry", "شكون كيجرّ"),
-            ("/fraud_check [player] / !fraud [player]", "فحص + anime fraud card"),
-            ("/ballon_dor / !ballon", "Ballon d'Or"),
-            ("/ghost_detector / !ghost", "Ghost + anime card"),
-            ("/pass_the_ball / !pass", "Ball hog"),
-            ("/ball_loser / !ball_loser", "أكثر واحد كيضيع"),
-            ("/playmaker / !playmaker", "أحسن creator"),
-            ("/sniper / !sniper", "أحسن finisher"),
-            ("/keeper / !keeper", "أحسن حارس"),
-            ("/leaderboard / !leaderboard [metric]", "لوحة المتصدرين"),
-            ("/compare / !compare", "مقارنة 1v1"),
-            ("/lastmatch / !lastmatch", "آخر ماتش"),
-            ("/clubinfo / !club", "معلومات النادي"),
-            ("/history [player] / !history [player]", "تاريخ اللاعب"),
-            ("/rankings / !rankings", "كل الترتيبات"),
-            ("/awards / !awards", "جوائز الموسم"),
-            ("/anime_card [player] / !anime_card [player]", "كارطة anime"),
-            ("/beast_mode [player] / !beast_mode [player]", "Beast Mode"),
-            ("/court_case [player] / !court_case [player]", "محاكمة"),
-            ("/serial_offender [player] / !serial_offender [player]", "المجرم المتسلسل"),
-            ("/hall_of_shame / !hall_of_shame", "صالة العار"),
-            ("/daily / !daily", "Stat of the Day"),
-            ("/story / !story", "قصة اليوم"),
-            ("/banter / !banter", "هضرة"),
-            ("/drama / !drama", "دراما"),
-            ("/meme / !meme", "ميم"),
-            ("/transfer / !transfer", "إشاعة انتقال"),
-            ("/predict / !predict", "توقع"),
-            ("/personality / !personality", "شخصية"),
-            ("/roast / !roast", "Roast mode"),
-            ("/stop / !stop", "إيقاف"),
-            ("/roastplayer / !roastplayer", "Roast لاعب"),
-        ]
-        for cmd, desc in cmds:
-            embed.add_field(name=cmd, value=desc, inline=False)
+        text = (
+            "**Basic:** /ping /debug /resync /sync\n\n"
+            "**Player Cards:** /stats [player] /player [player] /anime_card [player] /beast_mode [player]\n\n"
+            "**Rankings:** /mvp /worst /carry_detector /ballon_dor /ghost_detector /ball_loser /playmaker /sniper /keeper\n\n"
+            "**Roast Engine:** /fraud_check [player] /who_sold /pass_the_ball /court_case [player] /serial_offender [player] /hall_of_shame\n\n"
+            "**Compare:** /compare p1 p2 /lastmatch /clubinfo /leaderboard\n\n"
+            "**History:** /history [player] /rankings /awards\n\n"
+            "**Fun:** /daily /story /banter /drama /meme [player] /transfer [player] /predict\n\n"
+            "**Settings:** /personality [mode] /roast /stop /roastplayer [player]"
+        )
+        embed.add_field(name="All Commands", value=text, inline=False)
         await interaction.response.send_message(embed=embed)
     except Exception as e:
         traceback.print_exc()
