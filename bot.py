@@ -24,6 +24,26 @@ from player_mapper import get_mapper
 from daily_content import get_daily_system
 
 
+
+# === HEALTH SERVER FOR RENDER ===
+def start_health_server():
+    """Keep Render happy by binding to PORT."""
+    import threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    port = int(os.getenv("PORT", "8000"))
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"ProClubsTracker Bot OK")
+        def log_message(self, format, *args):
+            pass
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"[Health] Server running on port {port}")
+
 class DataLayer:
     """Interface to existing working data. DO NOT MODIFY collection logic."""
 
@@ -699,6 +719,7 @@ def main():
     if not config.DISCORD_TOKEN:
         print("[Bot] ERROR: DISCORD_TOKEN not set")
         return
+    start_health_server()
     bot.run(config.DISCORD_TOKEN)
 
 
