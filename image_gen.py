@@ -1,389 +1,477 @@
-"""
-phase2_image_gen.py
-UHD Card Generator — EA FC 26 Ultimate Team inspired.
-Resolution: 1440x2160 (2K) or 2160x3840 (4K)
-Uses real player photos from squad.json.
-"""
 import os
 import io
-import math
+import random
 import json
-from typing import Dict, Any, Optional, Tuple
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance
+from typing import List, Optional, Tuple
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
-ASSETS_DIR = os.getenv("ASSETS_DIR", "assets")
-
-# AURA CONFIGURATION
-AURA_CONFIG = {
-    "S-Tier": {
-        "name": "MONSTER",
-        "gradient": [(20, 0, 60), (80, 0, 120), (180, 50, 255)],
-        "accent": (200, 100, 255),
-        "glow": (150, 0, 255),
-        "text": "S",
-        "effect": "anime_energy",
-    },
-    "A-Tier": {
-        "name": "ELITE",
-        "gradient": [(60, 40, 0), (140, 100, 0), (255, 200, 50)],
-        "accent": (255, 215, 0),
-        "glow": (255, 180, 0),
-        "text": "A",
-        "effect": "golden_rays",
-    },
-    "B-Tier": {
-        "name": "SOLID",
-        "gradient": [(0, 40, 20), (0, 100, 60), (50, 255, 150)],
-        "accent": (0, 255, 128),
-        "glow": (0, 200, 100),
-        "text": "B",
-        "effect": "pulse",
-    },
-    "Fraud": {
-        "name": "FRAUD",
-        "gradient": [(80, 20, 20), (150, 50, 50), (255, 100, 100)],
-        "accent": (255, 80, 80),
-        "glow": (255, 0, 0),
-        "text": "F",
-        "effect": "clown",
-    },
-    "Ghost": {
-        "name": "GHOST",
-        "gradient": [(40, 40, 50), (80, 80, 100), (150, 150, 180)],
-        "accent": (200, 200, 220),
-        "glow": (180, 180, 200),
-        "text": "G",
-        "effect": "fog",
-    },
-    "Carry": {
-        "name": "CARRY",
-        "gradient": [(0, 20, 60), (0, 60, 120), (0, 150, 255)],
-        "accent": (0, 200, 255),
-        "glow": (0, 100, 255),
-        "text": "K",
-        "effect": "crown_aura",
-    },
-}
-
-class UHDImageGenerator:
-    """Generates premium UHD player cards."""
-
-    def __init__(self, assets_dir: str = "assets", resolution: Tuple[int, int] = (1440, 2160)):
+class ImageGenerator:
+    def __init__(self, assets_dir: str = "assets"):
         self.assets_dir = assets_dir
-        self.width, self.height = resolution
-        self._squad_data = {}
-        self._load_squad()
-        self._init_fonts()
+        self.fonts_dir = os.path.join(assets_dir, "fonts")
+        self.players_dir = assets_dir  # images are in assets/ root
+        self._load_squad_images()
+        
+        # Colors
+        self.GOLD = (255, 215, 0)
+        self.SILVER = (192, 192, 192)
+        self.BRONZE = (205, 127, 50)
+        self.WHITE = (255, 255, 255)
+        self.BLACK = (0, 0, 0)
+        self.RED = (220, 20, 60)
+        self.GREEN = (50, 205, 50)
+        self.ORANGE = (255, 140, 0)
+        self.BLUE = (30, 144, 255)
+        self.PURPLE = (147, 0, 211)
+        self.CYAN = (0, 255, 255)
+        self.DARK_BG = (10, 10, 20)
+        
+        # Aura colors
+        self.AURA_MVP = (255, 215, 0)      # Gold
+        self.AURA_FRAUD = (220, 20, 60)    # Red
+        self.AURA_CARRY = (147, 0, 211)    # Purple
+        self.AURA_GHOST = (128, 128, 128)  # Gray
+        self.AURA_BEAST = (0, 191, 255)    # Blue Lock cyan
+        self.AURA_PLAYMAKER = (50, 205, 50) # Green
+        self.AURA_SNIPER = (255, 69, 0)    # Orange red
 
-    def _load_squad(self):
-        paths = ["squad.json", f"{self.assets_dir}/squad.json"]
-        for p in paths:
-            if os.path.exists(p):
-                try:
-                    with open(p, "r", encoding="utf-8") as f2:
-                        self._squad_data = json.load(f2)
-                        break
-                except:
-                    pass
-
-    def _init_fonts(self):
-        self.font_paths = {
-            "bold": self._find_font(["DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]),
-            "regular": self._find_font(["DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]),
-            "arabic": self._find_font(["NotoSansArabic-Bold.ttf", "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf"]),
-        }
-
-    def _find_font(self, candidates):
-        for c in candidates:
-            if c and os.path.exists(c):
-                return c
-        return None
-
-    def _get_font(self, size: int, style: str = "regular"):
-        path = self.font_paths.get(style, self.font_paths["regular"])
+    def _load_squad_images(self):
+        """Map player names to image paths from squad.json."""
+        self.player_images = {}
         try:
-            return ImageFont.truetype(path, size) if path else ImageFont.load_default()
-        except:
-            return ImageFont.load_default()
-
-    def _resolve_photo(self, player_name: str) -> str:
-        """Find player photo from squad.json with fallbacks."""
-        for key, player in self._squad_data.items():
-            if player.get("name", "") == player_name or player.get("psn", "") == player_name or key == player_name:
-                img = player.get("image", "")
-                if img and os.path.exists(img):
-                    return img
+            with open("squad.json", "r", encoding="utf-8") as f:
+                squad = json.load(f)
+            for key, player in squad.items():
                 name = player.get("name", key)
-                psn = player.get("psn", "")
-                for ext in [".png", ".jpg", ".jpeg"]:
-                    for base in [name, psn, key]:
-                        for prefix in [self.assets_dir, "assets", "", f"{self.assets_dir}/"]:
-                            path = f"{prefix}{base}{ext}"
-                            if os.path.exists(path):
-                                return path
-        return ""
-
-    def generate_card(self, player_name: str, nickname: str, overall: int,
-                     position: str, aura: str, stats: Dict[str, Any],
-                     output_path: str = "card.png") -> str:
-        """Generate full UHD card."""
-        config = AURA_CONFIG.get(aura, AURA_CONFIG["B-Tier"])
-        img = Image.new("RGB", (self.width, self.height), (10, 10, 15))
-        draw = ImageDraw.Draw(img)
-        self._draw_gradient_background(img, config["gradient"])
-        self._draw_aura_effect(img, config)
-        self._draw_frame(img, config)
-        self._draw_top_section(draw, img, overall, nickname, position, config)
-        photo_path = self._resolve_photo(player_name)
-        self._draw_player_photo(img, photo_path, config)
-        self._draw_stats_section(draw, img, stats, config)
-        img = self._apply_final_effects(img, config)
-        img.save(output_path, "PNG", quality=95)
-        return output_path
-
-    def _draw_gradient_background(self, img, colors):
-        draw = ImageDraw.Draw(img)
-        c1, c2, c3 = colors
-        for y in range(self.height):
-            ratio = y / self.height
-            if ratio < 0.5:
-                r = int(c1[0] + (c2[0] - c1[0]) * (ratio * 2))
-                g = int(c1[1] + (c2[1] - c1[1]) * (ratio * 2))
-                b = int(c1[2] + (c2[2] - c1[2]) * (ratio * 2))
-            else:
-                r = int(c2[0] + (c3[0] - c2[0]) * ((ratio - 0.5) * 2))
-                g = int(c2[1] + (c3[1] - c2[1]) * ((ratio - 0.5) * 2))
-                b = int(c2[2] + (c3[2] - c2[2]) * ((ratio - 0.5) * 2))
-            draw.line([(0, y), (self.width, y)], fill=(r, g, b))
-
-    def _draw_aura_effect(self, img, config):
-        glow = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
-        draw_glow = ImageDraw.Draw(glow)
-        center_x = self.width // 2
-        center_y = int(self.height * 0.45)
-        for i in range(8):
-            radius = 300 + i * 60
-            alpha = max(0, 40 - i * 5)
-            color = config["glow"] + (alpha,)
-            draw_glow.ellipse(
-                [center_x - radius, center_y - radius,
-                 center_x + radius, center_y + radius],
-                fill=color
-            )
-        if config["effect"] in ["anime_energy", "crown_aura"]:
-            for angle in range(0, 360, 15):
-                rad = math.radians(angle)
-                x1 = center_x + math.cos(rad) * 200
-                y1 = center_y + math.sin(rad) * 200
-                x2 = center_x + math.cos(rad) * 500
-                y2 = center_y + math.sin(rad) * 500
-                draw_glow.line([(x1, y1), (x2, y2)], fill=config["accent"] + (30,), width=3)
-        glow = glow.filter(ImageFilter.GaussianBlur(radius=40))
-        img.paste(glow, (0, 0), glow)
-
-    def _draw_frame(self, img, config):
-        draw = ImageDraw.Draw(img)
-        accent = config["accent"]
-        border_width = 8
-        for i in range(border_width):
-            alpha = int(255 * (1 - i / border_width))
-            color = accent + (alpha,)
-            draw.rectangle(
-                [i, i, self.width - 1 - i, self.height - 1 - i],
-                outline=color, width=1
-            )
-        margin = 60
-        draw.rectangle(
-            [margin, margin, self.width - margin, self.height - margin],
-            outline=accent, width=2
-        )
-        corner_size = 40
-        for x, y in [(margin, margin), (self.width - margin, margin),
-                     (margin, self.height - margin), (self.width - margin, self.height - margin)]:
-            draw.rectangle([x - corner_size//2, y - corner_size//2,
-                          x + corner_size//2, y + corner_size//2],
-                         outline=accent, width=3)
-
-    def _draw_top_section(self, draw, img, overall, nickname, position, config):
-        accent = config["accent"]
-        circle_x, circle_y = 140, 140
-        circle_radius = 90
-        glow = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
-        glow_draw = ImageDraw.Draw(glow)
-        glow_draw.ellipse(
-            [circle_x - circle_radius - 20, circle_y - circle_radius - 20,
-             circle_x + circle_radius + 20, circle_y + circle_radius + 20],
-            fill=config["glow"] + (100,)
-        )
-        glow = glow.filter(ImageFilter.GaussianBlur(radius=20))
-        img.paste(glow, (0, 0), glow)
-        draw.ellipse(
-            [circle_x - circle_radius, circle_y - circle_radius,
-             circle_x + circle_radius, circle_y + circle_radius],
-            fill=(20, 20, 25), outline=accent, width=6
-        )
-        font_big = self._get_font(100, "bold")
-        text = str(overall)
-        bbox = draw.textbbox((0, 0), text, font=font_big)
-        text_w = bbox[2] - bbox[0]
-        text_h = bbox[3] - bbox[1]
-        draw.text((circle_x - text_w//2, circle_y - text_h//2 - 10), text,
-                 fill=(255, 255, 255), font=font_big, stroke_width=3, stroke_fill=(0, 0, 0))
-        font_pos = self._get_font(36, "bold")
-        bbox = draw.textbbox((0, 0), position, font=font_pos)
-        text_w = bbox[2] - bbox[0]
-        draw.text((circle_x - text_w//2, circle_y + circle_radius + 20), position,
-                 fill=accent, font=font_pos, stroke_width=2, stroke_fill=(0, 0, 0))
-        font_name = self._get_font(72, "bold")
-        bbox = draw.textbbox((0, 0), nickname, font=font_name)
-        text_w = bbox[2] - bbox[0]
-        name_x = self.width // 2 + 50
-        name_y = 120
-        name_glow = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
-        ng_draw = ImageDraw.Draw(name_glow)
-        ng_draw.text((name_x, name_y), nickname, fill=config["glow"] + (120,), font=font_name)
-        name_glow = name_glow.filter(ImageFilter.GaussianBlur(radius=15))
-        img.paste(name_glow, (0, 0), name_glow)
-        draw.text((name_x, name_y), nickname, fill=(255, 255, 255), font=font_name,
-                 stroke_width=4, stroke_fill=(0, 0, 0))
-        badge_x = self.width - 140
-        badge_y = 140
-        badge_radius = 70
-        draw.ellipse(
-            [badge_x - badge_radius, badge_y - badge_radius,
-             badge_x + badge_radius, badge_y + badge_radius],
-            fill=config["gradient"][2], outline=accent, width=5
-        )
-        font_tier = self._get_font(60, "bold")
-        tier_text = config["text"]
-        bbox = draw.textbbox((0, 0), tier_text, font=font_tier)
-        text_w = bbox[2] - bbox[0]
-        text_h = bbox[3] - bbox[1]
-        draw.text((badge_x - text_w//2, badge_y - text_h//2), tier_text,
-                 fill=(255, 255, 255), font=font_tier, stroke_width=3, stroke_fill=(0, 0, 0))
-        font_aura = self._get_font(28, "bold")
-        aura_name = config["name"]
-        bbox = draw.textbbox((0, 0), aura_name, font=font_aura)
-        text_w = bbox[2] - bbox[0]
-        draw.text((badge_x - text_w//2, badge_y + badge_radius + 15), aura_name,
-                 fill=accent, font=font_aura, stroke_width=2, stroke_fill=(0, 0, 0))
-
-    def _draw_player_photo(self, img, photo_path, config):
-        if not photo_path or not os.path.exists(photo_path):
-            self._draw_silhouette(img, config)
-            return
-        try:
-            photo = Image.open(photo_path).convert("RGBA")
-            target_w = int(self.width * 0.55)
-            target_h = int(self.height * 0.50)
-            photo.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
-            mask = Image.new("L", photo.size, 0)
-            mask_draw = ImageDraw.Draw(mask)
-            mask_draw.rounded_rectangle([0, 0, photo.width, photo.height], radius=40, fill=255)
-            photo.putalpha(mask)
-            x = (self.width - photo.width) // 2
-            y = int(self.height * 0.32) - photo.height // 2
-            shadow = Image.new("RGBA", (photo.width + 40, photo.height + 40), (0, 0, 0, 0))
-            shadow_draw = ImageDraw.Draw(shadow)
-            shadow_draw.rounded_rectangle([20, 20, photo.width + 20, photo.height + 20],
-                               radius=40, fill=(0, 0, 0, 100))
-            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=20))
-            img.paste(shadow, (x - 20, y - 20), shadow)
-            img.paste(photo, (x, y), photo)
+                img_path = player.get("image", "")
+                if img_path and os.path.exists(img_path):
+                    self.player_images[name] = img_path
         except Exception as e:
-            print(f"Photo error: {e}")
-            self._draw_silhouette(img, config)
+            print(f"⚠️ Could not load squad images: {e}")
 
-    def _draw_silhouette(self, img, config):
-        draw = ImageDraw.Draw(img)
-        center_x = self.width // 2
-        center_y = int(self.height * 0.35)
-        draw.ellipse([center_x - 100, center_y - 120, center_x + 100, center_y + 80],
-                    fill=(40, 40, 50), outline=config["accent"], width=4)
-        draw.ellipse([center_x - 60, center_y - 180, center_x + 60, center_y - 60],
-                    fill=(50, 50, 60), outline=config["accent"], width=3)
-        font = self._get_font(40, "bold")
-        draw.text((center_x - 80, center_y + 100), "NO PHOTO", fill=(150, 150, 150), font=font)
-
-    def _draw_stats_section(self, draw, img, stats, config):
-        accent = config["accent"]
-        stats_y_start = int(self.height * 0.68)
-        stats_height = int(self.height * 0.30)
-        panel = Image.new("RGBA", (self.width, stats_height), (0, 0, 0, 0))
-        panel_draw = ImageDraw.Draw(panel)
-        panel_draw.rectangle([0, 0, self.width, stats_height],
-                            fill=(10, 10, 15, 180))
-        panel = panel.filter(ImageFilter.GaussianBlur(radius=5))
-        img.paste(panel, (0, stats_y_start), panel)
-        display_stats = [
-            ("GOALS", stats.get("goals", 0)),
-            ("ASSISTS", stats.get("assists", 0)),
-            ("RATING", stats.get("avg_rating", 0.0)),
-            ("WIN %", f"{stats.get('win_rate', 0)}%"),
-            ("MOTM", stats.get("motm", 0)),
-            ("TACKLES", stats.get("tackles", 0)),
-            ("INTER", stats.get("interceptions", 0)),
-            ("POS LOST", stats.get("possession_losses", 0)),
-            ("IMPACT", stats.get("impact_score", 0)),
-            ("FRAUD", stats.get("fraud_score", 0)),
+    def _get_font(self, size: int, bold: bool = False):
+        candidates = [
+            os.path.join(self.fonts_dir, "Cairo-Bold.ttf" if bold else "Cairo-Regular.ttf"),
+            os.path.join(self.fonts_dir, "NotoSansArabic-Bold.ttf" if bold else "NotoSansArabic-Regular.ttf"),
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         ]
-        cols = 5
-        rows = 2
-        cell_w = self.width // cols
-        cell_h = stats_height // rows
-        for idx, (label, value) in enumerate(display_stats):
-            if idx >= cols * rows:
-                break
-            col = idx % cols
-            row = idx // cols
-            x = col * cell_w + cell_w // 2
-            y = stats_y_start + row * cell_h + cell_h // 2 - 30
-            cell_margin = 15
-            draw.rounded_rectangle(
-                [x - cell_w//2 + cell_margin, y - 20,
-                 x + cell_w//2 - cell_margin, y + 80],
-                radius=15, fill=(20, 20, 30, 200), outline=accent, width=2
-            )
-            font_label = self._get_font(22, "bold")
-            bbox = draw.textbbox((0, 0), label, font=font_label)
-            text_w = bbox[2] - bbox[0]
-            draw.text((x - text_w//2, y - 10), label, fill=(180, 180, 180), font=font_label)
-            font_value = self._get_font(38, "bold")
-            val_str = str(value)
-            bbox = draw.textbbox((0, 0), val_str, font=font_value)
-            text_w = bbox[2] - bbox[0]
-            draw.text((x - text_w//2, y + 25), val_str, fill=(255, 255, 255),
-                     font=font_value, stroke_width=2, stroke_fill=(0, 0, 0))
+        for path in candidates:
+            if os.path.exists(path):
+                return ImageFont.truetype(path, size)
+        return ImageFont.load_default()
 
-    def _apply_final_effects(self, img, config):
-        vignette = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        v_draw = ImageDraw.Draw(vignette)
-        for i in range(min(self.width, self.height) // 2, 0, -50):
-            alpha = int(30 * (1 - i / (min(self.width, self.height) // 2)))
-            v_draw.rectangle([i, i, self.width - i, self.height - i],
-                           outline=(0, 0, 0, alpha), width=50)
-        img = Image.alpha_composite(img.convert("RGBA"), vignette).convert("RGB")
-        enhancer = ImageEnhance.Sharpness(img)
-        img = enhancer.enhance(1.3)
-        img = ImageEnhance.Color(img).enhance(1.2)
+    def _load_player_photo(self, name: str, target_size: Tuple[int, int] = (300, 300)) -> Optional[Image.Image]:
+        """Load player image from squad.json mapping."""
+        path = self.player_images.get(name)
+        if not path or not os.path.exists(path):
+            return None
+        try:
+            img = Image.open(path).convert("RGBA")
+            img = img.resize(target_size, Image.LANCZOS)
+            # Create circular mask
+            mask = Image.new("L", target_size, 0)
+            draw = ImageDraw.Draw(mask)
+            draw.ellipse([0, 0, target_size[0], target_size[1]], fill=255)
+            img.putalpha(mask)
+            return img
+        except Exception as e:
+            print(f"⚠️ Failed to load image for {name}: {e}")
+            return None
+
+    def _create_gradient_bg(self, size: Tuple[int, int], color1: Tuple, color2: Tuple) -> Image.Image:
+        img = Image.new('RGB', size)
+        draw = ImageDraw.Draw(img)
+        for y in range(size[1]):
+            r = int(color1[0] + (color2[0] - color1[0]) * y / size[1])
+            g = int(color1[1] + (color2[1] - color1[1]) * y / size[1])
+            b = int(color1[2] + (color2[2] - color1[2]) * y / size[1])
+            draw.line([(0, y), (size[0], y)], fill=(r, g, b))
         return img
 
-    def generate_to_bytes(self, player_name, nickname, overall, position, aura, stats):
-        path = self.generate_card(player_name, nickname, overall, position, aura, stats,
-                                   output_path="/tmp/card_temp.png")
-        with open(path, "rb") as f2:
-            buf = io.BytesIO(f2.read())
+    def _add_aura_effect(self, img: Image.Image, aura_color: Tuple[int, int, int], intensity: float = 1.0):
+        """Add glowing aura behind the image."""
+        w, h = img.size
+        aura = Image.new("RGBA", (w + 100, h + 100), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(aura)
+        # Multiple layers of glow
+        for i in range(5, 0, -1):
+            alpha = int(40 * intensity / i)
+            offset = i * 8
+            draw.ellipse(
+                [offset, offset, w + 100 - offset, h + 100 - offset],
+                fill=(*aura_color, alpha)
+            )
+        aura = aura.filter(ImageFilter.GaussianBlur(radius=15))
+        # Composite
+        base = Image.new("RGBA", (w + 100, h + 100), (0, 0, 0, 0))
+        base.paste(aura, (0, 0), aura)
+        base.paste(img, (50, 50), img)
+        return base
+
+    def _add_speed_lines(self, draw, size: Tuple[int, int], color: Tuple[int, int, int] = (255, 255, 255)):
+        """Add anime speed lines radiating from center."""
+        cx, cy = size[0] // 2, size[1] // 2
+        for angle in range(0, 360, 15):
+            import math
+            rad = math.radians(angle)
+            x2 = cx + int(math.cos(rad) * max(size))
+            y2 = cy + int(math.sin(rad) * max(size))
+            draw.line([(cx, cy), (x2, y2)], fill=(*color, 30), width=2)
+
+    def _add_manga_text(self, draw, text: str, x: int, y: int, font, text_color: Tuple, glow_color: Tuple):
+        """Add text with manga-style outline/glow."""
+        # Glow/outline
+        for dx in [-3, -2, -1, 1, 2, 3]:
+            for dy in [-3, -2, -1, 1, 2, 3]:
+                draw.text((x + dx, y + dy), text, fill=glow_color, font=font, anchor="mm")
+        draw.text((x, y), text, fill=text_color, font=font, anchor="mm")
+
+    def _add_badge(self, draw, x: int, y: int, text: str, color: Tuple, font):
+        """Add a ranking badge."""
+        padding = 15
+        bbox = draw.textbbox((0, 0), text, font=font)
+        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        draw.rounded_rectangle(
+            [x - w//2 - padding, y - h//2 - padding, x + w//2 + padding, y + h//2 + padding],
+            radius=10, fill=color, outline=self.WHITE, width=3
+        )
+        draw.text((x, y), text, fill=self.WHITE, font=font, anchor="mm")
+
+    def _get_aura_color(self, aura_type: str) -> Tuple[int, int, int]:
+        return {
+            "mvp": self.AURA_MVP,
+            "fraud": self.AURA_FRAUD,
+            "carry": self.AURA_CARRY,
+            "ghost": self.AURA_GHOST,
+            "beast": self.AURA_BEAST,
+            "playmaker": self.AURA_PLAYMAKER,
+            "sniper": self.AURA_SNIPER,
+        }.get(aura_type, self.BLUE)
+
+    def generate_anime_card(self, player, position: str = "CM", aura_type: str = "mvp", title: str = "") -> io.BytesIO:
+        """Premium anime-style player card with aura and photo."""
+        W, H = 800, 1000
+        aura_color = self._get_aura_color(aura_type)
+        
+        # Background
+        img = self._create_gradient_bg((W, H), (15, 15, 25), (5, 5, 10))
+        draw = ImageDraw.Draw(img)
+        
+        # Speed lines
+        self._add_speed_lines(draw, (W, H), aura_color)
+        
+        # Title
+        font_title = self._get_font(48, bold=True)
+        font_name = self._get_font(64, bold=True)
+        font_stats = self._get_font(28)
+        font_small = self._get_font(22)
+        
+        # Top title
+        if title:
+            self._add_manga_text(draw, title, W//2, 60, font_title, self.WHITE, aura_color)
+        
+        # Player name
+        self._add_manga_text(draw, player.name.upper(), W//2, 140, font_name, self.WHITE, aura_color)
+        draw.text((W//2, 210), f"#{position.upper()} • RACHAD L3ERGONI", fill=self.SILVER, font=font_small, anchor="mm")
+        
+        # Player photo with aura
+        photo = self._load_player_photo(player.name, (280, 280))
+        if photo:
+            photo_with_aura = self._add_aura_effect(photo, aura_color, 1.2)
+            img.paste(photo_with_aura, (W//2 - 190, 260), photo_with_aura)
+        else:
+            # Placeholder circle
+            draw.ellipse([W//2-140, 280, W//2+140, 560], fill=(40, 40, 50), outline=aura_color, width=5)
+            draw.text((W//2, 420), player.name[:2].upper(), fill=self.SILVER, font=font_name, anchor="mm")
+        
+        # Badge
+        badge_text = aura_type.upper()
+        self._add_badge(draw, W//2, 580, badge_text, aura_color, font_small)
+        
+        # Stats section
+        y_start = 640
+        stats = [
+            ("⚡ IMPACT", round(player.impact_score, 1), 100),
+            ("🎯 RATING", round(player.rating_pg, 1), 10),
+            ("⚽ GOALS", player.goals, 50),
+            ("🅰️ ASSISTS", player.assists, 50),
+            ("🛡️ TACKLES", player.tackles, 50),
+            ("📊 PASS %", round(player.pass_accuracy, 1), 100),
+            ("❌ POSS LOST", player.possession_losses, 50),
+        ]
+        
+        for i, (label, val, max_v) in enumerate(stats):
+            y = y_start + i * 45
+            # Bar background
+            draw.rounded_rectangle([100, y, 700, y+35], radius=5, fill=(30, 30, 40))
+            # Bar fill
+            pct = min(val / max_v, 1.0) if max_v > 0 else 0
+            fill_w = int(600 * pct)
+            if fill_w > 0:
+                bar_color = self.GREEN if pct > 0.7 else self.ORANGE if pct > 0.4 else self.RED
+                draw.rounded_rectangle([100, y, 100+fill_w, y+35], radius=5, fill=bar_color)
+            # Text
+            draw.text((110, y+5), f"{label}: {val}", fill=self.WHITE, font=font_small)
+        
+        # Footer
+        draw.text((W//2, H-40), "RACHAD L3ERGONI • ANIME EDITION", fill=(80, 80, 90), font=font_small, anchor="mm")
+        
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
         buf.seek(0)
         return buf
 
-    def generate_player_card(self, player, stats, aura, output_path="/tmp/card.png"):
-        """Convenience: player is a PlayerStats-like object."""
-        return self.generate_card(
-            player_name=player.name,
-            nickname=getattr(player, "nickname", player.name),
-            overall=getattr(player, "level", 75),
-            position=getattr(player, "position", "CM"),
-            aura=aura,
-            stats=stats,
-            output_path=output_path
-        )
+    def generate_mvp_card(self, player, position: str = "CM") -> io.BytesIO:
+        return self.generate_anime_card(player, position, "mvp", "🔥 MAN OF THE MATCH")
+
+    def generate_fraud_card(self, player, position: str = "CM") -> io.BytesIO:
+        return self.generate_anime_card(player, position, "fraud", "🤡 FRAUD DETECTED")
+
+    def generate_carry_card(self, player, position: str = "CM") -> io.BytesIO:
+        return self.generate_anime_card(player, position, "carry", "💪 CARRY OF THE DAY")
+
+    def generate_ghost_card(self, player, position: str = "CM") -> io.BytesIO:
+        return self.generate_anime_card(player, position, "ghost", "👻 GHOST PLAYER")
+
+    def generate_beast_card(self, player, position: str = "CM") -> io.BytesIO:
+        """Blue Lock style beast mode card."""
+        return self.generate_anime_card(player, position, "beast", "⚡ BEAST MODE")
+
+    def generate_playmaker_card(self, player, position: str = "CM") -> io.BytesIO:
+        return self.generate_anime_card(player, position, "playmaker", "🎨 PLAYMAKER")
+
+    def generate_sniper_card(self, player, position: str = "CM") -> io.BytesIO:
+        return self.generate_anime_card(player, position, "sniper", "🎯 SNIPER")
+
+    def generate_court_case(self, player, position: str, evidence: List[str]) -> io.BytesIO:
+        """Trial/court case card."""
+        W, H = 800, 900
+        img = self._create_gradient_bg((W, H), (25, 10, 10), (15, 5, 5))
+        draw = ImageDraw.Draw(img)
+        
+        font_title = self._get_font(42, bold=True)
+        font_name = self._get_font(52, bold=True)
+        font_evidence = self._get_font(24)
+        font_verdict = self._get_font(36, bold=True)
+        
+        # Header
+        draw.text((W//2, 60), "⚖️ COURT OF FOOTBALL", fill=self.GOLD, font=font_title, anchor="mm")
+        draw.text((W//2, 120), f"CASE AGAINST {player.name.upper()}", fill=self.RED, font=font_name, anchor="mm")
+        
+        # Photo
+        photo = self._load_player_photo(player.name, (250, 250))
+        if photo:
+            img.paste(photo, (W//2-125, 170), photo)
+        else:
+            draw.ellipse([W//2-125, 170, W//2+125, 420], fill=(50, 30, 30), outline=self.RED, width=4)
+        
+        # Evidence
+        y = 460
+        draw.text((W//2, y), "📋 EVIDENCE:", fill=self.SILVER, font=font_evidence, anchor="mm")
+        y += 50
+        for ev in evidence[:6]:
+            draw.text((100, y), f"• {ev}", fill=self.WHITE, font=font_evidence)
+            y += 40
+        
+        # Verdict box
+        y += 20
+        draw.rounded_rectangle([80, y, W-80, y+120], radius=15, fill=(40, 10, 10), outline=self.RED, width=3)
+        draw.text((W//2, y+35), "VERDICT:", fill=self.RED, font=font_evidence, anchor="mm")
+        draw.text((W//2, y+80), "GUILTY • FRAUD CONFIRMED", fill=self.WHITE, font=font_verdict, anchor="mm")
+        
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
+
+    def generate_daily_card(self, player, stat_name: str, stat_value, roast_text: str, is_bad: bool = True) -> io.BytesIO:
+        """Stat of the Day / Monster of the Day card."""
+        W, H = 800, 900
+        color1 = (35, 10, 10) if is_bad else (10, 25, 10)
+        color2 = (15, 5, 5) if is_bad else (5, 15, 5)
+        aura = self.AURA_FRAUD if is_bad else self.AURA_BEAST
+        
+        img = self._create_gradient_bg((W, H), color1, color2)
+        draw = ImageDraw.Draw(img)
+        
+        font_title = self._get_font(44, bold=True)
+        font_stat = self._get_font(72, bold=True)
+        font_roast = self._get_font(26)
+        font_small = self._get_font(22)
+        
+        title = "📉 STAT OF THE DAY" if is_bad else "🔥 MONSTER OF THE DAY"
+        draw.text((W//2, 60), title, fill=self.GOLD if not is_bad else self.RED, font=font_title, anchor="mm")
+        
+        # Player
+        photo = self._load_player_photo(player.name, (260, 260))
+        if photo:
+            photo_aura = self._add_aura_effect(photo, aura, 1.0)
+            img.paste(photo_aura, (W//2-180, 120), photo_aura)
+        
+        draw.text((W//2, 420), player.name.upper(), fill=self.WHITE, font=self._get_font(48, bold=True), anchor="mm")
+        
+        # Big stat
+        draw.text((W//2, 520), f"{stat_value}", fill=aura, font=font_stat, anchor="mm")
+        draw.text((W//2, 600), stat_name.upper(), fill=self.SILVER, font=font_small, anchor="mm")
+        
+        # Roast text
+        y = 660
+        words = roast_text.split()
+        lines = []
+        line = []
+        for word in words:
+            line.append(word)
+            if len(" ".join(line)) > 45:
+                lines.append(" ".join(line[:-1]))
+                line = [line[-1]]
+        if line:
+            lines.append(" ".join(line))
+        
+        for line in lines[:5]:
+            draw.text((W//2, y), line, fill=self.WHITE, font=font_roast, anchor="mm")
+            y += 38
+        
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
+
+    def generate_leaderboard(self, players, metric: str = "impact_score") -> io.BytesIO:
+        """Anime-style leaderboard."""
+        count = min(len(players), 10)
+        W, H = 900, 650 + count * 70
+        img = self._create_gradient_bg((W, H), (12, 12, 22), (8, 8, 15))
+        draw = ImageDraw.Draw(img)
+        
+        font_large = self._get_font(40, bold=True)
+        font_medium = self._get_font(26, bold=True)
+        font_small = self._get_font(22)
+        
+        draw.text((W//2, 40), f"🏆 RANKINGS — {metric.upper().replace('_', ' ')}", 
+                 fill=self.GOLD, font=font_large, anchor="mm")
+        
+        headers = ["RANK", "PLAYER", "GAMES", "GOALS", "ASSISTS", "RATING", "VALUE"]
+        x_positions = [60, 140, 320, 420, 520, 620, 740]
+        
+        for i, h in enumerate(headers):
+            draw.text((x_positions[i], 110), h, fill=self.SILVER, font=font_medium)
+        
+        sorted_players = sorted(players, key=lambda p: getattr(p, metric, 0), reverse=True)
+        
+        for idx, p in enumerate(sorted_players[:10]):
+            y = 170 + idx * 60
+            color = self.GOLD if idx == 0 else self.SILVER if idx == 1 else self.BRONZE if idx == 2 else self.WHITE
+            
+            # Rank badge
+            rank_text = ["🥇", "🥈", "🥉"][idx] if idx < 3 else f"{idx+1}"
+            draw.text((x_positions[0], y), rank_text, fill=color, font=font_medium)
+            draw.text((x_positions[1], y), p.name[:14], fill=self.WHITE, font=font_small)
+            draw.text((x_positions[2], y), str(p.games), fill=self.SILVER, font=font_small)
+            draw.text((x_positions[3], y), str(p.goals), fill=self.SILVER, font=font_small)
+            draw.text((x_positions[4], y), str(p.assists), fill=self.SILVER, font=font_small)
+            draw.text((x_positions[5], y), str(round(p.rating_pg, 1)), fill=self.SILVER, font=font_small)
+            draw.text((x_positions[6], y), str(round(getattr(p, metric, 0), 1)), fill=color, font=font_small)
+            
+            draw.line([(40, y+45), (W-40, y+45)], fill=(35, 35, 45), width=1)
+        
+        draw.text((W//2, H-30), "RACHAD L3ERGONI • ANIME EDITION", fill=(70, 70, 80), font=font_small, anchor="mm")
+        
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
+
+    def generate_match_report(self, club, motm) -> io.BytesIO:
+        W, H = 900, 750
+        img = self._create_gradient_bg((W, H), (18, 22, 32), (8, 12, 18))
+        draw = ImageDraw.Draw(img)
+        
+        font_large = self._get_font(44, bold=True)
+        font_medium = self._get_font(30, bold=True)
+        font_small = self._get_font(22)
+        
+        draw.text((W//2, 50), club.club_name, fill=self.WHITE, font=font_large, anchor="mm")
+        draw.text((W//2, 110), f"Division {club.division} • Skill Rating {club.skill_rating}", 
+                 fill=self.SILVER, font=font_small, anchor="mm")
+        
+        draw.text((W//2, 180), f"{club.wins}W — {club.losses}L — {club.draws}D", 
+                 fill=self.GOLD, font=font_medium, anchor="mm")
+        
+        total = club.wins + club.losses + club.draws
+        if total > 0:
+            win_pct = club.wins / total
+            draw.rectangle([150, 240, 750, 280], fill=(35, 35, 45))
+            draw.rectangle([150, 240, 150 + int(600 * win_pct), 280], fill=self.GREEN)
+            draw.text((W//2, 260), f"Win Rate: {round(win_pct*100, 1)}%", fill=self.WHITE, font=font_small, anchor="mm")
+        
+        # MVP section
+        draw.text((W//2, 330), "👑 SEASON MVP", fill=self.GOLD, font=font_medium, anchor="mm")
+        photo = self._load_player_photo(motm.name, (200, 200))
+        if photo:
+            img.paste(photo, (W//2-100, 370), photo)
+        
+        draw.text((W//2, 600), motm.name, fill=self.WHITE, font=font_large, anchor="mm")
+        draw.text((W//2, 660), f"Impact: {round(motm.impact_score, 1)} • Goals: {motm.goals} • Assists: {motm.assists}", 
+                 fill=self.SILVER, font=font_small, anchor="mm")
+        
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
+
+    def generate_roast_card(self, player, roast_text: str, position: str = "CM") -> io.BytesIO:
+        W, H = 800, 700
+        img = self._create_gradient_bg((W, H), (30, 10, 10), (15, 5, 5))
+        draw = ImageDraw.Draw(img)
+        
+        font_large = self._get_font(40, bold=True)
+        font_medium = self._get_font(26)
+        font_roast = self._get_font(24)
+        
+        draw.text((W//2, 50), "🔥 ROAST REPORT", fill=self.RED, font=font_large, anchor="mm")
+        draw.text((W//2, 110), f"{player.name} • {position.upper()}", fill=self.WHITE, font=font_medium, anchor="mm")
+        
+        photo = self._load_player_photo(player.name, (220, 220))
+        if photo:
+            img.paste(photo, (W//2-110, 150), photo)
+        
+        # Stats
+        stats = [
+            f"Rating: {round(player.rating_pg, 1)}",
+            f"Goals: {player.goals}",
+            f"Assists: {player.assists}",
+            f"Pass: {round(player.pass_accuracy, 1)}%",
+            f"Poss Lost: {player.possession_losses}",
+            f"Impact: {round(player.impact_score, 1)}",
+            f"Throwing: {round(player.throwing_score, 1)}",
+        ]
+        y = 400
+        for s in stats:
+            draw.text((W//2, y), s, fill=self.SILVER, font=font_medium, anchor="mm")
+            y += 32
+        
+        # Roast box
+        y += 10
+        draw.rounded_rectangle([60, y, W-60, H-60], radius=15, fill=(25, 8, 8), outline=self.RED, width=2)
+        
+        words = roast_text.split()
+        lines = []
+        line = []
+        for word in words:
+            line.append(word)
+            if len(" ".join(line)) > 50:
+                lines.append(" ".join(line[:-1]))
+                line = [line[-1]]
+        if line:
+            lines.append(" ".join(line))
+        
+        y += 30
+        for line in lines[:6]:
+            draw.text((W//2, y), line, fill=self.WHITE, font=font_roast, anchor="mm")
+            y += 32
+        
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
