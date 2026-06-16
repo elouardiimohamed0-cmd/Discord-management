@@ -263,22 +263,15 @@ class DarijaEngine:
         """Worst performances ever."""
         valid = [p for p in players if p.games > 0 and p.rating_pg > 0]
         if not valid:
-            return "🏛️ **Hall of Shame**
-
-ما كاين حتى لاعبين باش نديرو Hall of Shame."
+            return "🏛️ **Hall of Shame**\n\nما كاين حتى لاعبين باش نديرو Hall of Shame."
 
         sorted_players = sorted(valid, key=lambda p: p.rating_pg)
         worst = sorted_players[:3]
-        text = "🏛️ **Hall of Shame**
-
-"
+        text = "🏛️ **Hall of Shame**\n\n"
         for i, p in enumerate(worst, 1):
             rp = self._pick(ROAST_PHRASES, "roast")
-            text += f"{i}. {rp.format(name=p.name)}
-"
-            text += f"   Rating: {round(p.rating_pg, 1)} | Possession lost: {p.possession_losses} | Games: {p.games}
-
-"
+            text += f"{i}. {rp.format(name=p.name)}\n"
+            text += f"   Rating: {round(p.rating_pg, 1)} | Possession lost: {p.possession_losses} | Games: {p.games}\n\n"
         return text
 
     # ───────────────────────── match report ─────────────────────────
