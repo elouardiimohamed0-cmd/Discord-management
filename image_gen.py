@@ -11,6 +11,45 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 from typing import List, Optional, Dict
 from models import PlayerStats, ClubStats
 
+
+# ─── PLAYER IMAGE LOADER ───
+
+def load_player_image(player_name: str, assets_dir: str, size: tuple = (256, 256)) -> Image.Image:
+    """
+    Load player image from assets folder.
+    Tries: assets/{nickname}.png -> .jpg -> .jpeg -> .webp
+    Falls back to purple circle with initial.
+    """
+    name = player_name.strip()
+    # Try exact match
+    for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+        path = os.path.join(assets_dir, f"{name}{ext}")
+        if os.path.exists(path):
+            img = Image.open(path).convert("RGBA")
+            img = img.resize(size, Image.LANCZOS)
+            return img
+
+    # Try lowercase
+    for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+        path = os.path.join(assets_dir, f"{name.lower()}{ext}")
+        if os.path.exists(path):
+            img = Image.open(path).convert("RGBA")
+            img = img.resize(size, Image.LANCZOS)
+            return img
+
+    # Try no spaces
+    clean_name = name.replace(" ", "").replace("_", "")
+    for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+        path = os.path.join(assets_dir, f"{clean_name}{ext}")
+        if os.path.exists(path):
+            img = Image.open(path).convert("RGBA")
+            img = img.resize(size, Image.LANCZOS)
+            return img
+
+    # Fallback: dark circle with initial
+    fallback = Image.new("RGBA", size, (30, 30, 30, 255))
+    return fallback
+
 # ─── CONSTANTS ───
 CARD_W, CARD_H = 2160, 3840
 MARGIN = 120
