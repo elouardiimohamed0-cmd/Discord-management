@@ -16,7 +16,7 @@ class DailyContent:
     type: str  # "roast" or "mvp"
     player_ea_name: str
     stat_name: str
-    stat_value
+    stat_value: float
     message: str
     card_path: Optional[str] = None
 
