@@ -261,13 +261,24 @@ class DarijaEngine:
 
     def hall_of_shame(self, players: List[PlayerStats]) -> str:
         """Worst performances ever."""
-        sorted_players = sorted(players, key=lambda p: p.rating_pg)
+        valid = [p for p in players if p.games > 0 and p.rating_pg > 0]
+        if not valid:
+            return "🏛️ **Hall of Shame**
+
+ما كاين حتى لاعبين باش نديرو Hall of Shame."
+
+        sorted_players = sorted(valid, key=lambda p: p.rating_pg)
         worst = sorted_players[:3]
-        text = "**🏛️ Hall of Shame**\n\n"
+        text = "🏛️ **Hall of Shame**
+
+"
         for i, p in enumerate(worst, 1):
             rp = self._pick(ROAST_PHRASES, "roast")
-            text += f"{i}. {rp.format(name=p.name)}\n"
-            text += f"   Rating: {round(p.rating_pg, 1)} | Possession lost: {p.possession_losses}\n\n"
+            text += f"{i}. {rp.format(name=p.name)}
+"
+            text += f"   Rating: {round(p.rating_pg, 1)} | Possession lost: {p.possession_losses} | Games: {p.games}
+
+"
         return text
 
     # ───────────────────────── match report ─────────────────────────
