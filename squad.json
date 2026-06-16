@@ -8,7 +8,7 @@
     "nationality": "MA",
     "style": "Crasher",
     "level": 95,
-    "image": "assets/DICTATOR.jpeg",
+    "image": "assets/DICTATOR.jpg",
     "stats_on_card": {
       "COM": 93,
       "VIS": 90,
@@ -27,7 +27,7 @@
     "nationality": "MA",
     "style": "Invader",
     "level": 95,
-    "image": "assets/SHARK.jpeg",
+    "image": "assets/SHARK.jpg",
     "stats_on_card": {
       "ACC": 95,
       "BAL": 91,
@@ -46,7 +46,7 @@
     "nationality": "FR",
     "style": "Magician",
     "level": 75,
-    "image": "assets/MOUL_L7ANOT.jpeg",
+    "image": "assets/MOUL_L7ANOT.jpg",
     "stats_on_card": {
       "ACC": 89,
       "BAL": 84,
@@ -65,7 +65,7 @@
     "nationality": "ZA",
     "style": "Athlete",
     "level": 45,
-    "image": "assets/9AHBA_SOUTH_AFRICA.jpeg",
+    "image": "assets/9AHBA_SOUTH_AFRICA.jpg",
     "stats_on_card": {
       "SPD": 86,
       "STA": 82,
@@ -84,7 +84,7 @@
     "nationality": "US",
     "style": "Target",
     "level": 87,
-    "image": "assets/KIRA.jpeg",
+    "image": "assets/KIRA.jpg",
     "stats_on_card": {
       "JMP": 90,
       "STR": 89,
@@ -103,7 +103,7 @@
     "nationality": "MA",
     "style": "Finisher",
     "level": 78,
-    "image": "assets/LE7YA.jpeg",
+    "image": "assets/LE7YA.jpg",
     "stats_on_card": {
       "REA": 81,
       "COM": 81,
@@ -122,7 +122,7 @@
     "nationality": "MA",
     "style": "Maestro",
     "level": 45,
-    "image": "assets/MARRAKCHI.jpeg",
+    "image": "assets/MARRAKCHI.jpg",
     "stats_on_card": {
       "COM": 75,
       "VIS": 80,
@@ -141,7 +141,7 @@
     "nationality": "EN",
     "style": "Thief",
     "level": 78,
-    "image": "assets/BRAVE.jpeg",
+    "image": "assets/BRAVE.jpg",
     "stats_on_card": {
       "STR": 84,
       "INT": 90,
@@ -160,7 +160,7 @@
     "nationality": "MA",
     "style": "Finisher",
     "level": 95,
-    "image": "assets/MODAMIR.jpeg",
+    "image": "assets/MODAMIR.jpg",
     "stats_on_card": {
       "REA": 94,
       "COM": 90,
@@ -179,7 +179,7 @@
     "nationality": "FR",
     "style": "Creator+",
     "level": 95,
-    "image": "assets/SHAWARMISTA.jpeg",
+    "image": "assets/SHAWARMISTA.jpg",
     "stats_on_card": {
       "VIS": 95,
       "SPA": 75,
