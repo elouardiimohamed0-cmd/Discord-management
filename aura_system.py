@@ -1,100 +1,45 @@
-"""aura_system.py — player aura tier calculation."""
-from enum import Enum
+"""
+phase2_aura_system.py
+Player Aura Tier calculation based on real stats.
+"""
 from typing import Dict, Any
 
-
-class AuraTier(Enum):
-    S_TIER = "S-Tier"
-    A_TIER = "A-Tier"
-    B_TIER = "B-Tier"
-    CARRY = "Carry"
-    FRAUD = "Fraud"
-    GHOST = "Ghost"
-
-
 class AuraSystem:
-    """Calculates player aura, overall, and fraud scores."""
+    """Determine player aura tier based on performance metrics."""
 
-    def calculate_overall(self, stats: Dict[str, Any]) -> float:
-        """Calculate overall rating from stats."""
-        games = max(stats.get("games", 1), 1)
-        rating = stats.get("rating", 7.0)
-        goals = stats.get("goals", 0)
-        assists = stats.get("assists", 0)
-        impact = stats.get("impact", 5.0)
+    TIERS = ["S-Tier", "A-Tier", "B-Tier", "Carry", "Fraud", "Ghost"]
+
+    DESCRIPTIONS = {
+        "S-Tier": "👾 MONSTER - Unstoppable force",
+        "A-Tier": "🥇 ELITE - Top tier performer",
+        "B-Tier": "🍀 SOLID - Reliable but not spectacular",
+        "Carry": "🎒 CARRY - Carries the team on their back",
+        "Fraud": "🤡 FRAUD - High rating, zero contribution",
+        "Ghost": "👻 GHOST - Invisible on the pitch",
+    }
+
+    @classmethod
+    def calculate_aura(cls, stats: Dict[str, Any]) -> str:
+        """Calculate aura based on performance metrics."""
+        matches = stats.get("matches", 0) or stats.get("games", 0)
+        if matches == 0:
+            return "Ghost"
+        impact = stats.get("impact_score", 0)
+        fraud = stats.get("fraud_score", stats.get("throwing_score", 0) * 10)
         win_rate = stats.get("win_rate", 0)
-        overall = (
-            rating * 8 +
-            (goals / games) * 15 +
-            (assists / games) * 10 +
-            impact * 3 +
-            win_rate * 0.2
-        )
-        return min(99, max(60, round(overall, 1)))
+        avg_rating = stats.get("avg_rating", stats.get("rating", 0))
+        if matches < 3 or stats.get("minutes", 999) < 60:
+            return "Ghost"
+        if fraud > 60 and avg_rating > 7.0:
+            return "Fraud"
+        if impact > 8 and win_rate > 70 and avg_rating > 8.0:
+            return "S-Tier"
+        if impact > 6 and win_rate > 65:
+            return "Carry"
+        if impact > 5 and win_rate > 55 and avg_rating > 7.0:
+            return "A-Tier"
+        return "B-Tier"
 
-    def determine_tier(self, stats: Dict[str, Any]) -> AuraTier:
-        """Determine aura tier from stats."""
-        games = stats.get("games", 0)
-        if games == 0:
-            return AuraTier.GHOST
-        if games < 3:
-            return AuraTier.GHOST
-
-        fraud = self.calculate_fraud_score(stats)
-        if fraud > 60:
-            return AuraTier.FRAUD
-
-        overall = self.calculate_overall(stats)
-        impact = stats.get("impact", 5.0)
-        win_rate = stats.get("win_rate", 0)
-
-        if overall >= 90 and impact >= 8 and win_rate >= 70:
-            return AuraTier.S_TIER
-        if overall >= 85 and impact >= 7 and win_rate >= 60:
-            return AuraTier.A_TIER
-        if impact >= 7 and win_rate >= 65:
-            return AuraTier.CARRY
-        if overall >= 75:
-            return AuraTier.A_TIER
-        return AuraTier.B_TIER
-
-    def calculate_fraud_score(self, stats: Dict[str, Any]) -> float:
-        """Calculate fraud score: high rating but low contribution."""
-        games = max(stats.get("games", 1), 1)
-        rating = stats.get("rating", 7.0)
-        goals = stats.get("goals", 0)
-        assists = stats.get("assists", 0)
-        impact = stats.get("impact", 5.0)
-        possession_lost = stats.get("possession_lost", 0)
-
-        expected_goals = (rating - 5) * games * 0.3
-        expected_assists = (rating - 5) * games * 0.2
-        expected_impact = (rating - 5) * 1.5
-
-        goal_deficit = max(0, expected_goals - goals)
-        assist_deficit = max(0, expected_assists - assists)
-        impact_deficit = max(0, expected_impact - impact)
-
-        fraud = (
-            goal_deficit * 3 +
-            assist_deficit * 2 +
-            impact_deficit * 5 +
-            possession_lost * 0.5
-        ) / max(games, 1)
-
-        return min(100, round(fraud, 1))
-
-    def get_tier_color(self, tier: AuraTier) -> int:
-        colors = {
-            AuraTier.S_TIER: 0x9b59b6,
-            AuraTier.A_TIER: 0xf1c40f,
-            AuraTier.B_TIER: 0x2ecc71,
-            AuraTier.CARRY: 0x3498db,
-            AuraTier.FRAUD: 0xe74c3c,
-            AuraTier.GHOST: 0x95a5a6,
-        }
-        return colors.get(tier, 0x95a5a6)
-
-
-def get_aura_system() -> AuraSystem:
-    return AuraSystem()
+    @classmethod
+    def get_description(cls, aura: str) -> str:
+        return cls.DESCRIPTIONS.get(aura, "Unknown")
