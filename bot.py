@@ -864,7 +864,7 @@ async def audit_cmd(ctx):
         if data["errors"]:
             lines.append(f"  Recent errors: {', '.join(data['errors'][-3:])}")
 
-await ctx.send("\n".join(lines))
+    await ctx.send("\n".join(lines))
 
 # ============== MAIN ==============
 
