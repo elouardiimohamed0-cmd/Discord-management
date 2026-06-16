@@ -1,4 +1,4 @@
-"""Configuration module - loads from environment variables."""
+"""Configuration - compatible with existing Config class."""
 import os
 from pathlib import Path
 
@@ -33,8 +33,6 @@ PORT = int(os.getenv("PORT", "8000"))
 # Card generation
 CARD_WIDTH = 1440
 CARD_HEIGHT = 2160
-MIN_CARD_WIDTH = 1440
-MIN_CARD_HEIGHT = 2160
 
 # Aura thresholds
 AURA_S_TIER_MIN = 90
@@ -46,13 +44,13 @@ AURA_GHOST_GAMES_THRESHOLD = 3
 # Daily content
 STAT_OF_DAY_ROAST_PROB = 0.80
 STAT_OF_DAY_MVP_PROB = 0.20
-DAILY_POST_HOUR = 20  # 8 PM
+DAILY_POST_HOUR = 20
 DAILY_POST_MINUTE = 0
 
-# Fonts (system fallbacks)
+# Fonts
 FONT_PRIMARY = "Arial Bold"
 FONT_SECONDARY = "Arial"
-FONT_ARABIC = "Arial"  # Will use system Arabic fonts
+FONT_ARABIC = "Arial"
 
 # Darija dataset reference
 DARIJA_DATASET_URL = "https://github.com/darija-open-dataset/dataset"
