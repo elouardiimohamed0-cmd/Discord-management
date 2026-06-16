@@ -1,15 +1,10 @@
-"""
-phase2_darija_engine.py
-99% Roast Mode. Authentic Casablanca street football banter.
-NO formal language. NO ChatGPT tone. NO corporate speak.
-"""
+"""darija_engine.py — 99% Roast Mode. Authentic Casablanca street football banter."""
 import random
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
+
 
 class Phase2DarijaEngine:
-    """Dedicated Darija language layer.
-    Sources: Casablanca street football, derb slang, football banter.
-    """
+    """Dedicated Darija language layer."""
 
     TEMPLATES = {
         "low_rating": [
@@ -109,9 +104,7 @@ class Phase2DarijaEngine:
     }
 
     @classmethod
-    def generate_roast(cls, player_name: str, stats: Dict[str, Any],
-                       intensity: float = 0.99) -> str:
-        """Generate a full Darija roast message."""
+    def generate_roast(cls, player_name, stats, intensity=0.99):
         lines = []
         opening = random.choice(cls.TEMPLATES["opening"]).format(name=player_name)
         lines.append(opening)
@@ -139,76 +132,67 @@ class Phase2DarijaEngine:
             lines.append("🔥 " + r)
         lines.append("")
         lines.append(random.choice(cls.TEMPLATES["closing"]))
-        return "
-".join(lines)
+        return "\n".join(lines)
 
     @classmethod
-    def generate_mvp_praise(cls, player_name: str, stats: Dict[str, Any]) -> str:
-        """Generate MVP praise in Darija."""
+    def generate_mvp_praise(cls, player_name, stats):
         lines = [
-            f"👑 {player_name} - الملك ديال الليلة!",
+            "👑 " + player_name + " - الملك ديال الليلة!",
             "",
-            f"Impact Score: {stats.get('impact_score', 0)} - كتسنا منك الغدارة و جبت الغدارة!",
-            f"Goals: {stats.get('goals', 0)} | Assists: {stats.get('assists', 0)} | MOTM: {stats.get('motm', 0)}",
+            "Impact Score: " + str(stats.get("impact_score", 0)) + " - كتسنا منك الغدارة و جبت الغدارة!",
+            "Goals: " + str(stats.get("goals", 0)) + " | Assists: " + str(stats.get("assists", 0)) + " | MOTM: " + str(stats.get("motm", 0)),
             "",
         ]
         tpl = random.choice(cls.TEMPLATES["mvp"])
         lines.append(tpl.format(name=player_name, value=stats.get("impact_score", 0)))
         lines.append("")
         lines.append("S-Tier. Monster. King. 🏆")
-        return "
-".join(lines)
+        return "\n".join(lines)
 
     @classmethod
-    def generate_carry_message(cls, player_name: str, stats: Dict[str, Any]) -> str:
+    def generate_carry_message(cls, player_name, stats):
         lines = [
-            f"🎒 {player_name} - CARRY CONFIRMED",
+            "🎒 " + player_name + " - CARRY CONFIRMED",
             "",
-            f"Win Rate: {stats.get('win_rate', 0)}% | Impact: {stats.get('impact_score', 0)}",
+            "Win Rate: " + str(stats.get("win_rate", 0)) + "% | Impact: " + str(stats.get("impact_score", 0)),
             "",
         ]
         tpl = random.choice(cls.TEMPLATES["carry"])
         lines.append(tpl.format(name=player_name, value=stats.get("impact_score", 0)))
         lines.append("")
         lines.append("بلاك هاد الفريق كيسقط.")
-        return "
-".join(lines)
+        return "\n".join(lines)
 
     @classmethod
-    def generate_ghost_message(cls, player_name: str) -> str:
+    def generate_ghost_message(cls, player_name):
         tpl = random.choice(cls.TEMPLATES["ghost"])
-        return f"👻 GHOST ALERT
-
-{tpl.format(name=player_name)}
-
-ما بانش. ما سمعناش. ما وجدناش."
+        parts = ["👻 GHOST ALERT", "", tpl.format(name=player_name), "", "ما بانش. ما سمعناش. ما وجدناش."]
+        return "\n".join(parts)
 
     @classmethod
-    def generate_fraud_message(cls, player_name: str, stats: Dict[str, Any]) -> str:
+    def generate_fraud_message(cls, player_name, stats):
         lines = [
-            f"🤡 FRAUD ALERT: {player_name}",
+            "🤡 FRAUD ALERT: " + player_name,
             "",
-            f"Fraud Score: {stats.get('fraud_score', stats.get('throwing_score', 0))}/100",
-            f"Rating: {stats.get('avg_rating', 0)} | Goals: {stats.get('goals', 0)} | Impact: {stats.get('impact_score', 0)}",
+            "Fraud Score: " + str(stats.get("fraud_score", stats.get("throwing_score", 0))) + "/100",
+            "Rating: " + str(stats.get("avg_rating", 0)) + " | Goals: " + str(stats.get("goals", 0)) + " | Impact: " + str(stats.get("impact_score", 0)),
             "",
         ]
         tpl = random.choice(cls.TEMPLATES["fraud"])
         lines.append(tpl.format(value=stats.get("fraud_score", stats.get("throwing_score", 0))))
         lines.append("")
         lines.append("الحكم: GUILTY.")
-        return "
-".join(lines)
+        return "\n".join(lines)
 
     @classmethod
-    def generate_stat_of_day(cls, player_name: str, stat_name: str,
-                              stat_value: Any, is_bad: bool = True) -> str:
+    def generate_stat_of_day(cls, player_name, stat_name, stat_value, is_bad=True):
         if is_bad:
             lines = [
                 "📊 STAT OF THE DAY",
                 "",
-                f"Player: {player_name}",
-                f"Stat: {stat_name}",
-                f"Value: {stat_value}",
+                "Player: " + player_name,
+                "Stat: " + stat_name,
+                "Value: " + str(stat_value),
                 "",
             ]
             tpl = random.choice(cls.TEMPLATES["general_roast"])
@@ -219,41 +203,38 @@ class Phase2DarijaEngine:
             lines = [
                 "📊 STAT OF THE DAY - MVP EDITION",
                 "",
-                f"Player: {player_name}",
-                f"Stat: {stat_name}",
-                f"Value: {stat_value}",
+                "Player: " + player_name,
+                "Stat: " + stat_name,
+                "Value: " + str(stat_value),
                 "",
                 "Monster performance! 👑",
                 "",
                 "#ProClubs #MVP #StatOfTheDay"
             ]
-        return "
-".join(lines)
+        return "\n".join(lines)
 
     @classmethod
-    def generate_who_sold(cls, player_name: str, stats: Dict[str, Any]) -> str:
+    def generate_who_sold(cls, player_name, stats):
         lines = [
             "🛒 WHO SOLD?",
             "",
-            f"الفائز: {player_name}",
-            f"Rating: {stats.get('avg_rating', 0)} | Goals: {stats.get('goals', 0)} | Assists: {stats.get('assists', 0)}",
+            "الفائز: " + player_name,
+            "Rating: " + str(stats.get("avg_rating", 0)) + " | Goals: " + str(stats.get("goals", 0)) + " | Assists: " + str(stats.get("assists", 0)),
             "",
-            f"{player_name} باع الماتش بحال شي broker.",
+            player_name + " باع الماتش بحال شي broker.",
             "الحكم: GUILTY OF TREASON.",
         ]
-        return "
-".join(lines)
+        return "\n".join(lines)
 
     @classmethod
-    def generate_club_roast(cls, team_stats: Dict[str, Any]) -> str:
+    def generate_club_roast(cls, team_stats):
         lines = [
             "🏟️ CLUB ROAST",
             "",
-            f"Win Rate: {team_stats.get('win_rate', 0)}% - حتى AI كتفوز أكثر منكم.",
-            f"Goals Scored: {team_stats.get('goals_for', 0)} - المرمى كيتمنى يتسجل فيه أكثر.",
-            f"Goals Against: {team_stats.get('goals_against', 0)} - Defense ديالكم بحال باب مفتوح.",
+            "Win Rate: " + str(team_stats.get("win_rate", 0)) + "% - حتى AI كتفوز أكثر منكم.",
+            "Goals Scored: " + str(team_stats.get("goals_for", 0)) + " - المرمى كيتمنى يتسجل فيه أكثر.",
+            "Goals Against: " + str(team_stats.get("goals_against", 0)) + " - Defense ديالكم بحال باب مفتوح.",
             "",
             "الخلاصة: راجعوا لعبتكم كاملين.",
         ]
-        return "
-".join(lines)
+        return "\n".join(lines)
