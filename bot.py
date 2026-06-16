@@ -720,7 +720,7 @@ async def ghost_cmd(interaction: Interaction):
             nickname = bot.mapper.get_nickname(ea_name)
             accusation = bot.roast.ghost_accusation(ea_name, s)
             lines.append(accusation)
-            lines.append("")
+            lines.append("\n")
 
             # Generate ghost card for first ghost
             if len(files) == 0:
@@ -729,8 +729,7 @@ async def ghost_cmd(interaction: Interaction):
 
         embed = Embed(
             title="👻 Ghost Report",
-            description="
-".join(lines),
+            description="\n".join(lines),
             color=discord.Color.light_grey(),
         )
 
