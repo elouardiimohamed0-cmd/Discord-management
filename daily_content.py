@@ -1,190 +1,113 @@
-"""Daily content system - Stat of the Day and automated posting."""
+"""daily_content.py — 80% bad stat, 20% MVP daily posts."""
 import random
-import asyncio
-from datetime import datetime, time
-from typing import Dict, Optional, List
+import os
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
-import config
-from aura_system import get_aura_system, AuraTier
-from roast_engine import get_roast_engine
-from card_generator import get_card_generator
-from player_mapper import get_mapper
+import discord
+
+try:
+    from phase2_daily_engine import Phase2DailyEngine
+    _DAILY_AVAILABLE = True
+except ImportError:
+    _DAILY_AVAILABLE = False
 
 
 @dataclass
 class DailyContent:
-    type: str  # "roast" or "mvp"
-    player_ea_name: str
-    stat_name: str
-    stat_value: float
-    message: str
+    """Content object returned by select_stat_of_day."""
     card_path: Optional[str] = None
+    title: str = ""
+    description: str = ""
+    color: int = 0x95a5a6
 
 
-class DailyContentSystem:
-    """Manages daily stat of the day and automated posting."""
+class DailySystem:
+    """Daily content engine. 80% terrible stat, 20% MVP."""
 
     def __init__(self):
-        self.aura = get_aura_system()
-        self.roast = get_roast_engine()
-        self.cards = get_card_generator()
-        self.mapper = get_mapper()
-        self.roast_prob = config.STAT_OF_DAY_ROAST_PROB
-        self.mvp_prob = config.STAT_OF_DAY_MVP_PROB
-
-    def select_stat_of_day(self, all_players: Dict[str, Dict]) -> DailyContent:
-        """Select a stat of the day."""
-        is_roast = random.random() < self.roast_prob
-        if is_roast:
-            return self._select_roast(all_players)
-        return self._select_mvp(all_players)
-
-    def _select_roast(self, all_players: Dict[str, Dict]) -> DailyContent:
-        """Select a terrible stat to roast."""
-        candidates = []
-        for ea_name, stats in all_players.items():
-            games = stats.get("games", 0)
-            if games < 2:
-                continue
-            rating = stats.get("rating", 10)
-            goals = stats.get("goals", 0)
-            assists = stats.get("assists", 0)
-            poss_lost = stats.get("possession_lost", 0)
-            pass_acc = stats.get("pass_accuracy", 100)
-            impact = stats.get("impact", 10)
-            if rating < 6.0:
-                candidates.append((ea_name, "rating", rating, rating))
-            if goals == 0 and games > 5:
-                candidates.append((ea_name, "goals", goals, 100))
-            if assists == 0 and games > 5:
-                candidates.append((ea_name, "assists", assists, 100))
-            if poss_lost > games * 5:
-                candidates.append((ea_name, "possession_lost", poss_lost, poss_lost))
-            if pass_acc < 60 and games > 5:
-                candidates.append((ea_name, "pass_accuracy", pass_acc, 100 - pass_acc))
-            if impact < 4.0 and games > 5:
-                candidates.append((ea_name, "impact", impact, 10 - impact))
-        if not candidates:
-            for ea_name, stats in all_players.items():
-                games = stats.get("games", 0)
-                if games > 0:
-                    candidates.append((ea_name, "games", games, 100 - games))
-                    break
-        if not candidates:
-            first = list(all_players.keys())[0]
-            candidates.append((first, "rating", all_players[first].get("rating", 5), 5))
-        total_weight = sum(c[3] for c in candidates)
-        pick = random.uniform(0, total_weight)
-        current = 0
-        for c in candidates:
-            current += c[3]
-            if current >= pick:
-                selected = c
-                break
+        if _DAILY_AVAILABLE:
+            self._engine = Phase2DailyEngine()
         else:
-            selected = candidates[0]
-        ea_name, stat_name, value, _ = selected
-        message = self.roast.stat_of_day(ea_name, stat_name, value, is_roast=True)
-        card = self.cards.generate_fraud_card(ea_name, all_players[ea_name])
-        card_path = f"/tmp/daily_roast_{ea_name}.png"
-        card.save(card_path, "PNG")
+            self._engine = None
+
+    def select_stat_of_day(self, stats: Dict[str, Dict]) -> DailyContent:
+        """Pick a stat for daily post. 80% bad, 20% MVP."""
+        if not stats:
+            return DailyContent(
+                title="📉 No Data",
+                description="No player stats available.",
+                color=0x95a5a6
+            )
+
+        player_list = []
+        for ea_name, s in stats.items():
+            d = dict(s)
+            d["name"] = ea_name
+            player_list.append(d)
+
+        if self._engine:
+            pick = self._engine.pick_stat_of_day(player_list)
+            if pick and pick.get("player"):
+                is_bad = pick.get("type") == "bad"
+                player = pick["player"]
+                p_name = player.get("name", "Unknown")
+                stat_name = pick.get("stat_name", "")
+                stat_value = pick.get("stat_value", 0)
+                from player_mapper import get_mapper
+                from roast_engine import get_roast_engine
+                nickname = get_mapper().get_nickname(p_name)
+                roast = get_roast_engine()
+                if is_bad:
+                    title = pick.get("title", "📉 STAT OF THE DAY")
+                    desc = roast.roast(p_name, player)
+                    color = 0xe74c3c
+                else:
+                    title = pick.get("title", "🔥 MONSTER OF THE DAY")
+                    desc = roast.mvp_praise(p_name, player)
+                    color = 0xf1c40f
+                return DailyContent(
+                    card_path=None,
+                    title=title,
+                    description=f"**{nickname}** | {stat_name}: {stat_value}\n\n{desc}",
+                    color=color
+                )
+
+        # Fallback
+        is_bad = random.random() < 0.80
+        ea_name, s = random.choice(list(stats.items()))
+        from player_mapper import get_mapper
+        nickname = get_mapper().get_nickname(ea_name)
+        if is_bad:
+            stat_name = random.choice(["possession_lost", "fraud_score", "goals"])
+            stat_value = s.get(stat_name, 0)
+            title = "📉 STAT OF THE DAY"
+            desc = f"**{nickname}** | {stat_name}: {stat_value}\n\n{random.choice([
+                'لعبتك بحال شي tutorial ديال كيفاش ما تلعبش.',
+                'حتى IA فالcareer mode كتضحك عليك.',
+                'الحقيقة كتوجع, و هادا هو الحقيقة ديالك.',
+            ])}"
+            color = 0xe74c3c
+        else:
+            title = "🔥 MONSTER OF THE DAY"
+            desc = f"**{nickname}** | Impact: {s.get('impact', 0)}\n\nMonster performance! 👑"
+            color = 0xf1c40f
+
         return DailyContent(
-            type="roast",
-            player_ea_name=ea_name,
-            stat_name=stat_name,
-            stat_value=float(value),
-            message=message,
-            card_path=card_path,
+            card_path=None,
+            title=title,
+            description=desc,
+            color=color
         )
 
-    def _select_mvp(self, all_players: Dict[str, Dict]) -> DailyContent:
-        """Select an MVP stat to praise."""
-        candidates = []
-        for ea_name, stats in all_players.items():
-            games = stats.get("games", 0)
-            if games < 3:
-                continue
-            rating = stats.get("rating", 0)
-            goals = stats.get("goals", 0)
-            assists = stats.get("assists", 0)
-            impact = stats.get("impact", 0)
-            wins = stats.get("wins", 0)
-            wr = (wins / games) * 100 if games > 0 else 0
-            overall = self.aura.calculate_overall(stats)
-            if overall >= 85:
-                candidates.append((ea_name, "overall", overall, overall))
-            if rating >= 8.5:
-                candidates.append((ea_name, "rating", rating, rating * 10))
-            if goals > games * 1.5:
-                candidates.append((ea_name, "goals", goals, goals * 2))
-            if assists > games * 1.2:
-                candidates.append((ea_name, "assists", assists, assists * 2))
-            if impact >= 8.0:
-                candidates.append((ea_name, "impact", impact, impact * 10))
-            if wr >= 70:
-                candidates.append((ea_name, "win_rate", wr, wr))
-        if not candidates:
-            best = None
-            best_score = -1
-            for ea_name, stats in all_players.items():
-                games = stats.get("games", 0)
-                if games >= 3:
-                    overall = self.aura.calculate_overall(stats)
-                    if overall > best_score:
-                        best_score = overall
-                        best = (ea_name, "overall", overall, overall)
-            if best:
-                candidates.append(best)
-        if not candidates:
-            first = list(all_players.keys())[0]
-            candidates.append((first, "rating", all_players[first].get("rating", 7), 7))
-        total_weight = sum(c[3] for c in candidates)
-        pick = random.uniform(0, total_weight)
-        current = 0
-        for c in candidates:
-            current += c[3]
-            if current >= pick:
-                selected = c
-                break
-        else:
-            selected = candidates[0]
-        ea_name, stat_name, value, _ = selected
-        message = self.roast.stat_of_day(ea_name, stat_name, value, is_roast=False)
-        card = self.cards.generate_mvp_card(ea_name, all_players[ea_name])
-        card_path = f"/tmp/daily_mvp_{ea_name}.png"
-        card.save(card_path, "PNG")
-        return DailyContent(
-            type="mvp",
-            player_ea_name=ea_name,
-            stat_name=stat_name,
-            stat_value=float(value),
-            message=message,
-            card_path=card_path,
-        )
-
-    def format_discord_message(self, content: DailyContent) -> Dict:
-        """Format content for Discord message."""
-        nickname = self.mapper.get_nickname(content.player_ea_name)
-        if content.type == "roast":
-            title = f"📉 STAT OF THE DAY - {nickname}"
-            color = 0xFF0000
-        else:
-            title = f"📈 STAT OF THE DAY - {nickname}"
-            color = 0x00FF00
+    def format_discord_message(self, content: DailyContent) -> Dict[str, Any]:
+        """Format content for Discord embed."""
         return {
-            "title": title,
-            "description": content.message,
-            "color": color,
-            "image": content.card_path,
-            "timestamp": datetime.utcnow().isoformat(),
+            "title": content.title,
+            "description": content.description,
+            "color": content.color,
         }
 
 
-_daily = None
-
-def get_daily_system() -> DailyContentSystem:
-    global _daily
-    if _daily is None:
-        _daily = DailyContentSystem()
-    return _daily
+def get_daily_system() -> DailySystem:
+    return DailySystem()
