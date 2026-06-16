@@ -21,6 +21,53 @@ from story_engine import StoryEngine
 from models import ClubStats, PlayerStats
 from utils import fuzzy_find_player
 
+# === PHASE 2.1: Nickname System ===
+# Never show EA usernames. Always show squad nicknames.
+# Mappings are built from squad.json (psn -> name)
+PSN_TO_NICKNAME: dict = {}
+NICKNAME_TO_PSN: dict = {}
+
+def _build_nickname_maps():
+    """Build PSN->Nickname and Nickname->PSN maps from squad.json"""
+    global PSN_TO_NICKNAME, NICKNAME_TO_PSN
+    PSN_TO_NICKNAME.clear()
+    NICKNAME_TO_PSN.clear()
+    players_iter = []
+    if isinstance(squad, dict):
+        if "players" in squad:
+            players_iter = squad.get("players", [])
+        else:
+            players_iter = squad.values()
+    elif isinstance(squad, list):
+        players_iter = squad
+    for p in players_iter:
+        if not isinstance(p, dict):
+            continue
+        psn = p.get("psn", "") or p.get("PSN", "") or p.get("ea_id", "")
+        nickname = p.get("name", "") or p.get("nickname", "")
+        if psn and nickname:
+            PSN_TO_NICKNAME[psn.lower()] = nickname
+            NICKNAME_TO_PSN[nickname.lower()] = psn
+
+def resolve_nickname(name: str) -> str:
+    """Convert PSN/EA username to squad nickname for display."""
+    if not name or not isinstance(name, str):
+        return name
+    return PSN_TO_NICKNAME.get(name.lower(), name)
+
+def resolve_query(query: str) -> str:
+    """If user types a PSN/EA ID, convert to nickname for matching."""
+    if not query or not isinstance(query, str):
+        return query
+    return PSN_TO_NICKNAME.get(query.lower(), query)
+
+def normalize_club_players(club):
+    """Presentation-layer normalization: replace PSN names with nicknames."""
+    if not club or not getattr(club, "players", None):
+        return
+    for p in club.players:
+        if hasattr(p, "name") and isinstance(p.name, str):
+            p.name = resolve_nickname(p.name)
 
 # === Health Check Server ===
 class HealthHandler(BaseHTTPRequestHandler):
@@ -42,7 +89,6 @@ def start_health_server():
 
 start_health_server()
 
-
 # === Bot Setup ===
 intents = discord.Intents.default()
 intents.message_content = True
@@ -51,6 +97,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # Global state
 squad = load_squad()
+_build_nickname_maps()  # PHASE 2.1: build maps after squad loads
 scraper: Optional[ProClubsTrackerScraper] = None
 darija = DarijaEngine(Config.DEFAULT_PERSONALITY)
 imgen = ImageGenerator(Config.ASSETS_DIR)
@@ -60,14 +107,14 @@ story_engine = StoryEngine()
 current_club: Optional[ClubStats] = None
 _session_active = False
 
-
 def get_squad_map():
     return {p.get("name", ""): p for p in squad.get("players", [])}
 
 def find_player(query: str) -> Optional[PlayerStats]:
     if not current_club or not current_club.players:
         return None
-    return fuzzy_find_player(query, current_club.players, squad)
+    resolved = resolve_query(query)  # PHASE 2.1: resolve PSN to nickname before searching
+    return fuzzy_find_player(resolved, current_club.players, squad)
 
 async def ensure_data(ctx):
     global current_club
@@ -85,6 +132,7 @@ async def ensure_data(ctx):
                 return False
             current_club = club
             current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
+            normalize_club_players(current_club)  # PHASE 2.1: hide PSN names
             await ctx.send(f"✅ Loaded {len(club.players)} players")
             return True
         except Exception as e:
@@ -108,6 +156,7 @@ async def ensure_data_interaction(interaction: discord.Interaction):
             return False
         current_club = club
         current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
+        normalize_club_players(current_club)  # PHASE 2.1: hide PSN names
         await interaction.followup.send(f"✅ Loaded {len(club.players)} players")
         return True
     except Exception as e:
@@ -115,7 +164,6 @@ async def ensure_data_interaction(interaction: discord.Interaction):
         print(f"SCRAPE ERROR:\n{tb}")
         await interaction.followup.send(f"❌ Scrape failed:\n```\n{str(e)[:800]}\n```")
         return False
-
 
 # === Events ===
 @bot.event
@@ -144,6 +192,7 @@ async def startup_scrape():
         if club and club.players:
             current_club = club
             current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
+            normalize_club_players(current_club)  # PHASE 2.1: hide PSN names
             print(f"✅ Startup: {len(club.players)} players")
         else:
             print("⚠️ Startup: no data")
@@ -179,7 +228,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     except Exception:
         pass
 
-
 # === DAILY LOOP ===
 @tasks.loop(hours=24)
 async def daily_post():
@@ -191,11 +239,11 @@ async def daily_post():
         channel = bot.get_channel(channel_id)
         if not channel:
             return
-        
+
         pick = daily_engine.pick_stat_of_the_day(current_club.players)
         if not pick:
             return
-        
+
         is_bad = pick.get("type") == "bad"
         card = imgen.generate_daily_card(
             pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad
@@ -213,7 +261,6 @@ async def daily_post():
 @daily_post.before_loop
 async def before_daily():
     await bot.wait_until_ready()
-
 
 # ============================================================
 # PREFIX COMMANDS ( !command )
@@ -316,6 +363,7 @@ async def cmd_sync(ctx):
                 return
             current_club = club
             current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
+            normalize_club_players(current_club)  # PHASE 2.1: hide PSN names
             embed = discord.Embed(
                 title="🔄 Sync Complete",
                 description=f"**{len(club.players)}** players loaded\nClub: {club.club_name} | Div {club.division}\nRecord: {club.wins}W — {club.losses}L — {club.draws}D",
@@ -363,6 +411,7 @@ async def cmd_mvp(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1: ensure nicknames in case data was already loaded
             mvp = StatsEngine.get_mvp(current_club.players)
             pos = squad_map.get(mvp.name, {}).get("position", "CM")
             card = imgen.generate_mvp_card(mvp, pos)
@@ -383,6 +432,7 @@ async def cmd_worst(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             worst = StatsEngine.get_worst(current_club.players)
             pos = squad_map.get(worst.name, {}).get("position", "CM")
             roast = darija.roast(worst, pos)
@@ -399,6 +449,7 @@ async def cmd_who_sold(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             fraud = StatsEngine.get_fraud(current_club.players)
             pos = squad_map.get(fraud.name, {}).get("position", "CM")
             roast = darija.roast(fraud, pos)
@@ -415,6 +466,7 @@ async def cmd_carry(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             carry = StatsEngine.get_carry(current_club.players)
             pos = squad_map.get(carry.name, {}).get("position", "CM")
             praise = darija.praise(carry, pos)
@@ -455,6 +507,7 @@ async def cmd_ballon(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             ranked = sorted(current_club.players, key=lambda p: p.impact_score + p.clutch_score + p.goals * 2, reverse=True)
             embed = discord.Embed(title="🏆 BALLON D'OR", color=0xffd700)
             medals = ["🥇", "🥈", "🥉"]
@@ -473,6 +526,7 @@ async def cmd_ghost(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             ghost = StatsEngine.get_ghost(current_club.players)
             pos = squad_map.get(ghost.name, {}).get("position", "CM")
             roast = darija.roast(ghost, pos)
@@ -489,6 +543,7 @@ async def cmd_pass(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             hog = StatsEngine.get_ball_hog(current_club.players)
             pos = squad_map.get(hog.name, {}).get("position", "CM")
             roast = darija.roast(hog, pos)
@@ -507,6 +562,7 @@ async def cmd_leaderboard(ctx, metric: str = "impact"):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             card = imgen.generate_leaderboard(current_club.players, metric_value)
             file = discord.File(card, filename="leaderboard.png")
             embed = discord.Embed(title=f"📊 Leaderboard — {metric.capitalize()}", color=0x1e90ff)
@@ -559,6 +615,7 @@ async def cmd_club(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             motm = StatsEngine.get_mvp(current_club.players)
             card = imgen.generate_match_report(current_club, motm)
             file = discord.File(card, filename="club_report.png")
@@ -593,7 +650,7 @@ async def cmd_drama(ctx):
 @bot.command(name="meme")
 async def cmd_meme(ctx, *, player: str = "Player"):
     try:
-        text = darija.meme(player)
+        text = darija.meme(resolve_nickname(player))  # PHASE 2.1
         embed = discord.Embed(title="😂 Darija Meme", description=text, color=0x00ff7f)
         await ctx.send(embed=embed)
     except Exception as e:
@@ -603,7 +660,7 @@ async def cmd_meme(ctx, *, player: str = "Player"):
 @bot.command(name="transfer")
 async def cmd_transfer(ctx, *, player: str):
     try:
-        text = darija.transfer(player)
+        text = darija.transfer(resolve_nickname(player))  # PHASE 2.1
         embed = discord.Embed(title="📰 Transfer News", description=text, color=0x1e90ff)
         await ctx.send(embed=embed)
     except Exception as e:
@@ -669,7 +726,6 @@ async def cmd_roastplayer(ctx, *, player: str):
         except Exception as e:
             traceback.print_exc()
             await ctx.send(f"❌ Error: `{str(e)[:300]}`")
-
 
 # ============================================================
 # PHASE 2 COMMANDS — ANIME / DAILY / STORY
@@ -741,9 +797,9 @@ async def cmd_beast_mode(ctx, *, player: str = None):
         try:
             card = imgen.generate_beast_card(target, pos)
             file = discord.File(card, filename="beast.png")
-            embed = discord.Embed(title=f"⚡ BEAST MODE — {target.name}", 
-                description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}", 
-                color=0x00bfff)
+            embed = discord.Embed(title=f"⚡ BEAST MODE — {target.name}",
+                                  description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
+                                  color=0x00bfff)
             await ctx.send(embed=embed, file=file)
         except Exception as e:
             traceback.print_exc()
@@ -787,6 +843,7 @@ async def cmd_ball_loser(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             loser = max(current_club.players, key=lambda p: p.possession_losses)
             pos = squad_map.get(loser.name, {}).get("position", "CM")
             roast = darija.roast(loser, pos)
@@ -804,6 +861,7 @@ async def cmd_playmaker(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             pm = max(current_club.players, key=lambda p: p.assists * 2 + p.pass_accuracy)
             pos = squad_map.get(pm.name, {}).get("position", "CM")
             card = imgen.generate_playmaker_card(pm, pos)
@@ -822,6 +880,7 @@ async def cmd_sniper(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             sniper = max(current_club.players, key=lambda p: p.goals * 2 + p.rating_pg)
             pos = squad_map.get(sniper.name, {}).get("position", "CM")
             card = imgen.generate_sniper_card(sniper, pos)
@@ -840,6 +899,7 @@ async def cmd_keeper(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             gks = [p for p in current_club.players if squad_map.get(p.name, {}).get("position") == "GK"]
             if not gks:
                 await ctx.send("ما لقيتش goalkeeper فالفريق.")
@@ -884,14 +944,15 @@ async def cmd_rankings(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             embed = discord.Embed(title="📊 ALL RANKINGS", color=0x1e90ff)
-            
+
             mvp = StatsEngine.get_mvp(current_club.players)
             worst = StatsEngine.get_worst(current_club.players)
             fraud = StatsEngine.get_fraud(current_club.players)
             carry = StatsEngine.get_carry(current_club.players)
             ghost = StatsEngine.get_ghost(current_club.players)
-            
+
             embed.add_field(name="🏆 MVP", value=f"{mvp.name} (Impact: {mvp.impact_score})", inline=False)
             embed.add_field(name="🗑️ Worst", value=f"{worst.name} (Impact: {worst.impact_score})", inline=False)
             embed.add_field(name="🎭 Fraud", value=f"{fraud.name} (Throwing: {fraud.throwing_score})", inline=False)
@@ -910,13 +971,14 @@ async def cmd_awards(ctx):
         try:
             squad_map = get_squad_map()
             current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+            normalize_club_players(current_club)  # PHASE 2.1
             embed = discord.Embed(title="🏅 SEASON AWARDS", color=0xffd700)
-            
+
             mvp = StatsEngine.get_mvp(current_club.players)
             top_scorer = max(current_club.players, key=lambda p: p.goals)
             top_assist = max(current_club.players, key=lambda p: p.assists)
             fraud = StatsEngine.get_fraud(current_club.players)
-            
+
             embed.add_field(name="🥇 Ballon d'Or", value=mvp.name, inline=False)
             embed.add_field(name="⚽ Golden Boot", value=f"{top_scorer.name} ({top_scorer.goals} goals)", inline=False)
             embed.add_field(name="🅰️ Playmaker Award", value=f"{top_assist.name} ({top_assist.assists} assists)", inline=False)
@@ -957,7 +1019,6 @@ async def cmd_story(ctx):
         traceback.print_exc()
         await ctx.send(f"❌ Error: `{str(e)[:300]}`")
 
-
 # ============================================================
 # SLASH COMMANDS ( /command ) — Phase 1 + 2
 # ============================================================
@@ -995,6 +1056,7 @@ async def slash_sync(interaction: discord.Interaction):
             return
         current_club = club
         current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
+        normalize_club_players(current_club)  # PHASE 2.1: hide PSN names
         embed = discord.Embed(title="🔄 Sync Complete", description=f"**{len(club.players)}** players loaded", color=0x00ff00)
         await interaction.followup.send(embed=embed)
     except Exception as e:
@@ -1095,9 +1157,9 @@ async def slash_beast_mode(interaction: discord.Interaction, player: str = None)
     try:
         card = imgen.generate_beast_card(target, pos)
         file = discord.File(card, filename="beast.png")
-        embed = discord.Embed(title=f"⚡ BEAST MODE — {target.name}", 
-            description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}", 
-            color=0x00bfff)
+        embed = discord.Embed(title=f"⚡ BEAST MODE — {target.name}",
+                              description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
+                              color=0x00bfff)
         await interaction.followup.send(embed=embed, file=file)
     except Exception as e:
         traceback.print_exc()
@@ -1140,6 +1202,7 @@ async def slash_mvp(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         mvp = StatsEngine.get_mvp(current_club.players)
         pos = squad_map.get(mvp.name, {}).get("position", "CM")
         card = imgen.generate_mvp_card(mvp, pos)
@@ -1160,6 +1223,7 @@ async def slash_worst(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         worst = StatsEngine.get_worst(current_club.players)
         pos = squad_map.get(worst.name, {}).get("position", "CM")
         roast = darija.roast(worst, pos)
@@ -1176,6 +1240,7 @@ async def slash_who_sold(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         fraud = StatsEngine.get_fraud(current_club.players)
         pos = squad_map.get(fraud.name, {}).get("position", "CM")
         roast = darija.roast(fraud, pos)
@@ -1192,6 +1257,7 @@ async def slash_carry(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         carry = StatsEngine.get_carry(current_club.players)
         pos = squad_map.get(carry.name, {}).get("position", "CM")
         praise = darija.praise(carry, pos)
@@ -1233,6 +1299,7 @@ async def slash_ballon_dor(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         ranked = sorted(current_club.players, key=lambda p: p.impact_score + p.clutch_score + p.goals * 2, reverse=True)
         embed = discord.Embed(title="🏆 BALLON D'OR", color=0xffd700)
         medals = ["🥇", "🥈", "🥉"]
@@ -1251,6 +1318,7 @@ async def slash_ghost(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         ghost = StatsEngine.get_ghost(current_club.players)
         pos = squad_map.get(ghost.name, {}).get("position", "CM")
         roast = darija.roast(ghost, pos)
@@ -1267,6 +1335,7 @@ async def slash_pass_ball(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         hog = StatsEngine.get_ball_hog(current_club.players)
         pos = squad_map.get(hog.name, {}).get("position", "CM")
         roast = darija.roast(hog, pos)
@@ -1283,6 +1352,7 @@ async def slash_ball_loser(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         loser = max(current_club.players, key=lambda p: p.possession_losses)
         pos = squad_map.get(loser.name, {}).get("position", "CM")
         roast = darija.roast(loser, pos)
@@ -1299,6 +1369,7 @@ async def slash_playmaker(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         pm = max(current_club.players, key=lambda p: p.assists * 2 + p.pass_accuracy)
         pos = squad_map.get(pm.name, {}).get("position", "CM")
         card = imgen.generate_playmaker_card(pm, pos)
@@ -1316,6 +1387,7 @@ async def slash_sniper(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         sniper = max(current_club.players, key=lambda p: p.goals * 2 + p.rating_pg)
         pos = squad_map.get(sniper.name, {}).get("position", "CM")
         card = imgen.generate_sniper_card(sniper, pos)
@@ -1333,6 +1405,7 @@ async def slash_keeper(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         gks = [p for p in current_club.players if squad_map.get(p.name, {}).get("position") == "GK"]
         if not gks:
             await interaction.followup.send("ما لقيتش goalkeeper فالفريق.")
@@ -1359,6 +1432,7 @@ async def slash_leaderboard(interaction: discord.Interaction, metric: app_comman
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         card = imgen.generate_leaderboard(current_club.players, metric.value)
         file = discord.File(card, filename="leaderboard.png")
         embed = discord.Embed(title=f"📊 Leaderboard — {metric.name}", color=0x1e90ff)
@@ -1413,6 +1487,7 @@ async def slash_clubinfo(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         motm = StatsEngine.get_mvp(current_club.players)
         card = imgen.generate_match_report(current_club, motm)
         file = discord.File(card, filename="club_report.png")
@@ -1455,6 +1530,7 @@ async def slash_rankings(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         embed = discord.Embed(title="📊 ALL RANKINGS", color=0x1e90ff)
         mvp = StatsEngine.get_mvp(current_club.players)
         worst = StatsEngine.get_worst(current_club.players)
@@ -1478,6 +1554,7 @@ async def slash_awards(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         current_club.players = StatsEngine.compute_all(current_club.players, squad_map)
+        normalize_club_players(current_club)  # PHASE 2.1
         embed = discord.Embed(title="🏅 SEASON AWARDS", color=0xffd700)
         mvp = StatsEngine.get_mvp(current_club.players)
         top_scorer = max(current_club.players, key=lambda p: p.goals)
@@ -1550,7 +1627,7 @@ async def slash_drama(interaction: discord.Interaction):
 async def slash_meme(interaction: discord.Interaction, player: str = None):
     try:
         target = player or "Player"
-        text = darija.meme(target)
+        text = darija.meme(resolve_nickname(target))  # PHASE 2.1
         embed = discord.Embed(title="😂 Darija Meme", description=text, color=0x00ff7f)
         await interaction.response.send_message(embed=embed)
     except Exception as e:
@@ -1561,7 +1638,7 @@ async def slash_meme(interaction: discord.Interaction, player: str = None):
 @app_commands.describe(player="Player name")
 async def slash_transfer(interaction: discord.Interaction, player: str):
     try:
-        text = darija.transfer(player)
+        text = darija.transfer(resolve_nickname(player))  # PHASE 2.1
         embed = discord.Embed(title="📰 Transfer News", description=text, color=0x1e90ff)
         await interaction.response.send_message(embed=embed)
     except Exception as e:
@@ -1655,7 +1732,6 @@ async def slash_help(interaction: discord.Interaction):
     except Exception as e:
         traceback.print_exc()
         await interaction.response.send_message(f"❌ Error: `{str(e)[:300]}`")
-
 
 if __name__ == "__main__":
     bot.run(Config.DISCORD_TOKEN)
