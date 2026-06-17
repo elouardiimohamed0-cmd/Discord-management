@@ -14,7 +14,7 @@ class Config:
     CLUB_ID = os.environ.get("CLUB_ID", "1427607")
     PCT_CLUB_URL = os.environ.get("PCT_CLUB_URL", "https://proclubstracker.com/club/1427607?platform=common-gen5&div=6")
     PCT_PLATFORM = os.environ.get("PCT_PLATFORM", "common-gen5")
-    SCRAPE_INTERVAL_MINUTES = int(os.environ.get("SCRAPE_INTERVAL_MINUTES", "5"))
+    SCRAPE_INTERVAL_MINUTES = int(os.environ.get("SCRAPE_INTERVAL_MINUTES", "10"))
     DEFAULT_PERSONALITY = os.environ.get("DEFAULT_PERSONALITY", "casablanca")
     ROAST_FREQUENCY = float(os.environ.get("ROAST_FREQUENCY", "0.95"))
     GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
@@ -23,6 +23,9 @@ class Config:
     MEMORY_DB = os.environ.get("MEMORY_DB", "/tmp/memory.db")
     ASSETS_DIR = os.environ.get("ASSETS_DIR", "assets")
     PORT = int(os.environ.get("PORT", "8000"))
+    # NEW: PostgreSQL support (Render auto-sets DATABASE_URL if addon enabled)
+    DATABASE_URL = os.environ.get("DATABASE_URL", "")
+    SQLITE_PATH = os.environ.get("SQLITE_PATH", "/tmp/rachad_data.db")
 
 
 def load_squad():
