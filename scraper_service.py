@@ -183,8 +183,35 @@ class ScraperService:
                 self._enter_cooldown("PCT API 403/CF")
                 return None
             if r.status_code != 200:
+                logger.warning("[HTTP] Status %d", r.status_code)
                 return None
-            return self._parse(r.json())
+
+            # FIX: Parse from raw bytes to avoid encoding errors
+            raw = r.content
+
+            # Check for HTML/Cloudflare challenge
+            if raw[:100].strip().startswith(b"<") or b"cloudflare" in raw[:500].lower():
+                logger.warning("[HTTP] HTML/CF challenge. First 200 bytes: %s", raw[:200])
+                self._enter_cooldown("Cloudflare HTML response")
+                return None
+
+            try:
+                data = json.loads(raw)
+            except Exception:
+                try:
+                    text = raw.decode("utf-8", errors="replace")
+                    data = json.loads(text)
+                except Exception as e2:
+                    logger.error("[HTTP] JSON parse fail. First 500 bytes (hex): %s", raw[:500].hex()[:200])
+                    logger.error("[HTTP] Decode error: %s", e2)
+                    return None
+
+            if not isinstance(data, dict):
+                logger.error("[HTTP] Response not dict: %s", type(data))
+                return None
+
+            logger.info("[HTTP] Success (keys: %s)", list(data.keys())[:5])
+            return self._parse(data)
         except httpx.TimeoutException:
             return None
         except Exception as e:
