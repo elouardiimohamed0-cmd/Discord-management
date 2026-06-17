@@ -180,8 +180,11 @@ def normalize_club_players(club):
     if not club or not getattr(club, "players", None):
         return
     for p in club.players:
-        if hasattr(p, "name") and isinstance(p.name, str):
-            p.name = resolve_nickname(p.name)
+        if hasattr(p, "name"):
+            if not p.name or not isinstance(p.name, str):
+                p.name = "Unknown"
+            else:
+                p.name = resolve_nickname(p.name)
 
 # ─────────────────────────────────────────────────────────────
 # BOT SETUP
@@ -220,23 +223,27 @@ def _dict_to_club(data: dict) -> Optional[ClubStats]:
         return None
     try:
         club = ClubStats(
-            club_name=data.get("club_name", "Rachad L3ERGONI"),
-            division=data.get("division", 6),
-            skill_rating=data.get("skill_rating", 0),
-            wins=data.get("wins", 0),
-            losses=data.get("losses", 0),
-            draws=data.get("draws", 0),
+            club_name=data.get("club_name") or "Rachad L3ERGONI",
+            division=data.get("division") or 6,
+            skill_rating=data.get("skill_rating") or 0,
+            wins=data.get("wins") or 0,
+            losses=data.get("losses") or 0,
+            draws=data.get("draws") or 0,
         )
-        club.goals_scored = data.get("goals_scored", 0)
-        club.goals_conceded = data.get("goals_conceded", 0)
-        club.win_rate = data.get("win_rate", 0.0)
+        club.goals_scored = data.get("goals_scored") or 0
+        club.goals_conceded = data.get("goals_conceded") or 0
+        club.win_rate = data.get("win_rate") or 0.0
         club.last_updated = datetime.now()
 
         club.players = []
         for p in data.get("players", []):
-            ps = PlayerStats(name=p.get("name", "Unknown"))
+            # FIX: handle None/empty names from API
+            raw_name = p.get("name")
+            if not raw_name or not isinstance(raw_name, str):
+                raw_name = "Unknown"
+            ps = PlayerStats(name=raw_name)
             for k, v in p.items():
-                if hasattr(ps, k):
+                if hasattr(ps, k) and k != "name":  # name already set above
                     setattr(ps, k, v)
             club.players.append(ps)
 
@@ -301,7 +308,10 @@ async def ensure_data(ctx: commands.Context):
     if _is_data_fresh():
         return True
     if current_club and current_club.players:
-        return True
+        # Validate that players have names
+        valid_players = [p for p in current_club.players if getattr(p, "name", None) and isinstance(p.name, str) and p.name.strip()]
+        if len(valid_players) > 0:
+            return True
     await rl.ctx_send(ctx, "⏳ Data not loaded yet. Background sync in progress. Try again in a few minutes.")
     return False
 
@@ -309,7 +319,9 @@ async def ensure_data_interaction(interaction: discord.Interaction):
     if _is_data_fresh():
         return True
     if current_club and current_club.players:
-        return True
+        valid_players = [p for p in current_club.players if getattr(p, "name", None) and isinstance(p.name, str) and p.name.strip()]
+        if len(valid_players) > 0:
+            return True
     await rl.interaction_send(interaction, "⏳ Data not loaded yet. Background sync in progress. Try again in a few minutes.")
     return False
 
