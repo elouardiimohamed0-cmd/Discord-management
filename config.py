@@ -10,7 +10,7 @@ class Config:
     GENERAL_CHANNEL_ID = int(os.environ.get("GENERAL_CHANNEL_ID", "0"))
     MATCH_CHANNEL_ID = int(os.environ.get("MATCH_CHANNEL_ID", "0"))
     LEADERBORD_CHANNEL_ID = int(os.environ.get("LEADERBORD_CHANNEL_ID", "0"))
-    DAILY_CHANNEL_ID = int(os.environ.get("DAILY_CHANNEL_ID", "0"))  # NEW: separate daily channel
+    DAILY_CHANNEL_ID = int(os.environ.get("DAILY_CHANNEL_ID", "0"))
     CLUB_ID = os.environ.get("CLUB_ID", "1427607")
     PCT_CLUB_URL = os.environ.get("PCT_CLUB_URL", "https://proclubstracker.com/club/1427607?platform=common-gen5&div=6")
     PCT_PLATFORM = os.environ.get("PCT_PLATFORM", "common-gen5")
@@ -24,7 +24,6 @@ class Config:
     ASSETS_DIR = os.environ.get("ASSETS_DIR", "assets")
     PORT = int(os.environ.get("PORT", "8000"))
 
-SQUAD_FILE = os.environ.get("SQUAD_FILE", "squad.json")
 
 def load_squad():
     path = Config.SQUAD_FILE
