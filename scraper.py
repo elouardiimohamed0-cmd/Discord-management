@@ -1,10 +1,16 @@
 import os
 import asyncio
+import json
 import time
+import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
+from pathlib import Path
+
 import httpx
 from models import ClubStats, PlayerStats, MatchResult
+
+logger = logging.getLogger("rachad_bot.scraper")
 
 CLUB_ID = os.environ.get("CLUB_ID", "1427607")
 PLATFORM = os.environ.get("PCT_PLATFORM", "common-gen5")
@@ -20,13 +26,45 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
+CACHE_DIR = Path(os.getenv("CACHE_DIR", "/tmp/rachad_cache"))
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+COOKIE_FILE = CACHE_DIR / "pct_cookies.json"
+API_CACHE_TTL = int(os.getenv("API_CACHE_TTL", "300"))  # 5 minutes default
+API_CACHE_FILE = CACHE_DIR / "api_cache.json"
+
 class ProClubsTrackerScraper:
+    """
+    Hybrid scraper:
+    1. Primary: httpx API call (fast, no browser)
+    2. Fallback: Playwright with stealth (if API fails or blocked)
+    3. Cache layer: file-based JSON cache with TTL
+    """
+
     def __init__(self, club_url: str, headless: bool = True, use_stealth: bool = True):
-        # headless/use_stealth kept for backward compatibility
         self.club_url = club_url
         self.club_id = CLUB_ID
         self.platform = PLATFORM
         self._last_error = None
+        self._cache_time = 0
+        self._cached_data: Optional[dict] = None
+        self._headless = headless
+        self._use_stealth = use_stealth
+        self._playwright_available = False
+        self._browser = None
+        self._context = None
+        self._page = None
+        self._init_playwright()
+
+    def _init_playwright(self):
+        """Lazy-load Playwright only if needed."""
+        try:
+            from playwright.async_api import async_playwright
+            self._playwright_cls = async_playwright
+            self._playwright_available = True
+            logger.info("Playwright available for fallback scraping.")
+        except ImportError:
+            self._playwright_available = False
+            logger.warning("Playwright not installed. API-only mode.")
 
     def _to_int(self, val, default=0) -> int:
         try:
@@ -46,21 +84,204 @@ class ProClubsTrackerScraper:
             return round(r / 10.0, 2)
         return r
 
-    async def _fetch_pct_api(self) -> Optional[dict]:
+    # ── Cache helpers ──
+    def _load_cache(self) -> Optional[dict]:
         try:
-            print(f"📡 Fetching PCT API: {PCT_API}")
-            async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=20) as client:
-                resp = await client.get(PCT_API)
-            print(f"📡 Status: {resp.status_code}")
-            if resp.status_code != 200:
-                print(f"⚠️ PCT API HTTP {resp.status_code}: {resp.text[:200]}")
+            if not API_CACHE_FILE.exists():
                 return None
-            data = resp.json()
-            print(f"✅ PCT API OK (keys: {list(data.keys())})")
-            return data
+            mtime = API_CACHE_FILE.stat().st_mtime
+            if time.time() - mtime > API_CACHE_TTL:
+                return None
+            with open(API_CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
         except Exception as e:
-            print(f"❌ PCT API error: {e}")
-            self._last_error = str(e)
+            logger.warning("Cache load error: %s", e)
+            return None
+
+    def _save_cache(self, data: dict):
+        try:
+            with open(API_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, default=str)
+        except Exception as e:
+            logger.warning("Cache save error: %s", e)
+
+    def _load_cookies(self) -> list:
+        if COOKIE_FILE.exists():
+            try:
+                with open(COOKIE_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return []
+
+    def _save_cookies(self, cookies: list):
+        try:
+            with open(COOKIE_FILE, "w", encoding="utf-8") as f:
+                json.dump(cookies, f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning("Cookie save error: %s", e)
+
+    # ── Primary: httpx API ──
+    async def _fetch_pct_api(self) -> Optional[dict]:
+        # Check memory cache first
+        if self._cached_data and (time.time() - self._cache_time) < API_CACHE_TTL:
+            logger.info("Using memory cache (age %ds)", int(time.time() - self._cache_time))
+            return self._cached_data
+
+        # Check file cache
+        cached = self._load_cache()
+        if cached:
+            self._cached_data = cached
+            self._cache_time = time.time()
+            logger.info("Using file cache")
+            return cached
+
+        logger.info("Fetching PCT API: %s", PCT_API)
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=20) as client:
+                    resp = await client.get(PCT_API)
+                    logger.info("PCT API status: %d", resp.status_code)
+                    if resp.status_code == 429:
+                        retry_after = int(resp.headers.get("Retry-After", 5 * (attempt + 1)))
+                        logger.warning("PCT API 429 (attempt %d). Sleeping %ds...", attempt + 1, retry_after)
+                        await asyncio.sleep(retry_after)
+                        continue
+                    if resp.status_code != 200:
+                        logger.warning("PCT API HTTP %d: %s", resp.status_code, resp.text[:200])
+                        return None
+                    data = resp.json()
+                    logger.info("PCT API OK (keys: %s)", list(data.keys()))
+                    self._cached_data = data
+                    self._cache_time = time.time()
+                    self._save_cache(data)
+                    return data
+            except httpx.TimeoutException:
+                logger.warning("PCT API timeout (attempt %d)", attempt + 1)
+                await asyncio.sleep(2 ** attempt)
+            except Exception as e:
+                logger.error("PCT API error (attempt %d): %s", attempt + 1, e)
+                self._last_error = str(e)
+                await asyncio.sleep(2 ** attempt)
+        logger.error("PCT API failed after 3 attempts")
+        return None
+
+    # ── Fallback: Playwright with stealth ──
+    async def _fetch_pct_playwright(self) -> Optional[dict]:
+        if not self._playwright_available:
+            logger.error("Playwright not available for fallback")
+            return None
+
+        logger.info("Playwright fallback: scraping %s", self.club_url)
+        try:
+            async with self._playwright_cls() as p:
+                browser_type = p.chromium
+                launch_args = {
+                    "headless": self._headless,
+                    "args": [
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-blink-features=AutomationControlled",
+                    ]
+                }
+                browser = await browser_type.launch(**launch_args)
+                context = await browser.new_context(
+                    user_agent=HEADERS["User-Agent"],
+                    viewport={"width": 1920, "height": 1080},
+                    locale="en-US",
+                )
+
+                # Load cookies
+                cookies = self._load_cookies()
+                if cookies:
+                    await context.add_cookies(cookies)
+
+                page = await context.new_page()
+
+                if self._use_stealth:
+                    try:
+                        await page.add_init_script("""
+                            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                            window.chrome = { runtime: {} };
+                        """)
+                    except Exception as e:
+                        logger.warning("Stealth script error: %s", e)
+
+                # Navigate with retries
+                for attempt in range(3):
+                    try:
+                        await page.goto(self.club_url, wait_until="networkidle", timeout=30000)
+                        break
+                    except Exception as e:
+                        logger.warning("Playwright navigate error (attempt %d): %s", attempt + 1, e)
+                        if attempt == 2:
+                            await browser.close()
+                            return None
+                        await asyncio.sleep(2 ** attempt)
+
+                # Wait for data to load
+                try:
+                    await page.wait_for_selector("text=Club Stats", timeout=10000)
+                except Exception:
+                    pass
+
+                # Try to extract JSON from page or API call interception
+                # First, try to find API response in page resources
+                data = None
+                try:
+                    # Check if window has data
+                    data = await page.evaluate("""
+                        () => {
+                            if (window.__INITIAL_STATE__) return window.__INITIAL_STATE__;
+                            if (window.__DATA__) return window.__DATA__;
+                            return null;
+                        }
+                    """)
+                except Exception as e:
+                    logger.warning("Page evaluate error: %s", e)
+
+                if not data:
+                    # Fallback: intercept API call
+                    try:
+                        api_url = PCT_API
+                        resp = await page.evaluate(f"""
+                            async () => {{
+                                const r = await fetch("{api_url}", {{
+                                    headers: {{
+                                        "Accept": "application/json",
+                                        "Referer": "https://proclubstracker.com/"
+                                    }}
+                                }});
+                                return await r.json();
+                            }}
+                        """)
+                        if resp and isinstance(resp, dict):
+                            data = resp
+                    except Exception as e:
+                        logger.warning("Fetch intercept error: %s", e)
+
+                # Save cookies
+                try:
+                    cookies = await context.cookies()
+                    self._save_cookies(cookies)
+                except Exception as e:
+                    logger.warning("Cookie save error: %s", e)
+
+                await browser.close()
+
+                if data:
+                    logger.info("Playwright fallback succeeded")
+                    self._cached_data = data
+                    self._cache_time = time.time()
+                    self._save_cache(data)
+                    return data
+                else:
+                    logger.error("Playwright fallback: no data extracted")
+                    return None
+        except Exception as e:
+            logger.error("Playwright fallback failed: %s", e)
+            traceback.print_exc()
             return None
 
     def _extract_match_players(self, raw: dict) -> list:
@@ -130,14 +351,22 @@ class ProClubsTrackerScraper:
                 result=result,
             )
         except Exception as e:
-            print(f"⚠️ Parse match error: {e}")
+            logger.warning("Parse match error: %s", e)
             return None
 
     async def scrape_club(self) -> Optional[ClubStats]:
-        print(f"🔍 PCT API scrape for club {self.club_id}")
+        logger.info("Scraping club %s (platform=%s)", self.club_id, self.platform)
+
+        # Try API first
         data = await self._fetch_pct_api()
+
+        # Fallback to Playwright if API fails
         if not data:
-            print(f"❌ PCT API returned nothing. Error: {self._last_error}")
+            logger.warning("API failed, trying Playwright fallback...")
+            data = await self._fetch_pct_playwright()
+
+        if not data:
+            logger.error("All scraping methods failed. Last error: %s", self._last_error)
             return None
 
         club = ClubStats(club_name="Rachad L3ERGONI", last_updated=datetime.now())
@@ -160,7 +389,9 @@ class ProClubsTrackerScraper:
         if games_played > 0:
             club.win_rate = round((club.wins / games_played) * 100, 1)
 
-        print(f"✅ Club: {club.club_name} | Div {club.division} | SR {club.skill_rating} | {club.wins}W {club.losses}L {club.draws}D")
+        logger.info("Club: %s | Div %d | SR %d | %dW %dL %dD",
+                    club.club_name, club.division, club.skill_rating,
+                    club.wins, club.losses, club.draws)
 
         # ── Players ──
         member_stats = data.get("memberStats") or {}
@@ -251,7 +482,7 @@ class ProClubsTrackerScraper:
                 player_map[name] = p
 
         club.players = list(player_map.values())
-        print(f"✅ Parsed {len(club.players)} players")
+        logger.info("Parsed %d players from API/Playwright", len(club.players))
 
         # ── Matches ──
         for raw_match in all_matches_raw[:30]:
@@ -259,13 +490,17 @@ class ProClubsTrackerScraper:
             if parsed:
                 club.matches.append(parsed)
 
-        print(f"✅ Parsed {len(club.matches)} matches")
+        logger.info("Parsed %d matches", len(club.matches))
 
         if club.players or club.matches:
             return club
 
-        print("⚠️ No players or matches found")
+        logger.warning("No players or matches found")
         return None
 
     async def close(self):
-        pass
+        if self._browser:
+            try:
+                await self._browser.close()
+            except Exception:
+                pass
