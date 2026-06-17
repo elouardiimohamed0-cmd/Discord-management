@@ -1,0 +1,54 @@
+services:
+  - type: web
+    name: rachad-l3ergoni-bot
+    env: python
+    plan: standard
+    buildCommand: ./build.sh
+    startCommand: python bot.py
+    healthCheckPath: /
+    healthCheckPort: 8000
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: DISCORD_STARTUP_DELAY
+        value: "15"
+      - key: PORT
+        value: "8000"
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: GENERAL_CHANNEL_ID
+        sync: false
+      - key: MATCH_CHANNEL_ID
+        sync: false
+      - key: LEADERBORD_CHANNEL_ID
+        sync: false
+      - key: DAILY_CHANNEL_ID
+        sync: false
+      - key: CLUB_ID
+        value: "1427607"
+      - key: PCT_PLATFORM
+        value: common-gen5
+      - key: SCRAPE_INTERVAL_MINUTES
+        value: "5"
+      - key: DEFAULT_PERSONALITY
+        value: casablanca
+      - key: ROAST_FREQUENCY
+        value: "0.95"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: SQUAD_FILE
+        value: squad.json
+      - key: MATCH_DB
+        value: /tmp/matches.db
+      - key: MEMORY_DB
+        value: /tmp/memory.db
+      - key: ASSETS_DIR
+        value: assets
+      - key: API_CACHE_TTL
+        value: "300"
+      - key: CACHE_DIR
+        value: /tmp/rachad_cache
+    numInstances: 1
+    autoDeploy: false
