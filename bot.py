@@ -41,7 +41,7 @@ logger = logging.getLogger("rachad_bot")
 # SINGLETON / INSTANCE LOCK (prevents duplicate Render workers)
 # ─────────────────────────────────────────────────────────────
 class InstanceLock:
-    """File-based lock to ensure only one bot instance runs."""
+    """File-based lock to ensure only one bot instance runs per container."""
     def __init__(self, path: str = "/tmp/rachad_bot.lock"):
         self.path = path
         self.fd = None
@@ -56,7 +56,7 @@ class InstanceLock:
             logger.info("Instance lock acquired (pid %s)", os.getpid())
             return True
         except (IOError, OSError):
-            logger.error("Another bot instance is already running! Exiting.")
+            logger.error("Another bot instance is already running in this container! Exiting.")
             return False
 
     def release(self):
@@ -115,7 +115,6 @@ class DiscordRateLimiter:
             logger.error("Max retries exceeded for Discord send.")
             return None
 
-    # Context wrappers
     async def ctx_send(self, ctx: commands.Context, *args, **kwargs):
         logger.info("[SEND] ctx.send in #%s by %s", ctx.channel.name if ctx.channel else "?", ctx.author.name)
         return await self._send_with_backoff(ctx.send, *args, **kwargs)
@@ -214,7 +213,6 @@ bot = commands.Bot(
     command_prefix="!",
     intents=intents,
     help_command=None,
-    # Enable discord.py's built-in rate limit handling
     max_messages=10000,
 )
 
@@ -279,6 +277,27 @@ class PersistentState:
 state = PersistentState()
 
 # ─────────────────────────────────────────────────────────────
+# BACKOFF STATE (persists across Render restarts)
+# ─────────────────────────────────────────────────────────────
+BACKOFF_STATE_FILE = "/tmp/rachad_backoff.json"
+
+def load_backoff_state() -> dict:
+    try:
+        if os.path.exists(BACKOFF_STATE_FILE):
+            with open(BACKOFF_STATE_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {"consecutive_429s": 0, "last_429_time": 0}
+
+def save_backoff_state(consecutive: int, last_time: float):
+    try:
+        with open(BACKOFF_STATE_FILE, "w") as f:
+            json.dump({"consecutive_429s": consecutive, "last_429_time": last_time}, f)
+    except Exception:
+        pass
+
+# ─────────────────────────────────────────────────────────────
 # DATA HELPERS
 # ─────────────────────────────────────────────────────────────
 def get_squad_map():
@@ -304,7 +323,6 @@ async def _fetch_club_data() -> Optional[ClubStats]:
             current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
             normalize_club_players(current_club)
             _data_cache_time = time.time()
-            # Persist to DB
             save_players_cache(current_club.players)
             save_club_cache(
                 current_club.club_name,
@@ -342,7 +360,6 @@ async def _load_cached_data() -> bool:
     players = load_players_cache()
     if not players:
         return False
-    # Reconstruct minimal ClubStats
     current_club = ClubStats(
         club_name=club_info.get("club_name", "Rachad L3ERGONI"),
         division=club_info.get("division", 6),
@@ -351,7 +368,6 @@ async def _load_cached_data() -> bool:
         losses=club_info.get("losses", 0),
         draws=club_info.get("draws", 0),
     )
-    # Convert dict rows to PlayerStats
     current_club.players = []
     for p in players:
         ps = PlayerStats(name=p.get("name", "Unknown"))
@@ -397,9 +413,6 @@ async def ensure_data_interaction(interaction: discord.Interaction):
 # ─────────────────────────────────────────────────────────────
 @bot.check
 async def global_cooldown(ctx: commands.Context) -> bool:
-    # Global 1-second cooldown per user to prevent spam
-    # This is handled by discord.py's BucketType.user cooldowns on each command,
-    # but we also add a global check here.
     return True
 
 @bot.before_invoke
@@ -416,11 +429,9 @@ async def on_ready():
     scraper = ProClubsTrackerScraper(Config.PCT_CLUB_URL)
     await bot.change_presence(activity=discord.Game(name="!help or /help"))
 
-    # Slash sync — ONLY ONCE per process lifetime
     if not _slash_synced:
         try:
             guild = discord.Object(id=Config.DISCORD_GUILD_ID)
-            # Do NOT clear commands — just sync. Clearing causes rate limits.
             bot.tree.copy_global_to(guild=guild)
             await bot.tree.sync(guild=guild)
             _slash_synced = True
@@ -434,12 +445,10 @@ async def on_ready():
         except Exception as e:
             logger.error("Slash sync error: %s", e)
 
-    # Startup scrape — ONLY ONCE
     if not _startup_scrape_done:
         asyncio.create_task(startup_scrape())
         _startup_scrape_done = True
 
-    # Background tasks — only start if not already running
     if not daily_post.is_running():
         daily_post.start()
         logger.info("Daily post task started")
@@ -459,7 +468,7 @@ async def startup_scrape():
     global current_club
     try:
         logger.info("Startup scrape...")
-        await asyncio.sleep(3)  # Let connection stabilize
+        await asyncio.sleep(3)
         club = await _fetch_club_data()
         if club:
             logger.info("Startup: %d players loaded", len(club.players))
@@ -512,7 +521,6 @@ async def daily_post():
         logger.warning("Daily post skipped: no data")
         return
 
-    # Deduplication: check if we already posted today
     today = datetime.now().strftime("%Y-%m-%d")
     last_daily = state.get("last_daily_post", "")
     if last_daily == today:
@@ -552,12 +560,11 @@ async def daily_post():
 @daily_post.before_loop
 async def before_daily():
     await bot.wait_until_ready()
-    # Wait until midnight-ish for first run, then every 24h
     now = datetime.now()
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
     wait_seconds = (midnight - now).total_seconds()
     logger.info("Daily post waiting %.0f seconds until midnight", wait_seconds)
-    await asyncio.sleep(min(wait_seconds, 3600))  # Cap at 1h for first boot
+    await asyncio.sleep(min(wait_seconds, 3600))
 
 @tasks.loop(minutes=5)
 async def match_monitor():
@@ -566,7 +573,6 @@ async def match_monitor():
         return
 
     try:
-        # Scrape fresh data
         fresh_club = await scraper.scrape_club()
         if not fresh_club or not fresh_club.matches:
             return
@@ -574,16 +580,13 @@ async def match_monitor():
         latest = fresh_club.matches[0]
         match_id = getattr(latest, "match_id", None) or f"{latest.date}_{latest.opponent}"
 
-        # Deduplication via persistent state
         last_match = state.get("last_match_id", "")
         if match_id == last_match:
             return
 
-        # Update current club
         current_club = fresh_club
         current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
         normalize_club_players(current_club)
-        _data_cache_time = time.time()  # noqa: F841
 
         result = f"{latest.score_for}-{latest.score_against}"
         report = darija.match_report(result, current_club.players)
@@ -2094,21 +2097,70 @@ async def slash_help(interaction: discord.Interaction):
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
 # ─────────────────────────────────────────────────────────────
-# MAIN ENTRY — NO FATAL 429 EXIT
+# MAIN ENTRY — EXPONENTIAL BACKOFF ON 429 (NO CRASH)
 # ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    # Render auto-restarts crashed processes. We NO LONGER intentionally crash.
-    # Instead, we rely on discord.py's built-in rate limit handling + our circuit breaker.
+    backoff = load_backoff_state()
+    consecutive_429s = backoff.get("consecutive_429s", 0)
+    last_429_time = backoff.get("last_429_time", 0)
+
+    # If we crashed recently due to 429, start with a longer delay
+    time_since_last_429 = time.time() - last_429_time
+    if consecutive_429s > 0 and time_since_last_429 < 7200:  # Within 2 hours
+        initial_delay = min(300 * (2 ** min(consecutive_429s, 5)), 3600)
+        logger.info("[STARTUP] Recent 429 history detected (%d consecutive). Waiting %ds before connecting...", 
+                   consecutive_429s, initial_delay)
+        for i in range(initial_delay):
+            time.sleep(1)
+            if i % 60 == 0 and i > 0:
+                logger.info("[STARTUP] Still waiting... %d/%d seconds", i, initial_delay)
+        consecutive_429s = 0
+        save_backoff_state(0, 0)
+
+    # Standard startup delay
     startup_delay = int(os.getenv("DISCORD_STARTUP_DELAY", "15"))
     if startup_delay > 0:
         logger.info("[STARTUP] Waiting %ds before Discord login...", startup_delay)
         time.sleep(startup_delay)
-        logger.info("[STARTUP] Delay complete. Connecting to Discord...")
 
-    try:
-        bot.run(Config.DISCORD_TOKEN, reconnect=True)
-    except Exception as e:
-        logger.error("[FATAL] Bot crashed: %s", e)
-        traceback.print_exc()
-        # Exit with code 0 so Render may restart, but we do NOT sys.exit(1) on 429
-        sys.exit(0)
+    max_retries = 20
+    base_delay = 300  # 5 minutes
+
+    for attempt in range(max_retries):
+        try:
+            logger.info("[STARTUP] Connecting to Discord (attempt %d/%d)...", attempt + 1, max_retries)
+            bot.run(Config.DISCORD_TOKEN, reconnect=True)
+            logger.info("[SHUTDOWN] Bot disconnected normally.")
+            break
+        except discord.HTTPException as e:
+            if e.status == 429:
+                is_cloudflare = "cloudflare" in str(e).lower() or "1015" in str(e)
+                retry_after = getattr(e, "retry_after", None)
+
+                if retry_after and retry_after > 0:
+                    delay = retry_after + 30
+                else:
+                    delay = min(base_delay * (2 ** min(attempt, 6)), 3600)  # Up to 1 hour
+
+                if is_cloudflare:
+                    logger.error("[FATAL] Cloudflare 1015 block detected (IP likely banned). "
+                               "Sleeping %d seconds (attempt %d/%d)...", delay, attempt + 1, max_retries)
+                else:
+                    logger.error("[FATAL] Discord 429 rate limit. "
+                               "Sleeping %d seconds (attempt %d/%d)...", delay, attempt + 1, max_retries)
+
+                save_backoff_state(attempt + 1, time.time())
+                for i in range(delay):
+                    time.sleep(1)
+                    if i % 60 == 0 and i > 0:
+                        logger.info("[BACKOFF] Waiting... %d/%d seconds remaining", i, delay)
+            else:
+                logger.error("[FATAL] Discord HTTP %d error: %s", e.status, e)
+                time.sleep(60)
+        except Exception as e:
+            logger.error("[FATAL] Unexpected error: %s", e)
+            traceback.print_exc()
+            time.sleep(60)
+
+    logger.info("Bot exiting after %d attempts.", max_retries)
+    sys.exit(0)
