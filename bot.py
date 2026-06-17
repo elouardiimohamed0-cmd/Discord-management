@@ -4,7 +4,6 @@ import asyncio
 import logging
 import traceback
 import time
-import sqlite3
 import json
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
@@ -16,19 +15,18 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import Config, load_squad
-from scraper import ProClubsTrackerScraper
+from scraper_service import ScraperService
 from stats_engine import StatsEngine
 from darija_engine import DarijaEngine
 from image_gen import ImageGenerator
 from memory import SquadMemory
 from daily_engine import DailyEngine
 from story_engine import StoryEngine
-from models import ClubStats, PlayerStats
+from models import ClubStats, PlayerStats, MatchResult
 from utils import fuzzy_find_player
-from data_persistence import save_match, save_players_cache, save_club_cache, load_players_cache, load_club_cache, load_matches_cache
 
 # ─────────────────────────────────────────────────────────────
-# LOGGING SETUP
+# LOGGING
 # ─────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -38,27 +36,24 @@ logging.basicConfig(
 logger = logging.getLogger("rachad_bot")
 
 # ─────────────────────────────────────────────────────────────
-# SINGLETON / INSTANCE LOCK (prevents duplicate Render workers)
+# INSTANCE LOCK
 # ─────────────────────────────────────────────────────────────
 class InstanceLock:
-    """File-based lock to ensure only one bot instance runs per container."""
-    def __init__(self, path: str = "/tmp/rachad_bot.lock"):
+    def __init__(self, path="/tmp/rachad_bot.lock"):
         self.path = path
         self.fd = None
-
-    def acquire(self) -> bool:
+    def acquire(self):
         import fcntl
         self.fd = open(self.path, "w")
         try:
             fcntl.lockf(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.fd.write(str(os.getpid()))
             self.fd.flush()
-            logger.info("Instance lock acquired (pid %s)", os.getpid())
+            logger.info("Lock acquired (pid %s)", os.getpid())
             return True
         except (IOError, OSError):
-            logger.error("Another bot instance is already running in this container! Exiting.")
+            logger.error("Another instance running! Exiting.")
             return False
-
     def release(self):
         if self.fd:
             self.fd.close()
@@ -68,30 +63,23 @@ if not _instance_lock.acquire():
     sys.exit(0)
 
 # ─────────────────────────────────────────────────────────────
-# RATE-LIMIT AWARE DISCORD SENDER
+# RATE-LIMIT SENDER
 # ─────────────────────────────────────────────────────────────
 class DiscordRateLimiter:
-    """
-    Wraps all Discord API sends with:
-    - Structured logging
-    - Exponential backoff on 429
-    - Circuit breaker after repeated failures
-    """
-    def __init__(self, max_consecutive_429: int = 5, circuit_breaker_seconds: int = 300):
+    def __init__(self, max_429=5, circuit_seconds=300):
         self._consecutive_429 = 0
-        self._max_consecutive = max_consecutive_429
-        self._circuit_breaker_seconds = circuit_breaker_seconds
+        self._max = max_429
+        self._circuit_seconds = circuit_seconds
         self._circuit_open_until = 0
-        self._send_lock = asyncio.Lock()
+        self._lock = asyncio.Lock()
 
-    async def _send_with_backoff(self, send_fn, *args, **kwargs):
-        async with self._send_lock:
+    async def _send(self, send_fn, *args, **kwargs):
+        async with self._lock:
             if time.time() < self._circuit_open_until:
-                logger.warning("Circuit breaker OPEN — skipping Discord send.")
+                logger.warning("Circuit breaker OPEN — skipping send")
                 return None
-
             max_retries = 5
-            base_delay = 1.0
+            base = 1.0
             for attempt in range(max_retries):
                 try:
                     result = await send_fn(*args, **kwargs)
@@ -100,43 +88,39 @@ class DiscordRateLimiter:
                 except discord.HTTPException as e:
                     if e.status == 429:
                         self._consecutive_429 += 1
-                        retry_after = getattr(e, "retry_after", base_delay * (2 ** attempt))
+                        retry_after = getattr(e, "retry_after", base * (2 ** attempt))
                         logger.warning("Discord 429 (attempt %d/%d). Retry after %.1fs", attempt + 1, max_retries, retry_after)
-                        if self._consecutive_429 >= self._max_consecutive:
-                            logger.error("Too many consecutive 429s. Opening circuit breaker for %ds.", self._circuit_breaker_seconds)
-                            self._circuit_open_until = time.time() + self._circuit_breaker_seconds
+                        if self._consecutive_429 >= self._max:
+                            logger.error("Too many 429s. Circuit breaker %ds", self._circuit_seconds)
+                            self._circuit_open_until = time.time() + self._circuit_seconds
                             return None
                         await asyncio.sleep(retry_after + 0.5)
                     else:
                         raise
                 except Exception as e:
-                    logger.error("Discord send error: %s", e)
+                    logger.error("Send error: %s", e)
                     raise
-            logger.error("Max retries exceeded for Discord send.")
+            logger.error("Max retries exceeded")
             return None
 
-    async def ctx_send(self, ctx: commands.Context, *args, **kwargs):
-        logger.info("[SEND] ctx.send in #%s by %s", ctx.channel.name if ctx.channel else "?", ctx.author.name)
-        return await self._send_with_backoff(ctx.send, *args, **kwargs)
+    async def ctx_send(self, ctx, *args, **kwargs):
+        logger.info("[SEND] ctx.send #%s by %s", getattr(ctx.channel, "name", "?"), ctx.author.name)
+        return await self._send(ctx.send, *args, **kwargs)
 
-    async def interaction_send(self, interaction: discord.Interaction, *args, **kwargs):
-        logger.info("[SEND] interaction.response.send_message by %s", interaction.user.name)
+    async def interaction_send(self, interaction, *args, **kwargs):
+        logger.info("[SEND] interaction by %s", interaction.user.name)
         if interaction.response.is_done():
-            return await self._send_with_backoff(interaction.followup.send, *args, **kwargs)
-        return await self._send_with_backoff(interaction.response.send_message, *args, **kwargs)
+            return await self._send(interaction.followup.send, *args, **kwargs)
+        return await self._send(interaction.response.send_message, *args, **kwargs)
 
-    async def channel_send(self, channel: discord.abc.Messageable, *args, **kwargs):
-        logger.info("[SEND] channel.send in #%s", getattr(channel, "name", "?"))
-        return await self._send_with_backoff(channel.send, *args, **kwargs)
-
-    async def message_edit(self, message: discord.Message, *args, **kwargs):
-        logger.info("[EDIT] message.edit id=%s", message.id)
-        return await self._send_with_backoff(message.edit, *args, **kwargs)
+    async def channel_send(self, channel, *args, **kwargs):
+        logger.info("[SEND] channel.send #%s", getattr(channel, "name", "?"))
+        return await self._send(channel.send, *args, **kwargs)
 
 rl = DiscordRateLimiter()
 
 # ─────────────────────────────────────────────────────────────
-# HEALTH CHECK SERVER
+# HEALTH SERVER
 # ─────────────────────────────────────────────────────────────
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -161,8 +145,8 @@ start_health_server()
 # ─────────────────────────────────────────────────────────────
 # NICKNAME SYSTEM
 # ─────────────────────────────────────────────────────────────
-PSN_TO_NICKNAME: dict = {}
-NICKNAME_TO_PSN: dict = {}
+PSN_TO_NICKNAME = {}
+NICKNAME_TO_PSN = {}
 
 def _build_nickname_maps():
     global PSN_TO_NICKNAME, NICKNAME_TO_PSN
@@ -170,10 +154,7 @@ def _build_nickname_maps():
     NICKNAME_TO_PSN.clear()
     players_iter = []
     if isinstance(squad, dict):
-        if "players" in squad:
-            players_iter = squad.get("players", [])
-        else:
-            players_iter = squad.values()
+        players_iter = squad.get("players", []) if "players" in squad else list(squad.values())
     elif isinstance(squad, list):
         players_iter = squad
     for p in players_iter:
@@ -185,12 +166,12 @@ def _build_nickname_maps():
             PSN_TO_NICKNAME[psn.lower()] = nickname
             NICKNAME_TO_PSN[nickname.lower()] = psn
 
-def resolve_nickname(name: str) -> str:
+def resolve_nickname(name):
     if not name or not isinstance(name, str):
         return name
     return PSN_TO_NICKNAME.get(name.lower(), name)
 
-def resolve_query(query: str) -> str:
+def resolve_query(query):
     if not query or not isinstance(query, str):
         return query
     return NICKNAME_TO_PSN.get(query.lower(), query)
@@ -218,87 +199,71 @@ bot = commands.Bot(
 
 squad = load_squad()
 _build_nickname_maps()
-scraper: Optional[ProClubsTrackerScraper] = None
+scraper = ScraperService()
 darija = DarijaEngine(Config.DEFAULT_PERSONALITY)
 imgen = ImageGenerator(Config.ASSETS_DIR)
 memory = SquadMemory()
 daily_engine = DailyEngine(darija)
 story_engine = StoryEngine()
-current_club: Optional[ClubStats] = None
+current_club = None
 _session_active = False
-
-# Flags to prevent duplicate work on reconnect
 _slash_synced = False
 _startup_scrape_done = False
-
-# Data cache TTL (seconds)
-DATA_CACHE_TTL = 300  # 5 minutes
 _data_cache_time = 0
+DATA_CACHE_TTL = 600  # 10 minutes
 
 # ─────────────────────────────────────────────────────────────
-# PERSISTENT STATE (SQLite) for background tasks
+# DATA CONVERSION: dict -> ClubStats/PlayerStats
 # ─────────────────────────────────────────────────────────────
-class PersistentState:
-    DB = "/tmp/bot_state.db"
-    def __init__(self):
-        self._init()
-
-    def _init(self):
-        conn = sqlite3.connect(self.DB)
-        c = conn.cursor()
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS bot_state (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                updated_at TEXT
-            )
-        """)
-        conn.commit()
-        conn.close()
-
-    def get(self, key: str, default: str = "") -> str:
-        conn = sqlite3.connect(self.DB)
-        c = conn.cursor()
-        c.execute("SELECT value FROM bot_state WHERE key = ?", (key,))
-        row = c.fetchone()
-        conn.close()
-        return row[0] if row else default
-
-    def set(self, key: str, value: str):
-        conn = sqlite3.connect(self.DB)
-        c = conn.cursor()
-        c.execute("""
-            INSERT OR REPLACE INTO bot_state (key, value, updated_at)
-            VALUES (?, ?, ?)
-        """, (key, value, datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
-
-state = PersistentState()
-
-# ─────────────────────────────────────────────────────────────
-# BACKOFF STATE (persists across Render restarts)
-# ─────────────────────────────────────────────────────────────
-BACKOFF_STATE_FILE = "/tmp/rachad_backoff.json"
-
-def load_backoff_state() -> dict:
+def _dict_to_club(data: dict) -> Optional[ClubStats]:
+    if not data:
+        return None
     try:
-        if os.path.exists(BACKOFF_STATE_FILE):
-            with open(BACKOFF_STATE_FILE, "r") as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return {"consecutive_429s": 0, "last_429_time": 0}
+        club = ClubStats(
+            club_name=data.get("club_name", "Rachad L3ERGONI"),
+            division=data.get("division", 6),
+            skill_rating=data.get("skill_rating", 0),
+            wins=data.get("wins", 0),
+            losses=data.get("losses", 0),
+            draws=data.get("draws", 0),
+        )
+        club.goals_scored = data.get("goals_scored", 0)
+        club.goals_conceded = data.get("goals_conceded", 0)
+        club.win_rate = data.get("win_rate", 0.0)
+        club.last_updated = datetime.now()
 
-def save_backoff_state(consecutive: int, last_time: float):
-    try:
-        with open(BACKOFF_STATE_FILE, "w") as f:
-            json.dump({"consecutive_429s": consecutive, "last_429_time": last_time}, f)
-    except Exception:
-        pass
+        club.players = []
+        for p in data.get("players", []):
+            ps = PlayerStats(name=p.get("name", "Unknown"))
+            for k, v in p.items():
+                if hasattr(ps, k):
+                    setattr(ps, k, v)
+            club.players.append(ps)
+
+        club.matches = []
+        for m in data.get("matches", []):
+            try:
+                date_val = m.get("date", datetime.now().isoformat())
+                if isinstance(date_val, str):
+                    date_val = datetime.fromisoformat(date_val)
+                mr = MatchResult(
+                    match_id=m.get("match_id", ""),
+                    date=date_val,
+                    opponent=m.get("opponent", "Unknown"),
+                    score_for=m.get("score_for", 0),
+                    score_against=m.get("score_against", 0),
+                    result=m.get("result", "D"),
+                )
+                club.matches.append(mr)
+            except Exception:
+                pass
+        return club
+    except Exception as e:
+        logger.error("Dict->Club conversion error: %s", e)
+        return None
 
 # ─────────────────────────────────────────────────────────────
-# DATA HELPERS
+# DATA LOADING (NO COMMAND SCraping)
 # ─────────────────────────────────────────────────────────────
 def get_squad_map():
     return {p.get("name", ""): p for p in squad.get("players", [])}
@@ -312,121 +277,49 @@ def find_player(query: str) -> Optional[PlayerStats]:
 def _is_data_fresh() -> bool:
     return current_club is not None and current_club.players and (time.time() - _data_cache_time) < DATA_CACHE_TTL
 
-async def _fetch_club_data() -> Optional[ClubStats]:
+async def _fetch_club_data(force=False, source="background"):
+    """Fetch from scraper service. ONLY called by background tasks or manual sync."""
     global current_club, _data_cache_time
-    if not scraper:
-        return None
     try:
-        club = await scraper.scrape_club()
-        if club and club.players:
-            current_club = club
-            current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
-            normalize_club_players(current_club)
-            _data_cache_time = time.time()
-            save_players_cache(current_club.players)
-            save_club_cache(
-                current_club.club_name,
-                current_club.division,
-                current_club.skill_rating,
-                current_club.wins,
-                current_club.losses,
-                current_club.draws
-            )
-            for m in current_club.matches[:10]:
-                save_match(
-                    m.match_id,
-                    m.date.isoformat() if hasattr(m.date, "isoformat") else str(m.date),
-                    m.opponent,
-                    m.score_for,
-                    m.score_against,
-                    m.result,
-                    {}
-                )
-            logger.info("Data fetched: %d players, %d matches", len(club.players), len(club.matches))
-            return current_club
+        data = await scraper.get_club_data(force=force, source=source)
+        if data:
+            club = _dict_to_club(data)
+            if club and club.players:
+                current_club = club
+                current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
+                normalize_club_players(current_club)
+                _data_cache_time = time.time()
+                logger.info("Data loaded: %d players, %d matches", len(club.players), len(club.matches))
+                return current_club
     except Exception as e:
-        logger.error("Scrape failed: %s", e)
+        logger.error("Fetch error: %s", e)
         traceback.print_exc()
     return None
 
-async def _load_cached_data() -> bool:
-    """Try to load from DB cache if scraper is not ready."""
-    global current_club
-    if current_club and current_club.players:
-        return True
-    club_info = load_club_cache()
-    if not club_info:
-        return False
-    players = load_players_cache()
-    if not players:
-        return False
-    current_club = ClubStats(
-        club_name=club_info.get("club_name", "Rachad L3ERGONI"),
-        division=club_info.get("division", 6),
-        skill_rating=club_info.get("skill_rating", 0),
-        wins=club_info.get("wins", 0),
-        losses=club_info.get("losses", 0),
-        draws=club_info.get("draws", 0),
-    )
-    current_club.players = []
-    for p in players:
-        ps = PlayerStats(name=p.get("name", "Unknown"))
-        for k, v in p.items():
-            if hasattr(ps, k):
-                setattr(ps, k, v)
-        current_club.players.append(ps)
-    normalize_club_players(current_club)
-    logger.info("Loaded %d players from DB cache", len(current_club.players))
-    return True
-
 async def ensure_data(ctx: commands.Context):
+    """Commands NEVER scrape. They only check if cached data exists."""
     if _is_data_fresh():
         return True
-    if not scraper:
-        await rl.ctx_send(ctx, "Scraper not ready. Wait 10s.")
-        return False
-    async with ctx.typing():
-        await rl.ctx_send(ctx, "جاري جلب البيانات...")
-        club = await _fetch_club_data()
-        if not club:
-            await rl.ctx_send(ctx, "ما قدرتش نجيب البيانات من ProClubsTracker. جرب !sync مرة أخرى.")
-            return False
-        await rl.ctx_send(ctx, f"Loaded {len(club.players)} players")
+    if current_club and current_club.players:
         return True
+    await rl.ctx_send(ctx, "⏳ Data not loaded yet. Background sync in progress. Try again in a few minutes.")
+    return False
 
 async def ensure_data_interaction(interaction: discord.Interaction):
     if _is_data_fresh():
         return True
-    if not scraper:
-        await rl.interaction_send(interaction, "Scraper not ready.")
-        return False
-    await rl.interaction_send(interaction, "جاري جلب البيانات...")
-    club = await _fetch_club_data()
-    if not club:
-        await rl.interaction_send(interaction, "ما قدرتش نجيب البيانات من ProClubsTracker. جرب /sync مرة أخرى.")
-        return False
-    await rl.interaction_send(interaction, f"Loaded {len(club.players)} players")
-    return True
-
-# ─────────────────────────────────────────────────────────────
-# GLOBAL COOLDOWN & SPAM PROTECTION
-# ─────────────────────────────────────────────────────────────
-@bot.check
-async def global_cooldown(ctx: commands.Context) -> bool:
-    return True
-
-@bot.before_invoke
-async def log_command(ctx: commands.Context):
-    logger.info("[CMD] %s called by %s in #%s", ctx.command.name if ctx.command else "?", ctx.author.name, ctx.channel.name if ctx.channel else "DM")
+    if current_club and current_club.players:
+        return True
+    await rl.interaction_send(interaction, "⏳ Data not loaded yet. Background sync in progress. Try again in a few minutes.")
+    return False
 
 # ─────────────────────────────────────────────────────────────
 # EVENTS
 # ─────────────────────────────────────────────────────────────
 @bot.event
 async def on_ready():
-    global scraper, _slash_synced, _startup_scrape_done
-    logger.info("Bot online as %s (session_id=%s)", bot.user, getattr(bot, "session_id", "?"))
-    scraper = ProClubsTrackerScraper(Config.PCT_CLUB_URL)
+    global _slash_synced, _startup_scrape_done
+    logger.info("Bot online as %s", bot.user)
     await bot.change_presence(activity=discord.Game(name="!help or /help"))
 
     if not _slash_synced:
@@ -435,13 +328,11 @@ async def on_ready():
             bot.tree.copy_global_to(guild=guild)
             await bot.tree.sync(guild=guild)
             _slash_synced = True
-            logger.info("Slash commands synced to guild %s", Config.DISCORD_GUILD_ID)
+            logger.info("Slash synced to guild %s", Config.DISCORD_GUILD_ID)
         except discord.HTTPException as e:
             if e.status == 429:
-                logger.warning("Slash sync rate limited. Will retry on next reconnect.")
+                logger.warning("Slash sync rate limited. Will retry on reconnect.")
                 _slash_synced = False
-            else:
-                logger.error("Slash sync error: %s", e)
         except Exception as e:
             logger.error("Slash sync error: %s", e)
 
@@ -451,44 +342,37 @@ async def on_ready():
 
     if not daily_post.is_running():
         daily_post.start()
-        logger.info("Daily post task started")
+        logger.info("Daily task started")
     if not match_monitor.is_running():
         match_monitor.start()
-        logger.info("Match monitor task started")
+        logger.info("Match monitor started")
 
 @bot.event
 async def on_disconnect():
-    logger.warning("Bot disconnected from Discord gateway.")
+    logger.warning("Bot disconnected")
 
 @bot.event
 async def on_resumed():
-    logger.info("Bot resumed Discord session.")
+    logger.info("Bot resumed")
 
 async def startup_scrape():
-    global current_club
     try:
         logger.info("Startup scrape...")
-        await asyncio.sleep(3)
-        club = await _fetch_club_data()
-        if club:
-            logger.info("Startup: %d players loaded", len(club.players))
-        else:
-            logger.warning("Startup: no data from scraper, trying DB cache...")
-            await _load_cached_data()
+        await asyncio.sleep(5)
+        await _fetch_club_data(force=False, source="startup")
     except Exception as e:
         logger.error("Startup scrape: %s", e)
-        traceback.print_exc()
 
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
-        await rl.ctx_send(ctx, "هاد الكوماند ما كاينش. جرب !help باش تشوف الكوماندات.")
+        await rl.ctx_send(ctx, "هاد الكوماند ما كاينش. جرب !help.")
         return
     if isinstance(error, commands.MissingRequiredArgument):
         await rl.ctx_send(ctx, f"ناقصك parameter: {error.param.name}.")
         return
     if isinstance(error, commands.NotOwner):
-        await rl.ctx_send(ctx, "غير الowner يقدر يدير هاد الكوماند.")
+        await rl.ctx_send(ctx, "غير الowner.")
         return
     if isinstance(error, commands.CommandOnCooldown):
         await rl.ctx_send(ctx, f"⏳ Cooldown: wait {error.retry_after:.1f}s.")
@@ -498,7 +382,7 @@ async def on_command_error(ctx, error):
     await rl.ctx_send(ctx, f"Error: {str(error)[:300]}")
 
 @bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+async def on_app_command_error(interaction, error):
     logger.error("Slash error: %s", error)
     traceback.print_exc()
     msg = f"Error: {str(error)[:500]}"
@@ -509,50 +393,32 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     except Exception:
         pass
 
+@bot.before_invoke
+async def log_command(ctx):
+    logger.info("[CMD] %s by %s in #%s", ctx.command.name if ctx.command else "?", ctx.author.name, getattr(ctx.channel, "name", "DM"))
+
 # ─────────────────────────────────────────────────────────────
-# BACKGROUND TASKS
+# BACKGROUND TASKS (ONLY these trigger scraping)
 # ─────────────────────────────────────────────────────────────
 @tasks.loop(hours=24)
 async def daily_post():
     channel_id = getattr(Config, "DAILY_CHANNEL_ID", 0)
-    if not channel_id:
+    if not channel_id or not current_club or not current_club.players:
         return
-    if not current_club or not current_club.players:
-        logger.warning("Daily post skipped: no data")
-        return
-
-    today = datetime.now().strftime("%Y-%m-%d")
-    last_daily = state.get("last_daily_post", "")
-    if last_daily == today:
-        logger.info("Daily post already done today (%s). Skipping.", today)
-        return
-
     try:
         channel = bot.get_channel(channel_id)
         if not channel:
-            logger.error("Daily channel %s not found", channel_id)
             return
-
         pick = daily_engine.pick_stat_of_the_day(current_club.players)
         if not pick:
-            logger.warning("Daily post: no stat picked")
             return
-
         is_bad = pick.get("type") == "bad"
         img_path = get_squad_map().get(pick["player"].name, {}).get("image")
-        card = imgen.generate_daily_card(
-            pick["player"], pick["stat_name"], pick["stat_value"],
-            pick["roast"], is_bad, photo_path=img_path
-        )
+        card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad, photo_path=img_path)
         file = discord.File(card, filename="daily.png")
-        embed = discord.Embed(
-            title=pick["title"],
-            description=pick["roast"],
-            color=0xff0000 if is_bad else 0xffd700
-        )
+        embed = discord.Embed(title=pick["title"], description=pick["roast"], color=0xff0000 if is_bad else 0xffd700)
         await rl.channel_send(channel, embed=embed, file=file)
-        state.set("last_daily_post", today)
-        logger.info("Daily post sent successfully")
+        logger.info("Daily post sent")
     except Exception as e:
         logger.error("Daily post error: %s", e)
         traceback.print_exc()
@@ -562,54 +428,56 @@ async def before_daily():
     await bot.wait_until_ready()
     now = datetime.now()
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    wait_seconds = (midnight - now).total_seconds()
-    logger.info("Daily post waiting %.0f seconds until midnight", wait_seconds)
-    await asyncio.sleep(min(wait_seconds, 3600))
+    wait = (midnight - now).total_seconds()
+    logger.info("Daily post waiting %.0fs until midnight", wait)
+    await asyncio.sleep(min(wait, 3600))
 
-@tasks.loop(minutes=5)
+@tasks.loop(minutes=10)  # Changed from 5 to 10 minutes
 async def match_monitor():
+    """Background task: scrape every 10 minutes. Commands NEVER scrape."""
     global current_club
-    if not current_club or not current_club.matches or not scraper:
-        return
-
     try:
-        fresh_club = await scraper.scrape_club()
-        if not fresh_club or not fresh_club.matches:
+        data = await scraper.get_club_data(force=False, source="background")
+        if not data:
+            logger.warning("Match monitor: no data from scraper")
             return
 
-        latest = fresh_club.matches[0]
+        club = _dict_to_club(data)
+        if not club or not club.matches:
+            return
+
+        latest = club.matches[0]
         match_id = getattr(latest, "match_id", None) or f"{latest.date}_{latest.opponent}"
 
-        last_match = state.get("last_match_id", "")
-        if match_id == last_match:
-            return
+        # Check if this is actually new
+        if current_club and current_club.matches:
+            last_id = getattr(current_club.matches[0], "match_id", "")
+            if match_id == last_id:
+                logger.info("Match monitor: no new match")
+                return
 
-        current_club = fresh_club
+        # Update current club
+        current_club = club
         current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
         normalize_club_players(current_club)
 
         result = f"{latest.score_for}-{latest.score_against}"
         report = darija.match_report(result, current_club.players)
 
-        match_channel_id = getattr(Config, "MATCH_CHANNEL_ID", 0)
-        if match_channel_id:
-            match_channel = bot.get_channel(match_channel_id)
-            if match_channel:
-                await rl.channel_send(match_channel, report)
+        match_ch = getattr(Config, "MATCH_CHANNEL_ID", 0)
+        if match_ch:
+            ch = bot.get_channel(match_ch)
+            if ch:
+                await rl.channel_send(ch, report)
 
-        leaderboard_channel_id = getattr(Config, "LEADERBORD_CHANNEL_ID", 0)
-        if leaderboard_channel_id:
-            lb_channel = bot.get_channel(leaderboard_channel_id)
-            if lb_channel:
+        lb_ch = getattr(Config, "LEADERBORD_CHANNEL_ID", 0)
+        if lb_ch:
+            ch = bot.get_channel(lb_ch)
+            if ch:
                 color = 0x00ff00 if latest.result == "W" else 0xff0000 if latest.result == "L" else 0xffff00
-                embed = discord.Embed(
-                    title=f"Match Report: {latest.opponent} {result}",
-                    description=report,
-                    color=color
-                )
-                await rl.channel_send(lb_channel, embed=embed)
+                embed = discord.Embed(title=f"Match Report: {latest.opponent} {result}", description=report, color=color)
+                await rl.channel_send(ch, embed=embed)
 
-        state.set("last_match_id", match_id)
         logger.info("Auto-reported match: %s %s", latest.opponent, result)
     except Exception as e:
         logger.error("Match monitor error: %s", e)
@@ -620,7 +488,7 @@ async def before_match_monitor():
     await bot.wait_until_ready()
 
 # ─────────────────────────────────────────────────────────────
-# PREFIX COMMANDS (with cooldowns)
+# PREFIX COMMANDS (with cooldowns) — NEVER scrape
 # ─────────────────────────────────────────────────────────────
 @bot.command(name="ping")
 @commands.cooldown(1, 5, commands.BucketType.user)
@@ -634,17 +502,22 @@ async def cmd_debug(ctx):
     data_loaded = "Yes" if current_club and current_club.players else "No"
     player_count = len(current_club.players) if current_club and current_club.players else 0
     cache_age = int(time.time() - _data_cache_time) if _data_cache_time else "N/A"
+    metrics = scraper.metrics()
+    db_stats = await scraper.db_stats()
     lines = [
         f"PCT_URL: {Config.PCT_CLUB_URL}",
         f"PORT: {Config.PORT}",
         f"Club ID: {Config.CLUB_ID}",
-        f"Platform: {Config.PCT_PLATFORM}",
         f"Scraper ready: {scraper_ready}",
         f"Data loaded: {data_loaded}",
         f"Players: {player_count}",
         f"Cache age: {cache_age}s",
-        f"Daily posted today: {state.get('last_daily_post', 'No')}",
-        f"Last match: {state.get('last_match_id', 'None')}",
+        f"Scraper cooldown: {metrics['cooldown']} ({metrics['cooldown_remaining']}s remaining)",
+        f"Scraper rate limited: {metrics['rate_limited']}",
+        f"Scraper requests/hour: {metrics['requests_hour']}/{scraper._max_per_hour}",
+        f"Scraper last scrape: {metrics['last_scrape_age']}s ago",
+        f"Scraper failures: {metrics['failures']}",
+        f"DB scrapes (24h): {db_stats.get('total_attempts', 0)} attempts, {db_stats.get('successes', 0)} success, {db_stats.get('failures', 0)} fail",
     ]
     embed = discord.Embed(title="Debug Info", description="\n".join(lines), color=0x808080)
     await rl.ctx_send(ctx, embed=embed)
@@ -659,7 +532,7 @@ async def cmd_resync(ctx):
             bot.tree.clear_commands(guild=guild)
             bot.tree.copy_global_to(guild=guild)
             await bot.tree.sync(guild=guild)
-            await rl.ctx_send(ctx, "Slash commands re-synced. Try /leaderboard now.")
+            await rl.ctx_send(ctx, "Slash commands re-synced.")
         except Exception as e:
             await rl.ctx_send(ctx, f"Resync failed: {e}")
 
@@ -687,14 +560,13 @@ async def cmd_help(ctx):
 @bot.command(name="sync")
 @commands.cooldown(1, 30, commands.BucketType.user)
 async def cmd_sync(ctx):
+    """Manual sync — triggers ONE scrape via ScraperService."""
     async with ctx.typing():
         try:
-            if not scraper:
-                await rl.ctx_send(ctx, "Scraper not ready.")
-                return
-            club = await _fetch_club_data()
+            await rl.ctx_send(ctx, "⏳ جاري التحديث من ProClubsTracker...")
+            club = await _fetch_club_data(force=True, source="manual_sync")
             if not club or not club.players:
-                await rl.ctx_send(ctx, "ما قدرتش نجيب البيانات. شوف Render logs.")
+                await rl.ctx_send(ctx, "ما قدرتش نجيب البيانات. Scraper metrics: " + str(scraper.metrics()))
                 return
             embed = discord.Embed(
                 title="Sync Complete",
@@ -707,7 +579,7 @@ async def cmd_sync(ctx):
             logger.error("SYNC ERROR: %s", tb)
             await rl.ctx_send(ctx, f"Sync failed: {str(e)[:800]}")
 
-# ── Player commands ──
+# ── Player commands (all read from current_club cache, NEVER scrape) ──
 @bot.command(name="stats")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_stats(ctx, *, player: str):
@@ -1352,31 +1224,36 @@ async def cmd_story(ctx):
         await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
 # ─────────────────────────────────────────────────────────────
-# SLASH COMMANDS (with cooldowns)
+# SLASH COMMANDS (with cooldowns) — NEVER scrape
 # ─────────────────────────────────────────────────────────────
 @bot.tree.command(name="ping", description="Test if bot is responding")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_ping(interaction: discord.Interaction):
     await rl.interaction_send(interaction, "Pong! Try /sync next.")
 
-@bot.tree.command(name="debug", description="Show bot state for troubleshooting")
+@bot.tree.command(name="debug", description="Show bot state")
 @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
 async def slash_debug(interaction: discord.Interaction):
     scraper_ready = "Yes" if scraper else "No"
     data_loaded = "Yes" if current_club and current_club.players else "No"
     player_count = len(current_club.players) if current_club and current_club.players else 0
     cache_age = int(time.time() - _data_cache_time) if _data_cache_time else "N/A"
+    metrics = scraper.metrics()
+    db_stats = await scraper.db_stats()
     lines = [
         f"PCT_URL: {Config.PCT_CLUB_URL}",
         f"PORT: {Config.PORT}",
         f"Club ID: {Config.CLUB_ID}",
-        f"Platform: {Config.PCT_PLATFORM}",
         f"Scraper ready: {scraper_ready}",
         f"Data loaded: {data_loaded}",
         f"Players: {player_count}",
         f"Cache age: {cache_age}s",
-        f"Daily posted today: {state.get('last_daily_post', 'No')}",
-        f"Last match: {state.get('last_match_id', 'None')}",
+        f"Scraper cooldown: {metrics['cooldown']} ({metrics['cooldown_remaining']}s)",
+        f"Scraper rate limited: {metrics['rate_limited']}",
+        f"Scraper requests/hour: {metrics['requests_hour']}/{scraper._max_per_hour}",
+        f"Scraper last scrape: {metrics['last_scrape_age']}s ago",
+        f"Scraper failures: {metrics['failures']}",
+        f"DB scrapes (24h): {db_stats.get('total_attempts', 0)} attempts, {db_stats.get('successes', 0)} success",
     ]
     embed = discord.Embed(title="Debug Info", description="\n".join(lines), color=0x808080)
     await rl.interaction_send(interaction, embed=embed)
@@ -1386,12 +1263,10 @@ async def slash_debug(interaction: discord.Interaction):
 async def slash_sync(interaction: discord.Interaction):
     await interaction.response.defer()
     try:
-        if not scraper:
-            await rl.interaction_send(interaction, "Scraper not ready.")
-            return
-        club = await _fetch_club_data()
+        await rl.interaction_send(interaction, "⏳ جاري التحديث من ProClubsTracker...")
+        club = await _fetch_club_data(force=True, source="manual_sync")
         if not club or not club.players:
-            await rl.interaction_send(interaction, "ما قدرتش نجيب البيانات. شوف Render logs.")
+            await rl.interaction_send(interaction, "ما قدرتش نجيب البيانات. Scraper metrics: " + str(scraper.metrics()))
             return
         embed = discord.Embed(title="Sync Complete", description=f"{len(club.players)} players loaded", color=0x00ff00)
         await rl.interaction_send(interaction, embed=embed)
@@ -1426,7 +1301,7 @@ async def slash_stats(interaction: discord.Interaction, player: str):
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
-@bot.tree.command(name="player", description="Complete player profile with anime card")
+@bot.tree.command(name="player", description="Complete player profile")
 @app_commands.describe(player="Player name")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_player(interaction: discord.Interaction, player: str):
@@ -1478,7 +1353,7 @@ async def slash_anime_card(interaction: discord.Interaction, player: str):
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
-@bot.tree.command(name="beast_mode", description="Beast Mode card (best performance)")
+@bot.tree.command(name="beast_mode", description="Beast Mode card")
 @app_commands.describe(player="Player name (optional)")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_beast_mode(interaction: discord.Interaction, player: str = None):
@@ -2097,28 +1972,24 @@ async def slash_help(interaction: discord.Interaction):
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
 # ─────────────────────────────────────────────────────────────
-# MAIN ENTRY — EXPONENTIAL BACKOFF ON 429 (NO CRASH)
+# MAIN ENTRY — Clean process per attempt
 # ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    backoff = load_backoff_state()
+    backoff = load_backoff_state() if 'load_backoff_state' in globals() else {"consecutive_429s": 0, "last_429_time": 0}
     consecutive_429s = backoff.get("consecutive_429s", 0)
     last_429_time = backoff.get("last_429_time", 0)
 
-    # If we crashed recently due to 429/Cloudflare, sleep BEFORE connecting.
-    # Each Render restart reads this state and sleeps longer.
     time_since_last_429 = time.time() - last_429_time
-    if consecutive_429s > 0 and time_since_last_429 < 7200:  # Within 2 hours
+    if consecutive_429s > 0 and time_since_last_429 < 7200:
         initial_delay = min(300 * (2 ** min(consecutive_429s, 5)), 3600)
-        logger.info("[STARTUP] Recent 429/Cloudflare history detected (%d consecutive). "
-                    "Waiting %ds before connecting...", consecutive_429s, initial_delay)
+        logger.info("[STARTUP] Recent 429 history (%d). Waiting %ds...", consecutive_429s, initial_delay)
         for i in range(initial_delay):
             time.sleep(1)
             if i % 60 == 0 and i > 0:
-                logger.info("[STARTUP] Still waiting... %d/%d seconds", i, initial_delay)
+                logger.info("[STARTUP] Still waiting... %d/%d", i, initial_delay)
         consecutive_429s = 0
-        save_backoff_state(0, 0)
+        save_backoff_state(0, 0) if 'save_backoff_state' in globals() else None
 
-    # Standard startup delay
     startup_delay = int(os.getenv("DISCORD_STARTUP_DELAY", "15"))
     if startup_delay > 0:
         logger.info("[STARTUP] Waiting %ds before Discord login...", startup_delay)
@@ -2131,32 +2002,22 @@ if __name__ == "__main__":
     except discord.HTTPException as e:
         is_cloudflare = "cloudflare" in str(e).lower() or "1015" in str(e)
         is_429 = e.status == 429
-
         if is_429 or is_cloudflare:
-            # Calculate next backoff
             new_consecutive = consecutive_429s + 1
-            delay = min(300 * (2 ** min(new_consecutive, 6)), 3600)  # 5min → 10min → 20min → 40min → 1hr
-
+            delay = min(300 * (2 ** min(new_consecutive, 6)), 3600)
             if is_cloudflare:
-                logger.error("[FATAL] Cloudflare 1015 block detected (IP likely banned). "
-                           "Will sleep %ds then exit so Render restarts with a fresh process.", delay)
+                logger.error("[FATAL] Cloudflare 1015. Sleeping %ds then exit for fresh restart...", delay)
             else:
-                logger.error("[FATAL] Discord 429 rate limit. "
-                           "Will sleep %ds then exit so Render restarts with a fresh process.", delay)
-
-            # Save backoff state for the NEXT process restart
-            save_backoff_state(new_consecutive, time.time())
-
-            # Sleep in the same process, then exit cleanly.
-            # Render will restart with a fresh Python process (fresh aiohttp session).
+                logger.error("[FATAL] Discord 429. Sleeping %ds then exit for fresh restart...", delay)
+            save_backoff_state(new_consecutive, time.time()) if 'save_backoff_state' in globals() else None
             for i in range(delay):
                 time.sleep(1)
                 if i % 60 == 0 and i > 0:
-                    logger.info("[BACKOFF] Waiting... %d/%d seconds remaining", i, delay)
-            logger.info("[BACKOFF] Sleep complete. Exiting so Render can restart with fresh process.")
+                    logger.info("[BACKOFF] Waiting... %d/%d", i, delay)
+            logger.info("[BACKOFF] Sleep complete. Exiting for fresh process.")
             sys.exit(0)
         else:
-            logger.error("[FATAL] Discord HTTP %d error: %s", e.status, e)
+            logger.error("[FATAL] Discord HTTP %d: %s", e.status, e)
             sys.exit(0)
     except Exception as e:
         logger.error("[FATAL] Unexpected error: %s", e)
