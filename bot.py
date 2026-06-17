@@ -2104,12 +2104,13 @@ if __name__ == "__main__":
     consecutive_429s = backoff.get("consecutive_429s", 0)
     last_429_time = backoff.get("last_429_time", 0)
 
-    # If we crashed recently due to 429, start with a longer delay
+    # If we crashed recently due to 429/Cloudflare, sleep BEFORE connecting.
+    # Each Render restart reads this state and sleeps longer.
     time_since_last_429 = time.time() - last_429_time
     if consecutive_429s > 0 and time_since_last_429 < 7200:  # Within 2 hours
         initial_delay = min(300 * (2 ** min(consecutive_429s, 5)), 3600)
-        logger.info("[STARTUP] Recent 429 history detected (%d consecutive). Waiting %ds before connecting...", 
-                   consecutive_429s, initial_delay)
+        logger.info("[STARTUP] Recent 429/Cloudflare history detected (%d consecutive). "
+                    "Waiting %ds before connecting...", consecutive_429s, initial_delay)
         for i in range(initial_delay):
             time.sleep(1)
             if i % 60 == 0 and i > 0:
@@ -2123,44 +2124,41 @@ if __name__ == "__main__":
         logger.info("[STARTUP] Waiting %ds before Discord login...", startup_delay)
         time.sleep(startup_delay)
 
-    max_retries = 20
-    base_delay = 300  # 5 minutes
+    try:
+        logger.info("[STARTUP] Connecting to Discord...")
+        bot.run(Config.DISCORD_TOKEN, reconnect=True)
+        logger.info("[SHUTDOWN] Bot disconnected normally.")
+    except discord.HTTPException as e:
+        is_cloudflare = "cloudflare" in str(e).lower() or "1015" in str(e)
+        is_429 = e.status == 429
 
-    for attempt in range(max_retries):
-        try:
-            logger.info("[STARTUP] Connecting to Discord (attempt %d/%d)...", attempt + 1, max_retries)
-            bot.run(Config.DISCORD_TOKEN, reconnect=True)
-            logger.info("[SHUTDOWN] Bot disconnected normally.")
-            break
-        except discord.HTTPException as e:
-            if e.status == 429:
-                is_cloudflare = "cloudflare" in str(e).lower() or "1015" in str(e)
-                retry_after = getattr(e, "retry_after", None)
+        if is_429 or is_cloudflare:
+            # Calculate next backoff
+            new_consecutive = consecutive_429s + 1
+            delay = min(300 * (2 ** min(new_consecutive, 6)), 3600)  # 5min → 10min → 20min → 40min → 1hr
 
-                if retry_after and retry_after > 0:
-                    delay = retry_after + 30
-                else:
-                    delay = min(base_delay * (2 ** min(attempt, 6)), 3600)  # Up to 1 hour
-
-                if is_cloudflare:
-                    logger.error("[FATAL] Cloudflare 1015 block detected (IP likely banned). "
-                               "Sleeping %d seconds (attempt %d/%d)...", delay, attempt + 1, max_retries)
-                else:
-                    logger.error("[FATAL] Discord 429 rate limit. "
-                               "Sleeping %d seconds (attempt %d/%d)...", delay, attempt + 1, max_retries)
-
-                save_backoff_state(attempt + 1, time.time())
-                for i in range(delay):
-                    time.sleep(1)
-                    if i % 60 == 0 and i > 0:
-                        logger.info("[BACKOFF] Waiting... %d/%d seconds remaining", i, delay)
+            if is_cloudflare:
+                logger.error("[FATAL] Cloudflare 1015 block detected (IP likely banned). "
+                           "Will sleep %ds then exit so Render restarts with a fresh process.", delay)
             else:
-                logger.error("[FATAL] Discord HTTP %d error: %s", e.status, e)
-                time.sleep(60)
-        except Exception as e:
-            logger.error("[FATAL] Unexpected error: %s", e)
-            traceback.print_exc()
-            time.sleep(60)
+                logger.error("[FATAL] Discord 429 rate limit. "
+                           "Will sleep %ds then exit so Render restarts with a fresh process.", delay)
 
-    logger.info("Bot exiting after %d attempts.", max_retries)
-    sys.exit(0)
+            # Save backoff state for the NEXT process restart
+            save_backoff_state(new_consecutive, time.time())
+
+            # Sleep in the same process, then exit cleanly.
+            # Render will restart with a fresh Python process (fresh aiohttp session).
+            for i in range(delay):
+                time.sleep(1)
+                if i % 60 == 0 and i > 0:
+                    logger.info("[BACKOFF] Waiting... %d/%d seconds remaining", i, delay)
+            logger.info("[BACKOFF] Sleep complete. Exiting so Render can restart with fresh process.")
+            sys.exit(0)
+        else:
+            logger.error("[FATAL] Discord HTTP %d error: %s", e.status, e)
+            sys.exit(0)
+    except Exception as e:
+        logger.error("[FATAL] Unexpected error: %s", e)
+        traceback.print_exc()
+        sys.exit(0)
