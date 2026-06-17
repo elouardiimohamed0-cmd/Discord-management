@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+import gzip
 import time
 import logging
 from datetime import datetime, timedelta
@@ -186,7 +187,6 @@ class ScraperService:
                 logger.warning("[HTTP] Status %d", r.status_code)
                 return None
 
-            # FIX: Parse from raw bytes to avoid encoding errors
             raw = r.content
 
             # Check for HTML/Cloudflare challenge
@@ -195,6 +195,18 @@ class ScraperService:
                 self._enter_cooldown("Cloudflare HTML response")
                 return None
 
+            # FIX: Detect and decompress gzip
+            # gzip magic bytes: 0x1f 0x8b
+            if raw[:2] == b'\x1f\x8b':
+                try:
+                    raw = gzip.decompress(raw)
+                    logger.info("[HTTP] Decompressed gzip response")
+                except Exception as e:
+                    logger.error("[HTTP] gzip decompress failed: %s", e)
+                    # Try anyway with raw bytes
+                    pass
+
+            # Try parsing JSON from bytes
             try:
                 data = json.loads(raw)
             except Exception:
