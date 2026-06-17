@@ -235,7 +235,8 @@ async def daily_post():
         if not pick:
             return
         is_bad = pick.get("type") == "bad"
-        card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad)
+        img_path = get_squad_map().get(pick["player"].name, {}).get("image")
+        card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad, photo_path=img_path)
         file = discord.File(card, filename="daily.png")
         embed = discord.Embed(title=pick["title"], description=pick["roast"], color=0xff0000 if is_bad else 0xffd700)
         await channel.send(embed=embed, file=file)
@@ -375,7 +376,7 @@ async def cmd_sync(ctx):
             print(f"SYNC ERROR: {tb}")
             await ctx.send(f"Sync failed: {str(e)[:800]}")
 
-# === PHASE 1 COMMANDS (updated for PHASE 3 roast-first) ===
+# === PHASE 1 COMMANDS (updated for PHASE 3) ===
 
 @bot.command(name="stats")
 async def cmd_stats(ctx, *, player: str):
@@ -386,9 +387,10 @@ async def cmd_stats(ctx, *, player: str):
         return
     squad_map = get_squad_map()
     pos = squad_map.get(target.name, {}).get("position", "CM")
+    img_path = squad_map.get(target.name, {}).get("image")
     async with ctx.typing():
         try:
-            card = imgen.generate_player_card(target, pos, division=current_club.division)
+            card = imgen.generate_player_card(target, pos, division=current_club.division, photo_path=img_path)
             file = discord.File(card, filename=f"{target.name}_card.png")
             roast_text = darija.roast(target, pos)
             embed = discord.Embed(title=f"📊 {target.name} — {pos}", description=roast_text, color=0x1e90ff)
@@ -410,7 +412,8 @@ async def cmd_mvp(ctx):
             normalize_club_players(current_club)
             mvp = StatsEngine.get_mvp(current_club.players)
             pos = squad_map.get(mvp.name, {}).get("position", "CM")
-            card = imgen.generate_mvp_card(mvp, pos)
+            img_path = squad_map.get(mvp.name, {}).get("image")
+            card = imgen.generate_mvp_card(mvp, pos, photo_path=img_path)
             file = discord.File(card, filename="mvp.png")
             mvp_text = darija.mvp(mvp)
             embed = discord.Embed(title="🏆 MAN OF THE MATCH", description=mvp_text, color=0xffd700)
@@ -710,10 +713,11 @@ async def cmd_roastplayer(ctx, *, player: str):
         return
     squad_map = get_squad_map()
     pos = squad_map.get(target.name, {}).get("position", "CM")
+    img_path = squad_map.get(target.name, {}).get("image")
     async with ctx.typing():
         try:
             roast = darija.roast(target, pos)
-            card = imgen.generate_roast_card(target, roast, pos)
+            card = imgen.generate_roast_card(target, roast, pos, photo_path=img_path)
             file = discord.File(card, filename=f"{target.name}_roast.png")
             embed = discord.Embed(title=f"🔥 ROAST REPORT — {target.name}", description=roast, color=0xff0000)
             await ctx.send(embed=embed, file=file)
@@ -769,9 +773,10 @@ async def cmd_player(ctx, *, player: str):
         return
     squad_map = get_squad_map()
     pos = squad_map.get(target.name, {}).get("position", "CM")
+    img_path = squad_map.get(target.name, {}).get("image")
     async with ctx.typing():
         try:
-            card = imgen.generate_anime_card(target, pos, "mvp", "PLAYER PROFILE")
+            card = imgen.generate_anime_card(target, pos, "mvp", "PLAYER PROFILE", photo_path=img_path)
             file = discord.File(card, filename=f"{target.name}_profile.png")
             lines = [
                 f"**Position:** {pos}",
@@ -797,9 +802,10 @@ async def cmd_anime_card(ctx, *, player: str):
         return
     squad_map = get_squad_map()
     pos = squad_map.get(target.name, {}).get("position", "CM")
+    img_path = squad_map.get(target.name, {}).get("image")
     async with ctx.typing():
         try:
-            card = imgen.generate_anime_card(target, pos, "beast", "⚡ ANIME LEGEND")
+            card = imgen.generate_anime_card(target, pos, "beast", "⚡ ANIME LEGEND", photo_path=img_path)
             file = discord.File(card, filename=f"{target.name}_anime.png")
             embed = discord.Embed(title=f"⚡ {target.name}", color=0x00ffff)
             await ctx.send(embed=embed, file=file)
@@ -819,13 +825,14 @@ async def cmd_beast_mode(ctx, *, player: str = None):
         return
     squad_map = get_squad_map()
     pos = squad_map.get(target.name, {}).get("position", "CM")
+    img_path = squad_map.get(target.name, {}).get("image")
     async with ctx.typing():
         try:
-            card = imgen.generate_beast_card(target, pos)
+            card = imgen.generate_beast_card(target, pos, photo_path=img_path)
             file = discord.File(card, filename="beast.png")
             embed = discord.Embed(title=f"⚡ BEAST MODE — {target.name}",
-                                  description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
-                                  color=0x00bfff)
+                description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
+                color=0x00bfff)
             await ctx.send(embed=embed, file=file)
         except Exception as e:
             traceback.print_exc()
@@ -840,10 +847,11 @@ async def cmd_court_case(ctx, *, player: str):
         return
     squad_map = get_squad_map()
     pos = squad_map.get(target.name, {}).get("position", "CM")
+    img_path = squad_map.get(target.name, {}).get("image")
     async with ctx.typing():
         try:
             text = darija.court_case(target)
-            card = imgen.generate_court_case(target, pos, ["Evidence generated by Roast Engine"])
+            card = imgen.generate_court_case(target, pos, ["Evidence generated by Roast Engine"], photo_path=img_path)
             file = discord.File(card, filename="court.png")
             color = 0xff0000 if target.throwing_score > 3.0 or target.rating_pg < 5.5 else 0x00ff00
             embed = discord.Embed(title=f"⚖️ COURT CASE: {target.name}", description=text, color=color)
@@ -880,7 +888,8 @@ async def cmd_playmaker(ctx):
             pm = max(current_club.players, key=lambda p: p.assists * 2 + p.pass_accuracy)
             pos = squad_map.get(pm.name, {}).get("position", "CM")
             text = darija.playmaker(pm)
-            card = imgen.generate_playmaker_card(pm, pos)
+            img_path = squad_map.get(pm.name, {}).get("image")
+            card = imgen.generate_playmaker_card(pm, pos, photo_path=img_path)
             file = discord.File(card, filename="playmaker.png")
             embed = discord.Embed(title="🎨 PLAYMAKER", description=text, color=0x00ff00)
             await ctx.send(embed=embed, file=file)
@@ -898,7 +907,8 @@ async def cmd_sniper(ctx):
             normalize_club_players(current_club)
             sniper = max(current_club.players, key=lambda p: p.goals * 2 + p.rating_pg)
             pos = squad_map.get(sniper.name, {}).get("position", "CM")
-            card = imgen.generate_sniper_card(sniper, pos)
+            img_path = squad_map.get(sniper.name, {}).get("image")
+            card = imgen.generate_sniper_card(sniper, pos, photo_path=img_path)
             file = discord.File(card, filename="sniper.png")
             embed = discord.Embed(title="🎯 SNIPER", description=f"**{sniper.name}** — {sniper.goals} goals | Rating: {round(sniper.rating_pg, 1)}", color=0xff4500)
             await ctx.send(embed=embed, file=file)
@@ -1006,7 +1016,8 @@ async def cmd_daily(ctx):
                 await ctx.send("ما قدرتش نجيب daily stat.")
                 return
             is_bad = pick.get("type") == "bad"
-            card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad)
+            img_path = get_squad_map().get(pick["player"].name, {}).get("image")
+            card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad, photo_path=img_path)
             file = discord.File(card, filename="daily.png")
             embed = discord.Embed(title=pick["title"], description=pick["roast"], color=0xff0000 if is_bad else 0xffd700)
             await ctx.send(embed=embed, file=file)
@@ -1083,8 +1094,9 @@ async def slash_stats(interaction: discord.Interaction, player: str):
         return
     squad_map = get_squad_map()
     pos = squad_map.get(target.name, {}).get("position", "CM")
+    img_path = squad_map.get(target.name, {}).get("image")
     try:
-        card = imgen.generate_player_card(target, pos, division=current_club.division)
+        card = imgen.generate_player_card(target, pos, division=current_club.division, photo_path=img_path)
         file = discord.File(card, filename=f"{target.name}_card.png")
         roast_text = darija.roast(target, pos)
         embed = discord.Embed(title=f"📊 {target.name} — {pos}", description=roast_text, color=0x1e90ff)
@@ -1107,8 +1119,9 @@ async def slash_player(interaction: discord.Interaction, player: str):
         return
     squad_map = get_squad_map()
     pos = squad_map.get(target.name, {}).get("position", "CM")
+    img_path = squad_map.get(target.name, {}).get("image")
     try:
-        card = imgen.generate_anime_card(target, pos, "mvp", "PLAYER PROFILE")
+        card = imgen.generate_anime_card(target, pos, "mvp", "PLAYER PROFILE", photo_path=img_path)
         file = discord.File(card, filename=f"{target.name}_profile.png")
         lines = [
             f"**Position:** {pos}",
@@ -1135,8 +1148,9 @@ async def slash_anime_card(interaction: discord.Interaction, player: str):
         return
     squad_map = get_squad_map()
     pos = squad_map.get(target.name, {}).get("position", "CM")
+    img_path = squad_map.get(target.name, {}).get("image")
     try:
-        card = imgen.generate_anime_card(target, pos, "beast", "⚡ ANIME LEGEND")
+        card = imgen.generate_anime_card(target, pos, "beast", "⚡ ANIME LEGEND", photo_path=img_path)
         file = discord.File(card, filename=f"{target.name}_anime.png")
         embed = discord.Embed(title=f"⚡ {target.name}", color=0x00ffff)
         await interaction.followup.send(embed=embed, file=file)
@@ -1158,12 +1172,13 @@ async def slash_beast_mode(interaction: discord.Interaction, player: str = None)
         return
     squad_map = get_squad_map()
     pos = squad_map.get(target.name, {}).get("position", "CM")
+    img_path = squad_map.get(target.name, {}).get("image")
     try:
-        card = imgen.generate_beast_card(target, pos)
+        card = imgen.generate_beast_card(target, pos, photo_path=img_path)
         file = discord.File(card, filename="beast.png")
         embed = discord.Embed(title=f"⚡ BEAST MODE — {target.name}",
-                              description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
-                              color=0x00bfff)
+            description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
+            color=0x00bfff)
         await interaction.followup.send(embed=embed, file=file)
     except Exception as e:
         traceback.print_exc()
@@ -1180,9 +1195,10 @@ async def slash_court_case(interaction: discord.Interaction, player: str):
         return
     squad_map = get_squad_map()
     pos = squad_map.get(target.name, {}).get("position", "CM")
+    img_path = squad_map.get(target.name, {}).get("image")
     try:
         text = darija.court_case(target)
-        card = imgen.generate_court_case(target, pos, ["Evidence generated by Roast Engine"])
+        card = imgen.generate_court_case(target, pos, ["Evidence generated by Roast Engine"], photo_path=img_path)
         file = discord.File(card, filename="court.png")
         color = 0xff0000 if target.throwing_score > 3.0 or target.rating_pg < 5.5 else 0x00ff00
         embed = discord.Embed(title=f"⚖️ COURT CASE: {target.name}", description=text, color=color)
@@ -1201,7 +1217,8 @@ async def slash_mvp(interaction: discord.Interaction):
         normalize_club_players(current_club)
         mvp = StatsEngine.get_mvp(current_club.players)
         pos = squad_map.get(mvp.name, {}).get("position", "CM")
-        card = imgen.generate_mvp_card(mvp, pos)
+        img_path = squad_map.get(mvp.name, {}).get("image")
+        card = imgen.generate_mvp_card(mvp, pos, photo_path=img_path)
         file = discord.File(card, filename="mvp.png")
         mvp_text = darija.mvp(mvp)
         embed = discord.Embed(title="🏆 MAN OF THE MATCH", description=mvp_text, color=0xffd700)
@@ -1370,7 +1387,8 @@ async def slash_playmaker(interaction: discord.Interaction):
         pm = max(current_club.players, key=lambda p: p.assists * 2 + p.pass_accuracy)
         pos = squad_map.get(pm.name, {}).get("position", "CM")
         text = darija.playmaker(pm)
-        card = imgen.generate_playmaker_card(pm, pos)
+        img_path = squad_map.get(pm.name, {}).get("image")
+        card = imgen.generate_playmaker_card(pm, pos, photo_path=img_path)
         file = discord.File(card, filename="playmaker.png")
         embed = discord.Embed(title="🎨 PLAYMAKER", description=text, color=0x00ff00)
         await interaction.followup.send(embed=embed, file=file)
@@ -1388,7 +1406,8 @@ async def slash_sniper(interaction: discord.Interaction):
         normalize_club_players(current_club)
         sniper = max(current_club.players, key=lambda p: p.goals * 2 + p.rating_pg)
         pos = squad_map.get(sniper.name, {}).get("position", "CM")
-        card = imgen.generate_sniper_card(sniper, pos)
+        img_path = squad_map.get(sniper.name, {}).get("image")
+        card = imgen.generate_sniper_card(sniper, pos, photo_path=img_path)
         file = discord.File(card, filename="sniper.png")
         embed = discord.Embed(title="🎯 SNIPER", description=f"**{sniper.name}** — {sniper.goals} goals | Rating: {round(sniper.rating_pg, 1)}", color=0xff4500)
         await interaction.followup.send(embed=embed, file=file)
@@ -1575,7 +1594,8 @@ async def slash_daily(interaction: discord.Interaction):
             await interaction.followup.send("ما قدرتش نجيب daily stat.")
             return
         is_bad = pick.get("type") == "bad"
-        card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad)
+        img_path = get_squad_map().get(pick["player"].name, {}).get("image")
+        card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad, photo_path=img_path)
         file = discord.File(card, filename="daily.png")
         embed = discord.Embed(title=pick["title"], description=pick["roast"], color=0xff0000 if is_bad else 0xffd700)
         await interaction.followup.send(embed=embed, file=file)
@@ -1698,9 +1718,10 @@ async def slash_roastplayer(interaction: discord.Interaction, player: str):
         return
     squad_map = get_squad_map()
     pos = squad_map.get(target.name, {}).get("position", "CM")
+    img_path = squad_map.get(target.name, {}).get("image")
     try:
         roast = darija.roast(target, pos)
-        card = imgen.generate_roast_card(target, roast, pos)
+        card = imgen.generate_roast_card(target, roast, pos, photo_path=img_path)
         file = discord.File(card, filename=f"{target.name}_roast.png")
         embed = discord.Embed(title=f"🔥 ROAST REPORT — {target.name}", description=roast, color=0xff0000)
         await interaction.followup.send(embed=embed, file=file)
@@ -1769,4 +1790,27 @@ async def slash_help(interaction: discord.Interaction):
         await interaction.response.send_message(f"Error: {str(e)[:300]}")
 
 if __name__ == "__main__":
-    bot.run(Config.DISCORD_TOKEN)
+    import time
+    import random
+    max_retries = 5
+    base_delay = 30
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"Bot login attempt {attempt}/{max_retries}...")
+            bot.run(Config.DISCORD_TOKEN)
+            break  # if it exits cleanly, stop retrying
+        except discord.errors.HTTPException as e:
+            if e.status == 429:
+                delay = base_delay * (2 ** (attempt - 1)) + random.randint(5, 15)
+                print(f"Discord rate limited (429). Waiting {delay}s before retry...")
+                time.sleep(delay)
+            else:
+                raise
+        except Exception as e:
+            print(f"Bot crashed: {e}")
+            traceback.print_exc()
+            delay = base_delay + random.randint(5, 15)
+            print(f"Restarting in {delay}s...")
+            time.sleep(delay)
+    else:
+        print("Max retries reached. Bot shutting down.")
