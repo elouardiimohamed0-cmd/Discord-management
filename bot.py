@@ -1791,26 +1791,25 @@ async def slash_help(interaction: discord.Interaction):
 
 if __name__ == "__main__":
     import time
-    import random
-    max_retries = 5
-    base_delay = 30
-    for attempt in range(1, max_retries + 1):
-        try:
-            print(f"Bot login attempt {attempt}/{max_retries}...")
-            bot.run(Config.DISCORD_TOKEN)
-            break  # if it exits cleanly, stop retrying
-        except discord.errors.HTTPException as e:
-            if e.status == 429:
-                delay = base_delay * (2 ** (attempt - 1)) + random.randint(5, 15)
-                print(f"Discord rate limited (429). Waiting {delay}s before retry...")
-                time.sleep(delay)
-            else:
-                raise
-        except Exception as e:
-            print(f"Bot crashed: {e}")
-            traceback.print_exc()
-            delay = base_delay + random.randint(5, 15)
-            print(f"Restarting in {delay}s...")
-            time.sleep(delay)
-    else:
-        print("Max retries reached. Bot shutting down.")
+    import sys
+
+    # Render auto-restarts crashed processes. We add a startup delay so that
+    # if Discord rate-limits us (429), each restart cycle waits long enough
+    # for the ban to clear before trying again.
+    startup_delay = int(os.getenv("DISCORD_STARTUP_DELAY", "45"))
+    if startup_delay > 0:
+        print(f"[STARTUP] Waiting {startup_delay}s before Discord login (rate-limit protection)...")
+        time.sleep(startup_delay)
+        print("[STARTUP] Delay complete. Connecting to Discord...")
+
+    try:
+        bot.run(Config.DISCORD_TOKEN)
+    except discord.errors.HTTPException as e:
+        if e.status == 429:
+            print("[FATAL] Discord rate limited (429). Exiting so Render can restart with fresh delay.")
+            sys.exit(1)
+        raise
+    except Exception as e:
+        print(f"[FATAL] Bot crashed: {e}")
+        traceback.print_exc()
+        sys.exit(1)
