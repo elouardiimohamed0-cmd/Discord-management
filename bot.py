@@ -181,10 +181,14 @@ def normalize_club_players(club):
         return
     for p in club.players:
         if hasattr(p, "name"):
-            if not p.name or not isinstance(p.name, str):
+            if not p.name or not isinstance(p.name, str) or not p.name.strip():
                 p.name = "Unknown"
             else:
-                p.name = resolve_nickname(p.name)
+                resolved = resolve_nickname(p.name.strip())
+                if resolved and isinstance(resolved, str) and resolved.strip():
+                    p.name = resolved.strip()
+                else:
+                    p.name = p.name.strip()
 
 # ─────────────────────────────────────────────────────────────
 # BOT SETUP
@@ -237,13 +241,12 @@ def _dict_to_club(data: dict) -> Optional[ClubStats]:
 
         club.players = []
         for p in data.get("players", []):
-            # FIX: handle None/empty names from API
             raw_name = p.get("name")
-            if not raw_name or not isinstance(raw_name, str):
+            if not raw_name or not isinstance(raw_name, str) or not raw_name.strip():
                 raw_name = "Unknown"
-            ps = PlayerStats(name=raw_name)
+            ps = PlayerStats(name=raw_name.strip())
             for k, v in p.items():
-                if hasattr(ps, k) and k != "name":  # name already set above
+                if hasattr(ps, k) and k != "name":
                     setattr(ps, k, v)
             club.players.append(ps)
 
@@ -273,13 +276,115 @@ def _dict_to_club(data: dict) -> Optional[ClubStats]:
 # DATA LOADING (NO COMMAND SCraping)
 # ─────────────────────────────────────────────────────────────
 def get_squad_map():
-    return {p.get("name", ""): p for p in squad.get("players", [])}
+    """Handle both {"players": [...]} and flat {nickname: {...}} squad.json structures."""
+    if isinstance(squad, dict):
+        if "players" in squad:
+            return {p.get("name", ""): p for p in squad.get("players", []) if isinstance(p, dict)}
+        else:
+            # Flat dict: keys are nicknames, values are player objects
+            return {p.get("name", ""): p for p in squad.values() if isinstance(p, dict)}
+    return {}
+
+def _name_similarity(a: str, b: str) -> float:
+    """Simple similarity score: 0.0 to 1.0"""
+    if not a or not b:
+        return 0.0
+    a, b = a.lower().strip(), b.lower().strip()
+    if a == b:
+        return 1.0
+    if a in b or b in a:
+        return max(len(a), len(b)) / max(len(a), len(b), 1) * 0.8
+    # Count common characters
+    common = sum((a + b).count(c) for c in set(a) & set(b))
+    return common / max(len(a) + len(b), 1)
 
 def find_player(query: str) -> Optional[PlayerStats]:
+    """
+    Find player by real name, nickname, or PSN.
+    Tries multiple strategies in order of specificity.
+    """
     if not current_club or not current_club.players:
         return None
+    if not query or not isinstance(query, str):
+        return None
+
+    query_clean = query.strip().lower()
+    players = current_club.players
+    squad_map = get_squad_map()
+
+    # Strategy 1: Exact match on normalized player name
+    for p in players:
+        name = getattr(p, "name", "")
+        if name and isinstance(name, str) and name.strip().lower() == query_clean:
+            return p
+
+    # Strategy 2: Exact match on resolved PSN/nickname
     resolved = resolve_query(query)
-    return fuzzy_find_player(resolved, current_club.players, squad)
+    if resolved and resolved.lower() != query_clean:
+        for p in players:
+            name = getattr(p, "name", "")
+            if name and isinstance(name, str) and name.strip().lower() == resolved.lower().strip():
+                return p
+
+    # Strategy 3: Partial match on player name (contains)
+    for p in players:
+        name = getattr(p, "name", "")
+        if name and isinstance(name, str) and query_clean in name.strip().lower():
+            return p
+
+    # Strategy 4: Partial match on squad name, PSN, or nickname
+    for p in players:
+        name = getattr(p, "name", "")
+        if not name or not isinstance(name, str):
+            continue
+        info = squad_map.get(name.strip(), {})
+        # Check squad name
+        sq_name = (info.get("name") or "").strip().lower()
+        if query_clean in sq_name or sq_name == query_clean:
+            return p
+        # Check squad PSN
+        sq_psn = (info.get("psn") or info.get("PSN") or "").strip().lower()
+        if query_clean in sq_psn or sq_psn == query_clean:
+            return p
+        # Check squad nickname
+        sq_nick = (info.get("nickname") or "").strip().lower()
+        if query_clean in sq_nick or sq_nick == query_clean:
+            return p
+
+    # Strategy 5: Reverse lookup - query might be a PSN, find matching squad name
+    for sq_name, info in squad_map.items():
+        sq_psn = (info.get("psn") or info.get("PSN") or "").strip().lower()
+        sq_nick = (info.get("nickname") or "").strip().lower()
+        if query_clean == sq_psn or query_clean == sq_nick or query_clean in sq_psn or query_clean in sq_nick:
+            # Found squad entry matching query, now find player with that squad name
+            for p in players:
+                p_name = getattr(p, "name", "")
+                if p_name and isinstance(p_name, str) and p_name.strip().lower() == sq_name.lower().strip():
+                    return p
+
+    # Strategy 6: Fuzzy match - find closest name by similarity
+    best_match = None
+    best_score = 0.0
+    for p in players:
+        name = getattr(p, "name", "")
+        if not name or not isinstance(name, str):
+            continue
+        score = _name_similarity(query_clean, name.strip())
+        # Also check squad aliases
+        info = squad_map.get(name.strip(), {})
+        for alias in [info.get("name"), info.get("psn"), info.get("PSN"), info.get("nickname")]:
+            if alias and isinstance(alias, str):
+                score = max(score, _name_similarity(query_clean, alias.strip()))
+        if score > best_score:
+            best_score = score
+            best_match = p
+
+    if best_score >= 0.5:
+        logger.info("[FIND] Fuzzy match '%s' -> '%s' (score %.2f)", query, getattr(best_match, "name", "?"), best_score)
+        return best_match
+
+    logger.info("[FIND] No match found for '%s' among %d players", query, len(players))
+    return None
 
 def _is_data_fresh() -> bool:
     return current_club is not None and current_club.players and (time.time() - _data_cache_time) < DATA_CACHE_TTL
