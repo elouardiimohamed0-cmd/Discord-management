@@ -26,7 +26,6 @@ HEADERS = {
     "Accept": "application/json, text/html,*/*",
     "Referer": "https://proclubstracker.com/",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
     "DNT": "1",
     "Connection": "keep-alive",
     "Upgrade-Insecure-Requests": "1",
@@ -187,6 +186,8 @@ class ScraperService:
                 logger.warning("[HTTP] Status %d", r.status_code)
                 return None
 
+            # httpx auto-decompresses by default (since we removed Accept-Encoding from headers)
+            # But if server sends compressed data without proper headers, handle manually
             raw = r.content
 
             # Check for HTML/Cloudflare challenge
@@ -195,18 +196,23 @@ class ScraperService:
                 self._enter_cooldown("Cloudflare HTML response")
                 return None
 
-            # FIX: Detect and decompress gzip
-            # gzip magic bytes: 0x1f 0x8b
-            if raw[:2] == b'\x1f\x8b':
+            # Manual decompression fallback (if httpx didn't auto-decompress)
+            ce = r.headers.get("content-encoding", "").lower()
+            if raw[:2] == b'\x1f\x8b' or "gzip" in ce:
                 try:
                     raw = gzip.decompress(raw)
-                    logger.info("[HTTP] Decompressed gzip response")
+                    logger.info("[HTTP] Decompressed gzip")
                 except Exception as e:
-                    logger.error("[HTTP] gzip decompress failed: %s", e)
-                    # Try anyway with raw bytes
-                    pass
+                    logger.warning("[HTTP] gzip decompress failed: %s", e)
+            elif raw[:4] == b'\x28\xb5\x2f\xfd' or "br" in ce:
+                try:
+                    import brotli
+                    raw = brotli.decompress(raw)
+                    logger.info("[HTTP] Decompressed brotli")
+                except Exception:
+                    logger.warning("[HTTP] brotli not available or failed")
 
-            # Try parsing JSON from bytes
+            # Try parsing JSON
             try:
                 data = json.loads(raw)
             except Exception:
