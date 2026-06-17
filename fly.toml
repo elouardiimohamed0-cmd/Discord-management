@@ -1,0 +1,34 @@
+app = "discord-management"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8000"
+  PYTHONUNBUFFERED = "1"
+  DISCORD_STARTUP_DELAY = "15"
+  SCRAPE_INTERVAL_MINUTES = "10"
+  DEFAULT_PERSONALITY = "casablanca"
+  ROAST_FREQUENCY = "0.95"
+  SQUAD_FILE = "squad.json"
+  ASSETS_DIR = "assets"
+  SQLITE_PATH = "/data/rachad_data.db"
+  # Add your secrets below in fly secrets, NOT here
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[mounts]
+  source = "rachad_data"
+  destination = "/data"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
