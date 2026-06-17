@@ -24,6 +24,8 @@ class Config:
     ASSETS_DIR = os.environ.get("ASSETS_DIR", "assets")
     PORT = int(os.environ.get("PORT", "8000"))
 
+SQUAD_FILE = os.environ.get("SQUAD_FILE", "squad.json")
+
 def load_squad():
     path = Config.SQUAD_FILE
     if not os.path.exists(path):
