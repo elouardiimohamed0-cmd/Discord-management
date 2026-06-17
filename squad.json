@@ -21,7 +21,7 @@
   "shark": {
     "name": "Shark",
     "psn": "A999SHARK",
-    "position": "ST",
+    "position": "LW",
     "number": 9,
     "nickname": "Shark",
     "nationality": "MA",
@@ -40,7 +40,7 @@
   "moul_l7anot": {
     "name": "Moul L7anot",
     "psn": "Amine_bambo",
-    "position": "CAM",
+    "position": "RW",
     "number": 10,
     "nickname": "Moul L7anot",
     "nationality": "FR",
@@ -59,7 +59,7 @@
   "qahba_south_africa": {
     "name": "9ahba South Africa",
     "psn": "haytanox2",
-    "position": "LW",
+    "position": "RW",
     "number": 11,
     "nickname": "9ahba SA",
     "nationality": "ZA",
@@ -78,7 +78,7 @@
   "kira": {
     "name": "Kira",
     "psn": "A999KIRA",
-    "position": "ST",
+    "position": "RB",
     "number": 99,
     "nickname": "Kira",
     "nationality": "US",
@@ -97,7 +97,7 @@
   "le7ya": {
     "name": "Le7ya",
     "psn": "brown-base7",
-    "position": "ST",
+    "position": "RW",
     "number": 7,
     "nickname": "Le7ya",
     "nationality": "MA",
@@ -173,7 +173,7 @@
   "shawarmista": {
     "name": "Shawarmista",
     "psn": "Hessaidi",
-    "position": "CAM",
+    "position": "CDM",
     "number": 8,
     "nickname": "Shawarmista",
     "nationality": "FR",
