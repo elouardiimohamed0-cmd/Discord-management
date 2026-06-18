@@ -484,3 +484,131 @@ class ImageGenerator:
         img.save(buf, format="PNG", optimize=True)
         buf.seek(0)
         return buf
+
+    # ───────────────────────────────────────────
+    # FORM CARD — Last N Matches Trend
+    # ───────────────────────────────────────────
+    def generate_form_card(self, player, matches_data, num_matches):
+        """Form card showing last N matches trend."""
+        pal = PALETTES["blue"]
+        W, H = CARD_W, CARD_H
+        img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
+        img = _glow_circle(img, W // 2, H // 3, 800, pal["glow"], 0.3)
+        draw = ImageDraw.Draw(img)
+
+        nickname = getattr(player, "_squad_info", {}).get("nickname", player.name)
+        f_title = self._font(90, bold=True)
+        draw.text((W // 2, 80), f"FORM — LAST {num_matches} MATCHES", fill=pal["accent"], font=f_title, anchor="mm")
+
+        f_name = self._font(110, bold=True)
+        draw.text((W // 2, 200), nickname.upper(), fill=pal["text"], font=f_name, anchor="mm")
+
+        # Match rows
+        row_h = 280
+        start_y = 340
+        f_label = self._font(32, bold=True)
+        f_val = self._font(48, bold=True)
+        f_small = self._font(36)
+
+        ratings = []
+        for i, md in enumerate(matches_data[:num_matches]):
+            y = start_y + i * row_h
+            draw.rounded_rectangle([MARGIN, y, W - MARGIN, y + row_h - 20], radius=20, fill=(25, 25, 25, 200), outline=(*pal["accent"], 80), width=2)
+
+            # Date + Opponent
+            draw.text((MARGIN + 30, y + 15), f"{md['date']} vs {md['opponent']}", fill=pal["text_dim"], font=f_label)
+
+            # Stats
+            stats = [
+                ("RATING", f"{md['rating']}"),
+                ("GOALS", str(md['goals'])),
+                ("ASSISTS", str(md['assists'])),
+                ("PASS %", f"{md['pass_acc']}%"),
+            ]
+            box_w = (W - MARGIN * 2 - 60) // 4
+            for j, (sl, sv) in enumerate(stats):
+                x = MARGIN + 30 + j * (box_w + 10)
+                sy = y + 70
+                draw.text((x, sy), sl, fill=pal["text_dim"], font=f_small)
+                draw.text((x, sy + 45), sv, fill=pal["text"], font=f_val)
+
+            ratings.append(md['rating'])
+
+        # Trend
+        if len(ratings) >= 2:
+            half = len(ratings) // 2
+            avg_first = sum(ratings[:half]) / max(half, 1)
+            avg_last = sum(ratings[half:]) / max(len(ratings) - half, 1)
+            if avg_last > avg_first + 0.3:
+                trend = "📈 IMPROVING"
+                trend_color = (50, 255, 100)
+            elif avg_last < avg_first - 0.3:
+                trend = "📉 DECLINING"
+                trend_color = (255, 50, 50)
+            else:
+                trend = "➡️ STABLE"
+                trend_color = (255, 255, 100)
+        else:
+            trend = "➡️ STABLE"
+            trend_color = (255, 255, 100)
+
+        trend_y = start_y + num_matches * row_h + 40
+        f_trend = self._font(80, bold=True)
+        draw.text((W // 2, trend_y), trend, fill=trend_color, font=f_trend, anchor="mm")
+
+        avg_rating = sum(ratings) / max(len(ratings), 1)
+        f_avg = self._font(60)
+        draw.text((W // 2, trend_y + 100), f"Avg Rating: {round(avg_rating, 1)}", fill=pal["text_dim"], font=f_avg, anchor="mm")
+
+        f_foot = self._font(36)
+        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • FORM TRACKER", fill=pal["text_dim"], font=f_foot, anchor="mm")
+
+        img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        buf.seek(0)
+        return buf
+
+    # ───────────────────────────────────────────
+    # RECORDS CARD — Club Historical Records
+    # ───────────────────────────────────────────
+    def generate_records_card(self, club, records):
+        """Club records card."""
+        pal = PALETTES["gold"]
+        W, H = CARD_W, CARD_H
+        img = _gradient_bg(W, H, (8, 6, 2), (25, 18, 6)).convert("RGBA")
+        img = _glow_circle(img, W // 2, H // 3, 700, pal["glow"], 0.25)
+        draw = ImageDraw.Draw(img)
+
+        f_title = self._font(100, bold=True)
+        draw.text((W // 2, 80), "🏆 CLUB RECORDS", fill=pal["accent"], font=f_title, anchor="mm")
+
+        f_sub = self._font(50)
+        draw.text((W // 2, 180), club.club_name.upper(), fill=pal["text"], font=f_sub, anchor="mm")
+
+        row_h = 200
+        start_y = 280
+        f_rec = self._font(40, bold=True)
+        f_val = self._font(56, bold=True)
+
+        for i, (label, value) in enumerate(records[:8]):
+            y = start_y + i * row_h
+            draw.rounded_rectangle([MARGIN, y, W - MARGIN, y + row_h - 20], radius=20, fill=(30, 25, 15, 200), outline=(*pal["accent"], 100), width=2)
+            draw.text((MARGIN + 40, y + row_h // 2 - 30), label, fill=pal["text_dim"], font=f_rec)
+            draw.text((W - MARGIN - 40, y + row_h // 2 - 30), str(value), fill=pal["accent"], font=f_val, anchor="rm")
+
+        f_foot = self._font(36)
+        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • RECORDS", fill=pal["text_dim"], font=f_foot, anchor="mm")
+
+        img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        buf.seek(0)
+        return buf
+
+    # ───────────────────────────────────────────
+    # LEGEND CARD — Club Legend (MVP reframe)
+    # ───────────────────────────────────────────
+    def generate_legend_card(self, player, pos, photo_path=None):
+        """Legend card — same as MVP but with LEGEND label."""
+        return self._build_fc_card(player, pos, "gold", "CLUB LEGEND", photo_override=photo_path)
