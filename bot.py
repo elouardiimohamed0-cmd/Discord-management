@@ -292,7 +292,20 @@ def _dict_to_club(data: dict) -> Optional[ClubStats]:
             raw_name = p.get("name")
             if not raw_name or not isinstance(raw_name, str) or not raw_name.strip():
                 raw_name = "Unknown"
-            ps = PlayerStats(name=raw_name.strip())
+            pct_name = raw_name.strip()
+
+            # Try to find squad.json info for this player
+            sq_info = get_squad_info(pct_name)
+            if sq_info:
+                # Use squad.json name for display
+                display_name = sq_info.get("name") or pct_name
+                # Store squad info on the player object for later use
+                ps = PlayerStats(name=display_name)
+                ps._squad_info = sq_info  # internal attribute for image/position
+            else:
+                ps = PlayerStats(name=pct_name)
+                ps._squad_info = {}
+
             for k, v in p.items():
                 if hasattr(ps, k) and k != "name":
                     setattr(ps, k, v)
@@ -337,6 +350,33 @@ def get_squad_map():
     else:
         logger.info("[SQUAD] Loaded %d players from squad.json", len(result))
     return result
+
+
+# ─── SQUAD INFO RESOLVER ───
+def get_squad_info(pct_name: str) -> dict:
+    """Find squad.json entry by PCT name, PSN, or nickname match."""
+    if not pct_name or not isinstance(pct_name, str):
+        return {}
+    sq = get_squad_map()
+    pct_lower = pct_name.strip().lower()
+
+    # Direct match by name
+    for sq_name, info in sq.items():
+        if sq_name and sq_name.lower() == pct_lower:
+            return info
+
+    # Match by PSN
+    for info in sq.values():
+        psn = (info.get("psn") or "").strip().lower()
+        if psn and psn == pct_lower:
+            return info
+
+    # Partial match
+    for sq_name, info in sq.items():
+        if sq_name and (pct_lower in sq_name.lower() or sq_name.lower() in pct_lower):
+            return info
+
+    return {}
 
 
 def _name_similarity(a: str, b: str) -> float:
@@ -584,9 +624,10 @@ async def daily_post():
         if not pick:
             return
         is_bad = pick.get("type") == "bad"
-        raw_img = get_squad_map().get(pick["player"].name, {}).get("image")
+        sq_info = getattr(pick["player"], "_squad_info", {}) or {}
+        raw_img = sq_info.get("image")
         img_path = resolve_image_path(raw_img)
-        display_name = get_squad_display_name(pick["player"].name)
+        display_name = pick["player"].name
         card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad, photo_path=img_path)
         file = discord.File(card, filename="daily.png")
         embed = discord.Embed(title=pick.get("title", f"📊 Daily Stat — {display_name}"), description=pick["roast"], color=0xff0000 if is_bad else 0xffd700)
@@ -761,12 +802,11 @@ async def cmd_stats(ctx, *, player: str):
     if not target:
         await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
         return
-    squad_map = get_squad_map()
-    sq_info = squad_map.get(target.name, {})
+    sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
     raw_img = sq_info.get("image")
     img_path = resolve_image_path(raw_img)
-    display_name = get_squad_display_name(target.name)
+    display_name = target.name
     async with ctx.typing():
         try:
             card = imgen.generate_player_card(target, pos, division=current_club.division, photo_path=img_path)
@@ -787,12 +827,12 @@ async def cmd_mvp(ctx):
     if not await ensure_data(ctx): return
     async with ctx.typing():
         try:
-            squad_map = get_squad_map()
             mvp = StatsEngine.get_mvp(current_club.players)
-            sq_info = squad_map.get(mvp.name, {})
+            sq_info = getattr(mvp, "_squad_info", {}) or {}
             pos = sq_info.get("position", "CM")
-            img_path = resolve_image_path(sq_info.get("image"))
-            display_name = get_squad_display_name(mvp.name)
+            raw_img = sq_info.get("image")
+            img_path = resolve_image_path(raw_img)
+            display_name = mvp.name
             card = imgen.generate_mvp_card(mvp, pos, photo_path=img_path)
             file = discord.File(card, filename="mvp.png")
             mvp_text = darija.mvp(mvp)
@@ -1086,12 +1126,11 @@ async def cmd_roastplayer(ctx, *, player: str):
     if not target:
         await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
         return
-    squad_map = get_squad_map()
-    sq_info = squad_map.get(target.name, {})
+    sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
-    raw_img = squad_map.get(target.name, {}).get("image")
+    raw_img = sq_info.get("image")
     img_path = resolve_image_path(raw_img)
-    display_name = get_squad_display_name(target.name)
+    display_name = target.name
     async with ctx.typing():
         try:
             roast = darija.roast(target, pos)
@@ -1145,12 +1184,11 @@ async def cmd_player(ctx, *, player: str):
     if not target:
         await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
         return
-    squad_map = get_squad_map()
-    sq_info = squad_map.get(target.name, {})
+    sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
     raw_img = sq_info.get("image")
     img_path = resolve_image_path(raw_img)
-    display_name = get_squad_display_name(target.name)
+    display_name = target.name
     async with ctx.typing():
         try:
             card = imgen.generate_anime_card(target, pos, "mvp", "PLAYER PROFILE", photo_path=img_path)
@@ -1178,12 +1216,11 @@ async def cmd_anime_card(ctx, *, player: str):
     if not target:
         await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
         return
-    squad_map = get_squad_map()
-    sq_info = squad_map.get(target.name, {})
+    sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
-    raw_img = squad_map.get(target.name, {}).get("image")
+    raw_img = sq_info.get("image")
     img_path = resolve_image_path(raw_img)
-    display_name = get_squad_display_name(target.name)
+    display_name = target.name
     async with ctx.typing():
         try:
             card = imgen.generate_anime_card(target, pos, "beast", "⚡ ANIME LEGEND", photo_path=img_path)
@@ -1205,12 +1242,11 @@ async def cmd_beast_mode(ctx, *, player: str = None):
     if not target:
         await rl.ctx_send(ctx, "ما لقيتش player.")
         return
-    squad_map = get_squad_map()
-    sq_info = squad_map.get(target.name, {})
+    sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
-    raw_img = squad_map.get(target.name, {}).get("image")
+    raw_img = sq_info.get("image")
     img_path = resolve_image_path(raw_img)
-    display_name = get_squad_display_name(target.name)
+    display_name = target.name
     async with ctx.typing():
         try:
             card = imgen.generate_beast_card(target, pos, photo_path=img_path)
@@ -1231,12 +1267,11 @@ async def cmd_court_case(ctx, *, player: str):
     if not target:
         await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
         return
-    squad_map = get_squad_map()
-    sq_info = squad_map.get(target.name, {})
+    sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
-    raw_img = squad_map.get(target.name, {}).get("image")
+    raw_img = sq_info.get("image")
     img_path = resolve_image_path(raw_img)
-    display_name = get_squad_display_name(target.name)
+    display_name = target.name
     async with ctx.typing():
         try:
             text = darija.court_case(target)
@@ -1484,12 +1519,11 @@ async def slash_stats(interaction: discord.Interaction, player: str):
     if not target:
         await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
         return
-    squad_map = get_squad_map()
-    sq_info = squad_map.get(target.name, {})
+    sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
-    raw_img = squad_map.get(target.name, {}).get("image")
+    raw_img = sq_info.get("image")
     img_path = resolve_image_path(raw_img)
-    display_name = get_squad_display_name(target.name)
+    display_name = target.name
     try:
         card = imgen.generate_player_card(target, pos, division=current_club.division, photo_path=img_path)
         file = discord.File(card, filename=f"{display_name}_card.png")
@@ -1513,12 +1547,11 @@ async def slash_player(interaction: discord.Interaction, player: str):
     if not target:
         await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
         return
-    squad_map = get_squad_map()
-    sq_info = squad_map.get(target.name, {})
+    sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
-    raw_img = squad_map.get(target.name, {}).get("image")
+    raw_img = sq_info.get("image")
     img_path = resolve_image_path(raw_img)
-    display_name = get_squad_display_name(target.name)
+    display_name = target.name
     try:
         card = imgen.generate_anime_card(target, pos, "mvp", "PLAYER PROFILE", photo_path=img_path)
         file = discord.File(card, filename=f"{display_name}_profile.png")
@@ -1546,12 +1579,11 @@ async def slash_anime_card(interaction: discord.Interaction, player: str):
     if not target:
         await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
         return
-    squad_map = get_squad_map()
-    sq_info = squad_map.get(target.name, {})
+    sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
-    raw_img = squad_map.get(target.name, {}).get("image")
+    raw_img = sq_info.get("image")
     img_path = resolve_image_path(raw_img)
-    display_name = get_squad_display_name(target.name)
+    display_name = target.name
     try:
         card = imgen.generate_anime_card(target, pos, "beast", "⚡ ANIME LEGEND", photo_path=img_path)
         file = discord.File(card, filename=f"{display_name}_anime.png")
@@ -1574,12 +1606,11 @@ async def slash_beast_mode(interaction: discord.Interaction, player: str = None)
     if not target:
         await rl.interaction_send(interaction, "ما لقيتش player.")
         return
-    squad_map = get_squad_map()
-    sq_info = squad_map.get(target.name, {})
+    sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
-    raw_img = squad_map.get(target.name, {}).get("image")
+    raw_img = sq_info.get("image")
     img_path = resolve_image_path(raw_img)
-    display_name = get_squad_display_name(target.name)
+    display_name = target.name
     try:
         card = imgen.generate_beast_card(target, pos, photo_path=img_path)
         file = discord.File(card, filename="beast.png")
@@ -1601,12 +1632,11 @@ async def slash_court_case(interaction: discord.Interaction, player: str):
     if not target:
         await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
         return
-    squad_map = get_squad_map()
-    sq_info = squad_map.get(target.name, {})
+    sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
-    raw_img = squad_map.get(target.name, {}).get("image")
+    raw_img = sq_info.get("image")
     img_path = resolve_image_path(raw_img)
-    display_name = get_squad_display_name(target.name)
+    display_name = target.name
     try:
         text = darija.court_case(target)
         card = imgen.generate_court_case(target, pos, ["Evidence generated by Roast Engine"], photo_path=img_path)
@@ -1624,13 +1654,12 @@ async def slash_mvp(interaction: discord.Interaction):
     await interaction.response.defer()
     if not await ensure_data_interaction(interaction): return
     try:
-        squad_map = get_squad_map()
         mvp = StatsEngine.get_mvp(current_club.players)
-        sq_info = squad_map.get(mvp.name, {})
+        sq_info = getattr(mvp, "_squad_info", {}) or {}
         pos = sq_info.get("position", "CM")
-        raw_img = squad_map.get(mvp.name, {}).get("image")
+        raw_img = sq_info.get("image")
         img_path = resolve_image_path(raw_img)
-        display_name = get_squad_display_name(mvp.name)
+        display_name = mvp.name
         card = imgen.generate_mvp_card(mvp, pos, photo_path=img_path)
         file = discord.File(card, filename="mvp.png")
         mvp_text = darija.mvp(mvp)
@@ -1983,9 +2012,10 @@ async def slash_daily(interaction: discord.Interaction):
             await rl.interaction_send(interaction, "ما قدرتش نجيب daily stat.")
             return
         is_bad = pick.get("type") == "bad"
-        raw_img = get_squad_map().get(pick["player"].name, {}).get("image")
+        sq_info = getattr(pick["player"], "_squad_info", {}) or {}
+        raw_img = sq_info.get("image")
         img_path = resolve_image_path(raw_img)
-        display_name = get_squad_display_name(pick["player"].name)
+        display_name = pick["player"].name
         card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad, photo_path=img_path)
         file = discord.File(card, filename="daily.png")
         embed = discord.Embed(title=pick.get("title", f"📊 Daily Stat — {display_name}"), description=pick["roast"], color=0xff0000 if is_bad else 0xffd700)
@@ -2117,12 +2147,11 @@ async def slash_roastplayer(interaction: discord.Interaction, player: str):
     if not target:
         await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
         return
-    squad_map = get_squad_map()
-    sq_info = squad_map.get(target.name, {})
+    sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
-    raw_img = squad_map.get(target.name, {}).get("image")
+    raw_img = sq_info.get("image")
     img_path = resolve_image_path(raw_img)
-    display_name = get_squad_display_name(target.name)
+    display_name = target.name
     try:
         roast = darija.roast(target, pos)
         card = imgen.generate_roast_card(target, roast, pos, photo_path=img_path)
