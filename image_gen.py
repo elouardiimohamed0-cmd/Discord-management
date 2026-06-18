@@ -173,9 +173,16 @@ class ImageGenerator:
         pal = PALETTES.get(palette_name, PALETTES["gold"])
         W, H = CARD_W, CARD_H
 
-        img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
-        img = _glow_circle(img, W // 2, H // 3, 700, pal["glow"], 0.2)
-        draw = ImageDraw.Draw(img)
+        # ─── PREMIUM TEMPLATE CHECK ───
+        template = self._load_template_for_label(label)
+        if template:
+            img = template.resize((W, H), Image.LANCZOS).convert("RGBA")
+            draw = ImageDraw.Draw(img)
+        else:
+            img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
+            img = _glow_circle(img, W // 2, H // 3, 700, pal["glow"], 0.2)
+            draw = ImageDraw.Draw(img)
+        # ─── END TEMPLATE CHECK ───
 
         nickname = getattr(player, "_squad_info", {}).get("nickname", player.name)
         f_name = self._font(90, bold=True)
