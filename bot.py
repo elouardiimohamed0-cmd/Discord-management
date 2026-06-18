@@ -168,9 +168,8 @@ def _build_nickname_maps():
         if psn and nickname:
             PSN_TO_NICKNAME[psn.lower()] = nickname
             NICKNAME_TO_PSN[nickname.lower()] = psn
-    logger.info("[SQUAD] Nickname maps built: %d PSN->name, %d name->PSN", 
+    logger.info("[SQUAD] Nickname maps built: %d PSN->name, %d name->PSN",
                 len(PSN_TO_NICKNAME), len(NICKNAME_TO_PSN))
-
 
 def resolve_nickname(name):
     if not name or not isinstance(name, str):
@@ -195,6 +194,81 @@ def normalize_club_players(club):
                     p.name = resolved.strip()
                 else:
                     p.name = p.name.strip()
+
+# ─── ACTIVE PLAYER FILTER ───
+# Only keep players who appear in recent match data.
+# This prevents inactive squad members from showing in commands.
+
+def filter_active_players(club: ClubStats) -> None:
+    """
+    Remove players who don't appear in any recent match.
+    Uses squad.json to bridge PSN mismatches (e.g., Kira69Meniari -> A999KIRA).
+    """
+    if not club or not club.matches:
+        return
+
+    active_psns = set()
+    for m in club.matches:
+        if hasattr(m, "player_stats") and m.player_stats:
+            active_psns.update(m.player_stats.keys())
+
+    if not active_psns:
+        logger.warning("[FILTER] No match player data found, skipping filter")
+        return
+
+    squad_map = get_squad_map()
+    filtered = []
+    for p in club.players:
+        p_name = getattr(p, "name", "")
+        if not p_name:
+            continue
+
+        # Find PSN for this player via squad.json
+        psn = None
+        for sq_name, info in squad_map.items():
+            if sq_name and sq_name.lower() == p_name.lower():
+                psn = (info.get("psn") or "").strip()
+                break
+
+        if not psn:
+            psn = p_name
+
+        psn_lower = psn.lower()
+        if psn_lower in active_psns or p_name.lower() in active_psns:
+            filtered.append(p)
+        else:
+            logger.info("[FILTER] Excluding %s (PSN: %s): not in recent match data", p_name, psn)
+
+    before = len(club.players)
+    club.players = filtered
+    after = len(club.players)
+    logger.info("[FILTER] Active players: %d / %d (removed %d inactive)", after, before, before - after)
+
+
+def get_match_players(club: ClubStats, match: MatchResult):
+    """Return only players who played in a specific match."""
+    if not hasattr(match, "player_stats") or not match.player_stats:
+        return club.players
+
+    match_psns = set(match.player_stats.keys())
+    squad_map = get_squad_map()
+
+    # Build reverse map: squad_name -> psn
+    squad_to_psn = {}
+    for sq_name, info in squad_map.items():
+        psn = (info.get("psn") or "").strip().lower()
+        if psn:
+            squad_to_psn[sq_name.lower()] = psn
+
+    result = []
+    for p in club.players:
+        p_name = getattr(p, "name", "").lower()
+        psn = squad_to_psn.get(p_name, p_name)
+        if psn in match_psns or p_name in match_psns:
+            result.append(p)
+
+    return result if result else club.players
+
 
 # ─────────────────────────────────────────────────────────────
 # BOT SETUP
@@ -269,7 +343,6 @@ def get_squad_display_name(player_name: str) -> str:
             return info.get("name", sq_name)
     return player_name
 
-
 def _dict_to_club(data: dict) -> Optional[ClubStats]:
     if not data:
         return None
@@ -290,16 +363,19 @@ def _dict_to_club(data: dict) -> Optional[ClubStats]:
         club.players = []
         for p in data.get("players", []):
             raw_name = p.get("name")
+            pro_name = p.get("pro_name", "")
             if not raw_name or not isinstance(raw_name, str) or not raw_name.strip():
                 raw_name = "Unknown"
             pct_name = raw_name.strip()
 
             # Try to find squad.json info for this player
             sq_info = get_squad_info(pct_name)
+            if not sq_info and pro_name:
+                sq_info = get_squad_info(pro_name)
+
             if sq_info:
                 # Use squad.json name for display
                 display_name = sq_info.get("name") or pct_name
-                # Store squad info on the player object for later use
                 ps = PlayerStats(name=display_name)
                 ps._squad_info = sq_info  # internal attribute for image/position
             else:
@@ -324,6 +400,7 @@ def _dict_to_club(data: dict) -> Optional[ClubStats]:
                     score_for=m.get("score_for", 0),
                     score_against=m.get("score_against", 0),
                     result=m.get("result", "D"),
+                    player_stats=m.get("player_stats", {}),
                 )
                 club.matches.append(mr)
             except Exception:
@@ -345,16 +422,15 @@ def get_squad_map():
         else:
             result = {p.get("name", ""): p for p in squad.values() if isinstance(p, dict)}
     if not result:
-        logger.warning("[SQUAD] squad.json loaded but get_squad_map() returned empty. squad type=%s, keys=%s", 
-                      type(squad).__name__, list(squad.keys())[:10] if isinstance(squad, dict) else "N/A")
+        logger.warning("[SQUAD] squad.json loaded but get_squad_map() returned empty. squad type=%s, keys=%s",
+                       type(squad).__name__, list(squad.keys())[:10] if isinstance(squad, dict) else "N/A")
     else:
         logger.info("[SQUAD] Loaded %d players from squad.json", len(result))
     return result
 
-
 # ─── SQUAD INFO RESOLVER ───
 def get_squad_info(pct_name: str) -> dict:
-    """Find squad.json entry by PCT name, PSN, or nickname match."""
+    """Find squad.json entry by PCT name, PSN, proName, or nickname match."""
     if not pct_name or not isinstance(pct_name, str):
         return {}
     sq = get_squad_map()
@@ -371,13 +447,18 @@ def get_squad_info(pct_name: str) -> dict:
         if psn and psn == pct_lower:
             return info
 
+    # Match by proName / ea_id
+    for info in sq.values():
+        pro = (info.get("proName") or info.get("ea_id") or "").strip().lower()
+        if pro and pro == pct_lower:
+            return info
+
     # Partial match
     for sq_name, info in sq.items():
         if sq_name and (pct_lower in sq_name.lower() or sq_name.lower() in pct_lower):
             return info
 
     return {}
-
 
 def _name_similarity(a: str, b: str) -> float:
     """Simple similarity score: 0.0 to 1.0"""
@@ -394,7 +475,7 @@ def _name_similarity(a: str, b: str) -> float:
 
 def find_player(query: str) -> Optional[PlayerStats]:
     """
-    Find player by real name, nickname, or PSN.
+    Find player by real name, nickname, PSN, or proName.
     Tries multiple strategies in order of specificity.
     """
     if not current_club or not current_club.players:
@@ -426,7 +507,7 @@ def find_player(query: str) -> Optional[PlayerStats]:
         if name and isinstance(name, str) and query_clean in name.strip().lower():
             return p
 
-    # Strategy 4: Partial match on squad name, PSN, or nickname
+    # Strategy 4: Partial match on squad name, PSN, nickname, or proName
     for p in players:
         name = getattr(p, "name", "")
         if not name or not isinstance(name, str):
@@ -444,12 +525,17 @@ def find_player(query: str) -> Optional[PlayerStats]:
         sq_nick = (info.get("nickname") or "").strip().lower()
         if query_clean in sq_nick or sq_nick == query_clean:
             return p
+        # Check proName
+        sq_pro = (info.get("proName") or "").strip().lower()
+        if query_clean in sq_pro or sq_pro == query_clean:
+            return p
 
-    # Strategy 5: Reverse lookup - query might be a PSN, find matching squad name
+    # Strategy 5: Reverse lookup - query might be a PSN/proName, find matching squad name
     for sq_name, info in squad_map.items():
         sq_psn = (info.get("psn") or info.get("PSN") or "").strip().lower()
         sq_nick = (info.get("nickname") or "").strip().lower()
-        if query_clean == sq_psn or query_clean == sq_nick or query_clean in sq_psn or query_clean in sq_nick:
+        sq_pro = (info.get("proName") or "").strip().lower()
+        if query_clean == sq_psn or query_clean == sq_nick or query_clean == sq_pro or query_clean in sq_psn or query_clean in sq_nick or query_clean in sq_pro:
             # Found squad entry matching query, now find player with that squad name
             for p in players:
                 p_name = getattr(p, "name", "")
@@ -466,7 +552,7 @@ def find_player(query: str) -> Optional[PlayerStats]:
         score = _name_similarity(query_clean, name.strip())
         # Also check squad aliases
         info = squad_map.get(name.strip(), {})
-        for alias in [info.get("name"), info.get("psn"), info.get("PSN"), info.get("nickname")]:
+        for alias in [info.get("name"), info.get("psn"), info.get("PSN"), info.get("nickname"), info.get("proName")]:
             if alias and isinstance(alias, str):
                 score = max(score, _name_similarity(query_clean, alias.strip()))
         if score > best_score:
@@ -494,13 +580,14 @@ async def _fetch_club_data(force=False, source="background"):
                 current_club = club
                 current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
                 normalize_club_players(current_club)
+                filter_active_players(current_club)  # ← ONLY SHOW PLAYERS WHO PLAYED
                 _data_cache_time = time.time()
                 logger.info("Data loaded: %d players, %d matches", len(club.players), len(club.matches))
                 return current_club
     except Exception as e:
         logger.error("Fetch error: %s", e)
         traceback.print_exc()
-    return None
+        return None
 
 async def ensure_data(ctx: commands.Context):
     """Commands NEVER scrape. They only check if cached data exists."""
@@ -600,7 +687,7 @@ async def on_app_command_error(interaction, error):
     try:
         if isinstance(error, app_commands.CommandOnCooldown):
             msg = f"⏳ Cooldown: wait {error.retry_after:.1f}s."
-        await rl.interaction_send(interaction, msg)
+            await rl.interaction_send(interaction, msg)
     except Exception:
         pass
 
@@ -674,9 +761,13 @@ async def match_monitor():
         current_club = club
         current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
         normalize_club_players(current_club)
+        filter_active_players(current_club)
 
         result = f"{latest.score_for}-{latest.score_against}"
-        report = darija.match_report(result, current_club.players)
+        
+        # ONLY use players who played in THIS match
+        match_players = get_match_players(current_club, latest)
+        report = darija.match_report(result, match_players)
 
         match_ch = getattr(Config, "MATCH_CHANNEL_ID", 0)
         if match_ch:
@@ -690,7 +781,7 @@ async def match_monitor():
             if ch:
                 color = 0x00ff00 if latest.result == "W" else 0xff0000 if latest.result == "L" else 0xffff00
                 embed = discord.Embed(title=f"Match Report: {latest.opponent} {result}", description=report, color=color)
-                await rl.channel_send(ch, embed=embed)
+                await rl.channel_send(ch, embed)
 
         logger.info("Auto-reported match: %s %s", latest.opponent, result)
     except Exception as e:
@@ -921,7 +1012,7 @@ async def cmd_ballon(ctx):
     async with ctx.typing():
         try:
             ranked = sorted(current_club.players, key=lambda p: p.impact_score + p.clutch_score + p.goals * 2, reverse=True)
-            embed = discord.Embed(title="🏆 BALLON D\'OR", color=0xffd700)
+            embed = discord.Embed(title="🏆 BALLON D'OR", color=0xffd700)
             medals = ["🥇", "🥈", "🥉"]
             for i, p in enumerate(ranked[:5]):
                 medal = medals[i] if i < 3 else f"{i+1}."
@@ -1252,8 +1343,8 @@ async def cmd_beast_mode(ctx, *, player: str = None):
             card = imgen.generate_beast_card(target, pos, photo_path=img_path)
             file = discord.File(card, filename="beast.png")
             embed = discord.Embed(title=f"⚡ BEAST MODE — {display_name}",
-                description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
-                color=0x00bfff)
+                                  description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
+                                  color=0x00bfff)
             await rl.ctx_send(ctx, embed=embed, file=file)
         except Exception as e:
             traceback.print_exc()
@@ -1410,7 +1501,7 @@ async def cmd_awards(ctx):
             top_scorer = max(current_club.players, key=lambda p: p.goals)
             top_assist = max(current_club.players, key=lambda p: p.assists)
             fraud = StatsEngine.get_fraud(current_club.players)
-            embed.add_field(name="🥇 Ballon d\'Or", value=mvp.name, inline=False)
+            embed.add_field(name="🥇 Ballon d'Or", value=mvp.name, inline=False)
             embed.add_field(name="⚽ Golden Boot", value=f"{top_scorer.name} ({top_scorer.goals} goals)", inline=False)
             embed.add_field(name="🅰️ Playmaker Award", value=f"{top_assist.name} ({top_assist.assists} assists)", inline=False)
             embed.add_field(name="🤡 Fraud of the Season", value=f"{fraud.name} ({fraud.throwing_score} throwing)", inline=False)
@@ -1615,8 +1706,8 @@ async def slash_beast_mode(interaction: discord.Interaction, player: str = None)
         card = imgen.generate_beast_card(target, pos, photo_path=img_path)
         file = discord.File(card, filename="beast.png")
         embed = discord.Embed(title=f"⚡ BEAST MODE — {display_name}",
-            description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
-            color=0x00bfff)
+                              description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
+                              color=0x00bfff)
         await rl.interaction_send(interaction, embed=embed, file=file)
     except Exception as e:
         traceback.print_exc()
@@ -1742,14 +1833,14 @@ async def slash_fraud_check(interaction: discord.Interaction, player: str):
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
-@bot.tree.command(name="ballon_dor", description="Ballon d\'Or ranking")
+@bot.tree.command(name="ballon_dor", description="Ballon d'Or ranking")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_ballon_dor(interaction: discord.Interaction):
     await interaction.response.defer()
     if not await ensure_data_interaction(interaction): return
     try:
         ranked = sorted(current_club.players, key=lambda p: p.impact_score + p.clutch_score + p.goals * 2, reverse=True)
-        embed = discord.Embed(title="🏆 BALLON D\'OR", color=0xffd700)
+        embed = discord.Embed(title="🏆 BALLON D'OR", color=0xffd700)
         medals = ["🥇", "🥈", "🥉"]
         for i, p in enumerate(ranked[:5]):
             medal = medals[i] if i < 3 else f"{i+1}."
@@ -1992,7 +2083,7 @@ async def slash_awards(interaction: discord.Interaction):
         top_scorer = max(current_club.players, key=lambda p: p.goals)
         top_assist = max(current_club.players, key=lambda p: p.assists)
         fraud = StatsEngine.get_fraud(current_club.players)
-        embed.add_field(name="🥇 Ballon d\'Or", value=mvp.name, inline=False)
+        embed.add_field(name="🥇 Ballon d'Or", value=mvp.name, inline=False)
         embed.add_field(name="⚽ Golden Boot", value=f"{top_scorer.name} ({top_scorer.goals} goals)", inline=False)
         embed.add_field(name="🅰️ Playmaker Award", value=f"{top_assist.name} ({top_assist.assists} assists)", inline=False)
         embed.add_field(name="🤡 Fraud of the Season", value=f"{fraud.name} ({fraud.throwing_score} throwing)", inline=False)
