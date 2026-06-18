@@ -56,9 +56,9 @@ try:
         generate_milestone_card, generate_weekly_awards_card
     )
     PHASE4_AVAILABLE = True
-    logger.info("[PHASE4] Ecosystem engine loaded successfully")
+    print("[PHASE4] Ecosystem engine loaded successfully")
 except Exception as e:
-    logger.warning("[PHASE4] Could not load ecosystem engine: %s. Phase 4 commands disabled.", e)
+    print(f"[PHASE4] Could not load ecosystem engine: {e}. Phase 4 commands disabled.")
 
 # ─────────────────────────────────────────────────────────────
 # LOGGING
@@ -243,7 +243,6 @@ def get_match_players(club: ClubStats, match: MatchResult):
             result.append(p)
     return result if result else club.players
 
-
 # ─────────────────────────────────────────────────────────────
 # BOT SETUP
 # ─────────────────────────────────────────────────────────────
@@ -261,7 +260,7 @@ bot = commands.Bot(
 squad = load_squad()
 _build_nickname_maps()
 scraper = ScraperService()
-darija = DarijaEngine(squad)
+darija = DarijaEngine(squad)  # FIX: was Config.DEFAULT_PERSONALITY
 imgen = ImageGenerator(Config.ASSETS_DIR)
 memory = SquadMemory()
 daily_engine = DailyEngine(darija)
@@ -567,6 +566,8 @@ async def on_ready():
             if e.status == 429:
                 logger.warning("Slash sync rate limited. Will retry on reconnect.")
                 _slash_synced = False
+            else:
+                logger.error("Slash sync error: %s", e)
         except Exception as e:
             logger.error("Slash sync error: %s", e)
 
@@ -695,7 +696,6 @@ async def match_monitor():
 async def before_match_monitor():
     await bot.wait_until_ready()
 
-
 # ── PHASE 4 BACKGROUND TASKS ──
 
 @tasks.loop(hours=168)
@@ -740,7 +740,6 @@ async def before_weekly_awards():
     logger.info("Weekly awards: waiting %ds until %s", wait_seconds, target)
     await asyncio.sleep(wait_seconds)
 
-
 @tasks.loop(minutes=10)
 async def milestone_monitor():
     global current_club
@@ -765,7 +764,6 @@ async def milestone_monitor():
                 memory.add_event("milestone", p.name, "milestone", alert)
     except Exception as e:
         logger.error("Milestone monitor error: %s", e)
-
 
 # ─────────────────────────────────────────────────────────────
 # PREFIX COMMANDS — existing 21 + Phase 4 (conditional)
@@ -1474,7 +1472,6 @@ async def cmd_match_report(ctx):
         traceback.print_exc()
         await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-
 # ─── PHASE 4 PREFIX COMMANDS (conditional) ───
 
 if PHASE4_AVAILABLE:
@@ -1658,7 +1655,6 @@ if PHASE4_AVAILABLE:
             except Exception as e:
                 traceback.print_exc()
                 await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
-
 
 # ─────────────────────────────────────────────────────────────
 # SLASH COMMANDS — existing + Phase 4 (conditional)
@@ -2275,7 +2271,7 @@ async def slash_legend(interaction: discord.Interaction):
         embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
         embed.add_field(name="Impact", value=str(mvp.impact_score), inline=True)
         embed.add_field(name="Win %", value=f"{round(mvp.win_rate, 1)}%", inline=True)
-        await rl.interaction_send(interaction, embed=embed, file=file)
+        await rl.interaction_send(interaction, file=file, embed=embed)
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -2313,37 +2309,6 @@ async def slash_match_report(interaction: discord.Interaction):
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
-@bot.tree.command(name="court_case", description="Put a player on trial")
-@app_commands.describe(player="Player name")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_court_case(interaction: discord.Interaction, player: str):
-    await interaction.response.defer()
-    if not await ensure_data_interaction(interaction): return
-    target = find_player(player)
-    if not target:
-        await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
-        return
-    sq_info = getattr(target, "_squad_info", {}) or {}
-    pos = sq_info.get("position", "CM")
-    raw_img = sq_info.get("image")
-    img_path = resolve_image_path(raw_img)
-    display_name = target.name
-    try:
-        text = darija.court_case(target)
-        card = imgen.generate_player_photo_card(target, pos, "red", "COURT CASE", photo_path=img_path)
-        file = discord.File(card, filename=f"{display_name}.png")
-        color = 0xff0000 if target.throwing_score > 3.0 or target.rating_pg < 5.5 else 0x00ff00
-        embed = discord.Embed(title=f"⚖️ COURT CASE: {display_name}", description=text, color=color)
-        embed.add_field(name="Throwing", value=str(round(target.throwing_score, 1)), inline=True)
-        embed.add_field(name="Error", value=str(round(target.error_score, 1)), inline=True)
-        embed.add_field(name="Pass %", value=f"{round(target.pass_accuracy, 1)}%", inline=True)
-        embed.add_field(name="Rating", value=str(round(target.rating_pg, 1)), inline=True)
-        embed.add_field(name="Win %", value=f"{round(target.win_rate, 1)}%", inline=True)
-        await rl.interaction_send(interaction, file=file, embed=embed)
-    except Exception as e:
-        traceback.print_exc()
-        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
 @bot.tree.command(name="help", description="Show all commands")
 @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
 async def slash_help(interaction: discord.Interaction):
@@ -2372,7 +2337,6 @@ async def slash_help(interaction: discord.Interaction):
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
 
 # ─── PHASE 4 SLASH COMMANDS (conditional) ───
 
@@ -2562,7 +2526,6 @@ if PHASE4_AVAILABLE:
         except Exception as e:
             traceback.print_exc()
             await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
 
 # ─────────────────────────────────────────────────────────────
 # MAIN ENTRY
