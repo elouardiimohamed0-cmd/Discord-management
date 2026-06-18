@@ -13,16 +13,28 @@ primary_region = "iad"
   ROAST_FREQUENCY = "0.95"
   SQUAD_FILE = "squad.json"
   ASSETS_DIR = "assets"
-  # Ephemeral SQLite — data survives machine restarts but NOT deploys
-  # This is fine — bot re-scrapes within 10 minutes automatically
   SQLITE_PATH = "/app/rachad_data.db"
 
-[http_service]
+[[services]]
   internal_port = 8000
-  force_https = true
+  protocol = "tcp"
   auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [[services.tcp_checks]]
+    grace_period = "30s"
+    interval = "15s"
+    timeout = "2s"
+    restart_limit = 0
 
 [[vm]]
   memory = "512mb"
