@@ -92,13 +92,10 @@ class ScraperService:
 
     async def get_club_data(self, force=False, source="unknown"):
         now = time.time()
-
-        # 1. Memory cache
         if self._mem_cache and (now - self._cache_time) < self._cache_ttl:
             logger.info("[CACHE] Memory hit (age %ds)", int(now - self._cache_time))
             return self._mem_cache
 
-        # 2. Database
         db = await asyncio.to_thread(self.store.get_latest_snapshot)
         if db:
             self._mem_cache = db
@@ -112,7 +109,6 @@ class ScraperService:
             if age < 900:
                 return db
 
-        # 3. Can we scrape?
         if self._in_cooldown():
             rem = int(self._cooldown_until - now)
             logger.warning("[BLOCKED] Cooldown %ds | Source: %s", rem, source)
@@ -129,7 +125,6 @@ class ScraperService:
             logger.info("[BLOCKED] Interval wait %ds | Source: %s", wait, source)
             return db
 
-        # 4. Scrape
         logger.info("[SCRAPE] Starting | Source: %s", source)
         result = await self._scrape(source)
         if result:
@@ -145,28 +140,21 @@ class ScraperService:
     async def _scrape(self, source):
         self._request_count += 1
         reqs = 1
-
-        # Try HTTP
         data = await self._fetch_api()
         if data:
             logger.info("[SCRAPE] API ok | reqs: %d", reqs)
             await asyncio.to_thread(self.store.log_scrape, source, True, "", reqs)
             return data
-
-        # Too many failures?
         if self._consecutive_failures >= self._max_consecutive_failures:
             logger.error("[SCRAPE] Max failures reached")
             await asyncio.to_thread(self.store.log_scrape, source, False, "Max failures", reqs)
             return None
-
-        # Try browser
         reqs += 1
         data = await self._fetch_browser()
         if data:
             logger.info("[SCRAPE] Browser ok | reqs: %d", reqs)
             await asyncio.to_thread(self.store.log_scrape, source, True, "browser", reqs)
             return data
-
         logger.error("[SCRAPE] All failed | reqs: %d", reqs)
         await asyncio.to_thread(self.store.log_scrape, source, False, "All failed", reqs)
         return None
@@ -187,30 +175,24 @@ class ScraperService:
                 return None
 
             raw = r.content
-
-            # Check for HTML/Cloudflare challenge
             if raw[:100].strip().startswith(b"<") or b"cloudflare" in raw[:500].lower():
-                logger.warning("[HTTP] HTML/CF challenge. First 200 bytes: %s", raw[:200])
+                logger.warning("[HTTP] HTML/CF challenge")
                 self._enter_cooldown("Cloudflare HTML response")
                 return None
 
-            # Manual decompression fallback
             ce = r.headers.get("content-encoding", "").lower()
             if raw[:2] == b'\x1f\x8b' or "gzip" in ce:
                 try:
                     raw = gzip.decompress(raw)
-                    logger.info("[HTTP] Decompressed gzip")
                 except Exception as e:
                     logger.warning("[HTTP] gzip decompress failed: %s", e)
             elif raw[:4] == b'\x28\xb5\x2f\xfd' or "br" in ce:
                 try:
                     import brotli
                     raw = brotli.decompress(raw)
-                    logger.info("[HTTP] Decompressed brotli")
                 except Exception:
-                    logger.warning("[HTTP] brotli not available or failed")
+                    pass
 
-            # Try parsing JSON
             try:
                 data = json.loads(raw)
             except Exception:
@@ -218,8 +200,7 @@ class ScraperService:
                     text = raw.decode("utf-8", errors="replace")
                     data = json.loads(text)
                 except Exception as e2:
-                    logger.error("[HTTP] JSON parse fail. First 500 bytes (hex): %s", raw[:500].hex()[:200])
-                    logger.error("[HTTP] Decode error: %s", e2)
+                    logger.error("[HTTP] JSON parse fail: %s", e2)
                     return None
 
             if not isinstance(data, dict):
@@ -244,15 +225,12 @@ class ScraperService:
                 await page.wait_for_selector("text=Club Stats", timeout=10000)
             except Exception:
                 pass
-
             data = await page.evaluate("""
                 () => { return window.__INITIAL_STATE__ || window.__DATA__ || window.clubData || null; }
             """)
             if data and isinstance(data, dict):
                 await self.browser.save_session()
                 return self._parse(data)
-
-            # Fallback API via page
             try:
                 api = await page.evaluate(f"""
                     async () => {{
@@ -273,11 +251,6 @@ class ScraperService:
             return None
 
     def _parse(self, raw):
-        """
-        Parse PCT API response.
-        Uses memberStats (season totals) for REAL website stats.
-        Match data supplements missing fields like minutes_played, shots, saves.
-        """
         try:
             info = raw.get("clubInfoData") or {}
             club = info.get(str(CLUB_ID)) or next(iter(info.values()), {})
@@ -302,7 +275,7 @@ class ScraperService:
             if g > 0:
                 res["win_rate"] = round((res["wins"] / g) * 100, 1)
 
-            # ─── STEP 1: Aggregate match data to supplement missing season stats ───
+            # ─── Aggregate match data ───
             raw_matches = raw.get("matches") or {}
             all_m = (
                 (raw_matches.get("league", []) or [])
@@ -313,6 +286,12 @@ class ScraperService:
             match_agg = {}
             for rm in all_m[:30]:
                 our_id = str(CLUB_ID)
+                clubs = rm.get("clubs", {})
+                ours = clubs.get(our_id, {})
+                gf = self._int(ours.get("goals"), 0)
+                ga = self._int(ours.get("goalsAgainst"), 0)
+                match_result = "W" if gf > ga else "L" if gf < ga else "D"
+
                 players = rm.get("players", {}).get(our_id, {})
                 for pid, p in players.items():
                     name = p.get("playername", "Unknown")
@@ -322,10 +301,12 @@ class ScraperService:
                             "pass_attempts": 0, "pass_completed": 0,
                             "tackles": 0, "saves": 0,
                             "goals_conceded": 0, "redcards": 0,
-                            "clean_sheets": 0,
+                            "clean_sheets": 0, "wins": 0,
                         }
                     a = match_agg[name]
                     a["games"] += 1
+                    if match_result == "W":
+                        a["wins"] += 1
                     a["minutes"] += self._int(p.get("secondsPlayed"), 0) // 60
                     a["shots"] += self._int(p.get("shots"), 0)
                     a["pass_attempts"] += self._int(p.get("passattempts"), 0)
@@ -336,32 +317,29 @@ class ScraperService:
                     a["redcards"] += self._int(p.get("redcards"), 0)
                     a["clean_sheets"] += self._int(p.get("cleansheetsany"), 0)
 
-            # ─── STEP 2: REAL PLAYER STATS from memberStats (season totals) ───
+            # ─── Player stats from memberStats ───
             member_stats = raw.get("memberStats") or {}
             members = member_stats.get("members", [])
 
             for m in members:
                 if not isinstance(m, dict):
                     continue
-                psn_name = m.get("name", "")  # PSN / EA ID (raw API name)
-                pro_name = m.get("proName", "")  # In-game name
+                psn_name = m.get("name", "")
+                pro_name = m.get("proName", "")
                 display_name = pro_name or psn_name
                 if not display_name or not isinstance(display_name, str) or not display_name.strip():
                     continue
 
                 games = self._int(m.get("gamesPlayed"), 0)
                 if games == 0:
-                    logger.debug("[FILTER] Excluding %s: 0 games played this season", psn_name)
                     continue
 
                 rating = self._float(m.get("ratingAve"), 0.0)
                 if rating > 10:
                     rating = round(rating / 10.0, 2)
 
-                # ── Pass accuracy: API gives it directly as a percentage ──
                 pass_acc = self._float(m.get("passSuccessRate"), 0.0)
 
-                # ── Possession losses: derive from passesMade + passSuccessRate ──
                 passes_made = self._int(m.get("passesMade"), 0)
                 if pass_acc > 0 and passes_made > 0:
                     pass_attempts = round(passes_made / (pass_acc / 100.0))
@@ -369,29 +347,36 @@ class ScraperService:
                 else:
                     possession_losses = 0
 
-                # ── Match data supplements (minutes, shots, saves, etc.) ──
                 agg = match_agg.get(psn_name, {})
                 minutes_played = agg.get("minutes", 0)
                 shots = agg.get("shots", 0)
                 saves = agg.get("saves", 0)
                 goals_conceded = agg.get("goals_conceded", 0)
 
-                # Cards: prefer memberStats redCards, fallback to match aggregation
                 cards = self._int(m.get("redCards"), 0)
                 if cards == 0:
                     cards = agg.get("redcards", 0)
 
-                # Clean sheets: prefer memberStats, fallback to match data
                 clean_sheets = self._int(m.get("cleanSheetsDef"), 0) + self._int(m.get("cleanSheetsGK"), 0)
                 if clean_sheets == 0:
                     clean_sheets = agg.get("clean_sheets", 0)
 
-                # Tackles from API (correct camelCase)
                 tackles = self._int(m.get("tacklesMade"), 0)
+
+                # ── WIN RATE: API first, match fallback ──
+                api_win_rate = self._float(m.get("winRate"), 0.0)
+                match_games = agg.get("games", 0)
+                match_wins = agg.get("wins", 0)
+                if api_win_rate > 0:
+                    win_rate = api_win_rate
+                elif match_games > 0:
+                    win_rate = round(match_wins / match_games * 100, 1)
+                else:
+                    win_rate = 0.0
 
                 res["players"].append({
                     "name": display_name.strip(),
-                    "psn_name": psn_name.strip(),  # ← RAW PSN for filtering
+                    "psn_name": psn_name.strip(),
                     "pro_name": pro_name.strip() if pro_name else "",
                     "games": games,
                     "goals": self._int(m.get("goals"), 0),
@@ -399,25 +384,23 @@ class ScraperService:
                     "shots": shots,
                     "rating": rating,
                     "tackles": tackles,
-                    "interceptions": 0,          # Not available in PCT API
+                    "interceptions": 0,
                     "minutes_played": minutes_played,
                     "motm": self._int(m.get("manOfTheMatch"), 0),
                     "pass_accuracy": pass_acc,
                     "passes_made": passes_made,
                     "possession_losses": possession_losses,
-                    "distance_covered": 0.0,     # Not available in PCT API
+                    "distance_covered": 0.0,
                     "cards": cards,
                     "clean_sheets": clean_sheets,
                     "saves": saves,
                     "goals_conceded": goals_conceded,
-                    "win_rate": self._float(m.get("winRate"), 0.0),
+                    "win_rate": win_rate,
                 })
 
-            logger.info("[PARSE] %s | Players from memberStats (season totals): %d",
-                        res["club_name"], len(res["players"]))
+            logger.info("[PARSE] %s | Players: %d", res["club_name"], len(res["players"]))
             logger.info("[PARSE] Players: %s", [p["name"] for p in res["players"]])
 
-            # ─── STEP 3: Parse matches (for match history + per-match player stats) ───
             for rm in all_m[:30]:
                 try:
                     m = self._match(rm)
@@ -428,7 +411,6 @@ class ScraperService:
 
             logger.info("[PARSE] Matches parsed: %d", len(res["matches"]))
 
-            # Save async
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
@@ -466,7 +448,6 @@ class ScraperService:
                 except Exception:
                     pass
 
-            # Extract per-match player stats
             player_stats = {}
             our_players = raw.get("players", {}).get(our_id, {})
             for pid, p in our_players.items():
