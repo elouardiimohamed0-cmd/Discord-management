@@ -68,8 +68,7 @@ def _load_player_photo(name: str, assets_dir: str, max_size=(1600, 1600), photo_
 CARD_W, CARD_H = 1440, 2160
 MARGIN = 80
 
-PALETTES = {
-    LABEL_TO_TEMPLATE = {
+LABEL_TO_TEMPLATE = {
     "MAN OF THE MATCH": "mvp",
     "FRAUD DETECTED": "fraud",
     "GHOST DETECTED": "ghost",
@@ -82,7 +81,9 @@ PALETTES = {
     "PLAYER PROFILE": "mvp",
     "BIO": "mvp",
 }
-    ("gold": {
+
+PALETTES = {
+    "gold": {
         "bg_top": (10, 8, 4), "bg_bot": (30, 22, 8),
         "accent": (255, 215, 0), "accent2": (218, 165, 32),
         "glow": (255, 200, 50), "text": (255, 248, 220),
@@ -233,6 +234,7 @@ class ImageGenerator:
         img.save(buf, format="PNG", optimize=True)
         buf.seek(0)
         return buf
+
     def _load_template_for_label(self, label: str):
         """Check assets/templates/ for a premium background matching this label."""
         card_type = LABEL_TO_TEMPLATE.get(label)
@@ -242,6 +244,7 @@ class ImageGenerator:
         if os.path.exists(path):
             return Image.open(path)
         return None
+
     # ─── FIXED: all wrappers pass photo_path= (not photo_override=) ───
     def generate_player_card(self, player, pos, division=6, photo_path=None):
         return self.generate_player_photo_card(player, pos, "gold", "PLAYER PROFILE", photo_path=photo_path)
