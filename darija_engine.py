@@ -1,357 +1,319 @@
 import random
-from typing import List, Dict, Optional, Tuple
-from dataclasses import dataclass
-from models import PlayerStats, ClubStats
-from phrases import (
-    ROAST_PHRASES, FRAUD_PHRASES, GHOST_PHRASES, MVP_PHRASES,
-    CARRY_PHRASES, BALL_LOSER_PHRASES, COURT_CASE_PHRASES,
-    PLAYMAKER_PHRASES, KEEPER_PHRASES, MATCH_SUMMARY_PHRASES,
-    PLAYER_MEMES, random_phrase, random_player_meme
-)
-
+from typing import List, Optional
+from models import PlayerStats
 
 class DarijaEngine:
-    """
-    PHASE 3 — Roast First Bot
-    =========================
-    The bot is NOT a stats bot.
-    The bot is NOT an analyst.
-    The bot is a teammate that EXPOSES teammates using REAL DATA.
+    def __init__(self, squad_data: dict):
+        self.squad = squad_data
+        self.nicknames = {p.get("name", "").lower(): p.get("nickname", "") for p in squad_data.get("players", [])}
+        self.bios = {p.get("name", "").lower(): p.get("bio", "") for p in squad_data.get("players", [])}
 
-    Design: banter first, stats second.
-    99% roast frequency.
-    Tracks used phrases to avoid repetition.
-    """
+    def get_nickname(self, name: str) -> str:
+        return self.nicknames.get(name.lower(), name)
 
-    PERSONALITIES = {
-        "casablanca": {"roast_freq": 0.99},
-        "analyst": {"roast_freq": 0.50},
-        "toxic": {"roast_freq": 0.99},
-        "coach": {"roast_freq": 0.30},
-        "commentator": {"roast_freq": 0.70},
-        "cafeteria": {"roast_freq": 0.85},
-    }
+    def get_bio(self, name: str) -> str:
+        return self.bios.get(name.lower(), "")
 
-    # Map player names to meme nicknames (case-insensitive)
-    MEME_MAP = {
-        "dictator": "Dictator",
-        "shark": "Shark",
-        "kira": "Kira",
-        "le7ya": "Le7ya",
-        "marrakchi": "Marrakchi",
-        "modamir": "Modamir",
-        "moul l7anot": "Moul_l7anot",
-        "moul_l7anot": "Moul_l7anot",
-        "9ahba south africa": "9ahba",
-        "brave": "Brave",
-        "shawarmista": "Shawarmista",
-    }
+    def roast(self, player: PlayerStats, roast_type: str = "general") -> str:
+        name = player.name
+        nick = self.get_nickname(name)
+        bio = self.get_bio(name)
+        pos = getattr(player, "position", "CM")
 
-    def __init__(self, personality: str = "casablanca"):
-        self.personality = personality if personality in self.PERSONALITIES else "casablanca"
-        self._used: Dict[str, List[str]] = {
-            "roast": [], "fraud": [], "ghost": [], "mvp": [],
-            "carry": [], "ball_loser": [], "court": [],
-            "playmaker": [], "keeper": [], "summary": [],
-        }
-        self._max_history = 15
+        fraud_phrases = [
+            f"🔥 {name} ({nick}) — كيفاش كتقدر تلعب {pos} وما كتعرفش تلعب؟",
+            f"🔥 {name} — الأداء ديالك اليوم كيهضر بزاف. كيهضر بزاف على خيبتك.",
+            f"🔥 {name} — كنتي فالماتش ولا كنتي فالكافيه؟",
+            f"🔥 {name} — الـrating ديالك أقل من temperature ديال الثلاجة.",
+            f"🔥 {name} — {bio} ولكن اليوم كتبان بحال لاعب ديال iron 4.",
+            f"🔥 {name} — كتسجل {player.goals} goals فـ{player.games} games. هادا مشي average، هادا disaster.",
+            f"🔥 {name} — الكورة كتفوت عليك أكثر من الـnotifications ديال الـInstagram.",
+            f"🔥 {name} — كتضيع الكورة بزاف. حتى الكورة بدا ليها sympathy.",
+            f"🔥 {name} — الأداء ديالك اليوم كيهضر. كيهضر بزاف على خيبتك.",
+            f"🔥 {name} — كتبان بحال لاعب كيتعلم football من YouTube tutorials.",
+        ]
 
-    def set_personality(self, p: str):
-        if p in self.PERSONALITIES:
-            self.personality = p
+        ghost_phrases = [
+            f"👻 {name} — كنتي فالماتش ولا كنتي ghost؟",
+            f"👻 {name} — 90 دقيقة وما شفناكش. حتى الـcamera ما لقتكش.",
+            f"👻 {name} — كتبان بحال player invisible. حتى الـradar ما كتبانش.",
+            f"👻 {name} — الأداء ديالك اليوم: 0 tackles, 0 interceptions, 0 presence.",
+            f"👻 {name} — كتجري بلا ball. حتى الـwind كتجري أسرع منك.",
+        ]
 
-    # ───────────────────────── helpers ─────────────────────────
+        carry_phrases = [
+            f"💪 {name} — كتجر الفريق بوحدك. باقي اللاعبين كيتفرجو.",
+            f"💪 {name} — الأداء ديالك اليوم: goals {player.goals}, assists {player.assists}. الفريق بلاك بحال WiFi bla router.",
+            f"💪 {name} — كتسجل أكثر من الـstriker. وكتدافع أكثر من الـdefender. شنو باغي تكون؟",
+            f"💪 {name} — الـrating ديالك {player.rating_pg}. هادا مشي rating، هادا cheat code.",
+        ]
 
-    def _pick(self, phrases: List[str], category: str) -> str:
-        """Pick random phrase, avoid recent repeats."""
-        used = self._used[category]
-        available = [p for p in phrases if p not in used]
-        if not available:
-            used.clear()
-            available = phrases
-        chosen = random.choice(available)
-        used.append(chosen)
-        if len(used) > self._max_history:
-            used.pop(0)
-        return chosen
-
-    def _format(self, template: str, player: PlayerStats) -> str:
-        return template.format(
-            name=player.name,
-            rating=round(player.rating_pg, 1),
-            goals=player.goals,
-            assists=player.assists,
-            games=player.games,
-        )
-
-    def _get_meme(self, player_name: str) -> Optional[str]:
-        key = player_name.strip().lower()
-        nickname = self.MEME_MAP.get(key)
-        if nickname:
-            return random_player_meme(nickname)
-        return None
-
-    def _roast_stats(self, player: PlayerStats) -> List[str]:
-        """Build evidence lines from real stats."""
-        lines = []
-        if player.rating_pg < 6.0:
-            lines.append(f"{round(player.rating_pg, 1)} rating.")
-        if player.possession_losses > 10:
-            lines.append(f"{player.possession_losses} possession losses.")
-        if player.goals == 0 and player.games > 2:
-            lines.append("0 goals.")
-        if player.assists == 0 and player.games > 2:
-            lines.append("0 assists.")
-        if player.pass_accuracy < 70:
-            lines.append(f"{round(player.pass_accuracy, 1)}% pass accuracy.")
-        if player.tackles < 1 and player.games > 2:
-            lines.append("0 tackles.")
-        return lines
-
-    def _praise_stats(self, player: PlayerStats) -> List[str]:
-        """Build praise evidence lines."""
-        lines = []
-        if player.rating_pg >= 7.5:
-            lines.append(f"{round(player.rating_pg, 1)} rating.")
-        if player.goals > 0:
-            lines.append(f"{player.goals} goals.")
-        if player.assists > 0:
-            lines.append(f"{player.assists} assists.")
-        if player.pass_accuracy >= 85:
-            lines.append(f"{round(player.pass_accuracy, 1)}% pass accuracy.")
-        if player.tackles > 5:
-            lines.append(f"{player.tackles} tackles.")
-        return lines
-
-    def _build_response(self, phrase: str, player: PlayerStats,
-                        stats_fn, category: str) -> str:
-        """Roast-first builder: banter → meme → stats."""
-        text = self._format(phrase, player)
-
-        # Player meme
-        meme = self._get_meme(player.name)
-        if meme:
-            text += f"\n\n{meme}"
-
-        # Evidence
-        stats = stats_fn(player)
-        if stats:
-            text += "\n\n" + "\n".join(stats)
-
-        return text
-
-    # ───────────────────────── core methods ─────────────────────────
-
-    def roast(self, player: PlayerStats, position: str = "CM") -> str:
-        phrase = self._pick(ROAST_PHRASES, "roast")
-        return self._build_response(phrase, player, self._roast_stats, "roast")
-
-    def praise(self, player: PlayerStats, position: str = "CM") -> str:
-        phrase = self._pick(CARRY_PHRASES, "carry")
-        return self._build_response(phrase, player, self._praise_stats, "carry")
-
-    def generate(self, player: PlayerStats, position: str = "CM", roast_freq: float = 0.95) -> str:
-        if random.random() < roast_freq:
-            return self.roast(player, position)
-        return self.praise(player, position)
-
-    # ───────────────────────── category roasts ─────────────────────────
-
-    def fraud(self, player: PlayerStats) -> str:
-        """Fraud of the match."""
-        phrase = self._pick(FRAUD_PHRASES, "fraud")
-        return self._build_response(phrase, player, self._roast_stats, "fraud")
-
-    def ghost(self, player: PlayerStats) -> str:
-        """Ghost performance."""
-        phrase = self._pick(GHOST_PHRASES, "ghost")
-        return self._build_response(phrase, player, self._roast_stats, "ghost")
-
-    def ball_loser(self, player: PlayerStats) -> str:
-        """Most possession lost."""
-        phrase = self._pick(BALL_LOSER_PHRASES, "ball_loser")
-        lines = [f"{player.possession_losses} possession losses."]
-        if player.pass_accuracy < 70:
-            lines.append(f"{round(player.pass_accuracy, 1)}% pass accuracy.")
-        text = self._format(phrase, player)
-        meme = self._get_meme(player.name)
-        if meme:
-            text += f"\n\n{meme}"
-        text += "\n\n" + "\n".join(lines)
-        return text
-
-    def court_case(self, player: PlayerStats) -> str:
-        """Put a player on trial."""
-        phrase = self._pick(COURT_CASE_PHRASES, "court")
-        text = self._format(phrase, player)
-        text += "\n\n**التهم:**"
-        charges = []
-        if player.rating_pg < 6.0:
-            charges.append(f"• Rating {round(player.rating_pg, 1)} (الحد الأدنى 6.0)")
-        if player.possession_losses > 10:
-            charges.append(f"• {player.possession_losses} possession losses")
-        if player.goals == 0 and player.games > 2:
-            charges.append("• 0 goals")
-        if player.assists == 0 and player.games > 2:
-            charges.append("• 0 assists")
-        if player.pass_accuracy < 70:
-            charges.append(f"• {round(player.pass_accuracy, 1)}% pass accuracy")
-        if not charges:
-            charges.append("• ما كاين حتى تهمة، الحالة براءة.")
-        text += "\n" + "\n".join(charges)
-        text += "\n\n**الحكم:** "
-        if len(charges) >= 3:
-            text += "مذنب. ⚖️"
-        elif len(charges) >= 2:
-            text += "مذنب بشكل جزئي. ⚠️"
+        if roast_type == "fraud":
+            return random.choice(fraud_phrases)
+        elif roast_type == "ghost":
+            return random.choice(ghost_phrases)
+        elif roast_type == "carry":
+            return random.choice(carry_phrases)
         else:
-            text += "بريء. ✅"
+            return random.choice(fraud_phrases + ghost_phrases)
+
+    def praise(self, player: PlayerStats) -> str:
+        name = player.name
+        nick = self.get_nickname(name)
+        phrases = [
+            f"🔥 {name} ({nick}) — الأداء ديالك اليوم كان أسطوري!",
+            f"🔥 {name} — كتسجل {player.goals} goals و {player.assists} assists. هادا مشي لاعب، هادا machine!",
+            f"🔥 {name} — الـrating ديالك {player.rating_pg}. حتى الـMessi كيتفرج عليك.",
+            f"🔥 {name} — الفريق بلاك بحال phone bla battery.",
+            f"🔥 {name} — كتدافع، كتهاجم، كتباصي. شنو باغي تكون؟ Superhero؟",
+        ]
+        return random.choice(phrases)
+
+    def match_summary(self, match_result: dict) -> str:
+        score = match_result.get("score", "?-?")
+        opponent = match_result.get("opponent", "Unknown")
+        result = match_result.get("result", "D")
+
+        if result == "W":
+            return f"✅ فوز {score} vs {opponent}! الفريق كامل شاد.",
+        elif result == "L":
+            return f"❌ خسارة {score} vs {opponent}. الفريق خاصو يتجمع.",
+        else:
+            return f"🤝 تعادل {score} vs {opponent}. نتيجة عادلة.",
+
+    def leaderboard_intro(self, club_name: str) -> str:
+        phrases = [
+            f"📊 Leaderboard ديال {club_name} — الأرقام ما كتكدبش!",
+            f"📊 {club_name} — شكون كيسيطر، شكون كيتسيطر عليه.",
+            f"📊 ها هوا الحقيقة ديال {club_name} — بلا feelings، بلا emotions.",
+        ]
+        return random.choice(phrases)
+
+    def player_card_caption(self, player: PlayerStats) -> str:
+        name = player.name
+        nick = self.get_nickname(name)
+        bio = self.get_bio(name)
+
+        if player.rating_pg >= 8.0:
+            return f"🔥 {name} ({nick}) — {bio}\nRating: {player.rating_pg} | Goals: {player.goals} | Assists: {player.assists}\nهادا لاعب كيبان مرة فالعمر."
+        elif player.rating_pg >= 6.5:
+            return f"✅ {name} ({nick}) — {bio}\nRating: {player.rating_pg} | Goals: {player.goals} | Assists: {player.assists}\nأداء مقبول، ولكن يمكن أحسن."
+        else:
+            return f"💀 {name} ({nick}) — {bio}\nRating: {player.rating_pg} | Goals: {player.goals} | Assists: {player.assists}\nالأداء ديالك اليوم كيهضر. كيهضر بزاف على خيبتك."
+
+    def court_case(self, player: PlayerStats, charges: List[str]) -> str:
+        name = player.name
+        text = f"⚖️ **المحكمة الرياضية — قضية {name}**\n\n"
+        text += f"التهم:\n"
+        for i, charge in enumerate(charges, 1):
+            text += f"{i}. {charge}\n"
+        text += f"\nالحكم: {name} مذنب فكل التهم. الحكم: lifetime ban من الـstarting XI."
         return text
 
-    def mvp(self, player: PlayerStats) -> str:
-        """MVP announcement."""
-        phrase = self._pick(MVP_PHRASES, "mvp")
-        return self._build_response(phrase, player, self._praise_stats, "mvp")
+    def fraud_verdict(self, player: PlayerStats) -> str:
+        name = player.name
+        phrases = [
+            f"🎭 {name} — التحقيق خلص. الأدلة واضحة. Fraud confirmed.",
+            f"🎭 {name} — كتبان بحال لاعب، ولكن فالحقيقة كتبان بحال spectator.",
+            f"🎭 {name} — الأداء ديالك اليوم كيهضر. كيهضر بزاف على خيبتك.",
+        ]
+        return random.choice(phrases)
 
-    def carry(self, player: PlayerStats) -> str:
-        """Carry of the match."""
-        phrase = self._pick(CARRY_PHRASES, "carry")
-        return self._build_response(phrase, player, self._praise_stats, "carry")
-
-    def playmaker(self, player: PlayerStats) -> str:
-        """Best playmaker."""
-        phrase = self._pick(PLAYMAKER_PHRASES, "playmaker")
-        return self._build_response(phrase, player, self._praise_stats, "playmaker")
-
-    def keeper(self, player: PlayerStats) -> str:
-        """Best keeper."""
-        phrase = self._pick(KEEPER_PHRASES, "keeper")
-        return self._build_response(phrase, player, self._praise_stats, "keeper")
-
-    # ───────────────────────── multi-player ─────────────────────────
-
-    def compare(self, p1: PlayerStats, p2: PlayerStats) -> str:
-        """Compare two players, end with roast."""
-        winner = p1 if p1.impact_score > p2.impact_score else p2
-        loser = p2 if winner == p1 else p1
-        diff = round(abs(p1.impact_score - p2.impact_score), 1)
-
-        text = f"**{winner.name}** vs **{loser.name}**\n\n"
-        text += f"{winner.name}: {round(winner.impact_score, 1)} impact\n"
-        text += f"{loser.name}: {round(loser.impact_score, 1)} impact\n\n"
-
-        # Winner praise
-        wp = self._pick(MVP_PHRASES, "mvp")
-        text += wp.format(name=winner.name) + "\n"
-
-        # Loser roast
-        rp = self._pick(ROAST_PHRASES, "roast")
-        text += rp.format(name=loser.name) + "\n"
-
-        text += f"\nالفرق: {diff} impact points."
+    def daily_digest(self, stats: dict) -> str:
+        text = "📅 **Daily Digest**\n\n"
+        text += f"Games: {stats.get('games', 0)} | Wins: {stats.get('wins', 0)} | Losses: {stats.get('losses', 0)}\n"
+        text += f"Top Scorer: {stats.get('top_scorer', 'N/A')}\n"
+        text += f"Top Fraud: {stats.get('top_fraud', 'N/A')}\n"
+        text += f"MOTM: {stats.get('motm', 'N/A')}\n"
         return text
 
-    def serial_offender(self, player: PlayerStats, bad_games: int = 0) -> str:
-        """Player with repeated bad performances."""
-        phrase = self._pick(FRAUD_PHRASES, "fraud")
-        text = self._format(phrase, player)
-        text += f"\n\n{player.name} كيضيع الكرة فـ {bad_games} ماتشات متتالية."
-        text += "\nهادشي ماشي صدفة، هادا serial offender."
+    # ────────────────────────────────────────────
+    # PHASE 4 METHODS
+    # ────────────────────────────────────────────
+
+    def hall_of_fame(self, records: list) -> str:
+        if not records:
+            return "🏆 **Hall of Fame**\n\nما كاين حتى شي record لحد الآن."
+        text = "🏆 **HALL OF FAME** — التاريخ ما كينساش\n\n"
+        praises = [
+            "هادا الأداء ديال الأساطير.",
+            "التاريخ غادي يتذكر هاد اللحظة.",
+            "هادا مشي لاعب، هادا phenomenon.",
+            "الأرقام كتهضر بوحدها.",
+            "هادا level ديال Ballon d'Or.",
+            "الفريق بلا هاد اللاعب بحال WiFi bla router.",
+        ]
+        for rec in records[:3]:
+            text += f"👑 {rec.player_name} — {rec.description}\n"
+            text += f"   {random.choice(praises)}\n\n"
         return text
 
-    def hall_of_shame(self, players: List[PlayerStats]) -> str:
-        """Worst performances ever."""
-        valid = [p for p in players if p.games > 0 and p.rating_pg > 0]
-        if not valid:
-            return "🏛️ **Hall of Shame**\n\nما كاين حتى لاعبين باش نديرو Hall of Shame."
+    def fame_praise(self, player: PlayerStats) -> str:
+        phrases = [
+            f"🔥 {player.name} — هادا لاعب كيبان مرة فالعمر.",
+            f"🔥 {player.name} — الأداء ديالو اليوم غادي يتدرس فالمدارس.",
+            f"🔥 {player.name} — من فاش كانت اللعبة لعبة، حتى بقات industry.",
+            f"🔥 {player.name} — هادا مشي performance، هادا masterpiece.",
+            f"🔥 {player.name} — الملعب كامل وقف ليه التحية.",
+        ]
+        return random.choice(phrases)
 
-        sorted_players = sorted(valid, key=lambda p: p.rating_pg)
-        worst = sorted_players[:3]
-        text = "🏛️ **Hall of Shame**\n\n"
-        for i, p in enumerate(worst, 1):
-            rp = self._pick(ROAST_PHRASES, "roast")
-            text += f"{i}. {rp.format(name=p.name)}\n"
-            text += f"   Rating: {round(p.rating_pg, 1)} | Possession lost: {p.possession_losses} | Games: {p.games}\n\n"
+    def hall_of_shame_enhanced(self, records: list) -> str:
+        if not records:
+            return "🏛️ **Hall of Shame**\n\nما كاين حتى شي record لحد الآن."
+        text = "🏛️ **HALL OF SHAME** — الأرقام ما كتكدبش\n\n"
+        roasts = [
+            "هادا الأداء خاصو يتعرض فالمحكمة.",
+            "التاريخ غادي يتذكرك، ولكن فالعكس.",
+            "هادا مشي لاعب، هادا case study.",
+            "الأرقام كتهضر بوحدها — وكتقول خايب.",
+            "هادا level ديال iron 4.",
+            "الفريق بلا هاد اللاعب كيكون أحسن.",
+            "VAR رفع يديه من داك الأداء.",
+        ]
+        for rec in records[:3]:
+            text += f"💀 {rec.player_name} — {rec.description}\n"
+            text += f"   {random.choice(roasts)}\n\n"
         return text
 
-    # ───────────────────────── match report ─────────────────────────
-
-    def match_report(self, result: str, players: List[PlayerStats]) -> str:
-        """Full match report with all categories."""
-        text = self._pick(MATCH_SUMMARY_PHRASES, "summary") + "\n\n"
-        text += f"**النتيجة:** {result}\n\n"
-
-        if not players:
-            return text
-
-        # MVP
-        mvp = max(players, key=lambda p: p.impact_score)
-        text += f"🔥 **MVP:** {mvp.name} ({round(mvp.impact_score, 1)} impact)\n"
-        mp = self._pick(MVP_PHRASES, "mvp")
-        text += mp.format(name=mvp.name) + "\n\n"
-
-        # Fraud
-        fraud = min(players, key=lambda p: p.rating_pg)
-        text += f"🚨 **Fraud of the Match:** {fraud.name} ({round(fraud.rating_pg, 1)} rating)\n"
-        fp = self._pick(FRAUD_PHRASES, "fraud")
-        text += fp.format(name=fraud.name) + "\n\n"
-
-        # Ghost
-        ghost = min(players, key=lambda p: p.impact_score)
-        if ghost != fraud:
-            text += f"👻 **Ghost:** {ghost.name} ({round(ghost.impact_score, 1)} impact)\n"
-            gp = self._pick(GHOST_PHRASES, "ghost")
-            text += gp.format(name=ghost.name) + "\n\n"
-
-        # Ball Loser
-        bl = max(players, key=lambda p: p.possession_losses)
-        text += f"⚽ **Ball Loser:** {bl.name} ({bl.possession_losses} losses)\n"
-        bp = self._pick(BALL_LOSER_PHRASES, "ball_loser")
-        text += bp.format(name=bl.name) + "\n\n"
-
-        # Carry
-        carry = max(players, key=lambda p: p.impact_score)
-        if carry != mvp:
-            text += f"🎒 **Carry:** {carry.name} ({round(carry.impact_score, 1)} impact)\n"
-            cp = self._pick(CARRY_PHRASES, "carry")
-            text += cp.format(name=carry.name) + "\n\n"
-
-        # Best Passer
-        passer = max(players, key=lambda p: p.pass_accuracy)
-        text += f"🎯 **Best Passer:** {passer.name} ({round(passer.pass_accuracy, 1)}%)\n"
-        pp = self._pick(PLAYMAKER_PHRASES, "playmaker")
-        text += pp.format(name=passer.name) + "\n\n"
-
-        # Funniest stat
-        text += "**🤣 Funniest Stat:**\n"
-        funniest = min(players, key=lambda p: p.rating_pg)
-        text += f"{funniest.name} — {round(funniest.rating_pg, 1)} rating فـ {funniest.games} ماتشات.\n"
-
+    def rivalry_roast(self, winner: PlayerStats, loser: PlayerStats, stats: dict) -> str:
+        diff = stats.get("p1_categories_won", 0) if stats.get("overall_winner") == winner.name else stats.get("p2_categories_won", 0)
+        roasts = [
+            f"💀 {loser.name} — {winner.name} كيدرك فكل شي. حتى فالخسارة كتخسر.",
+            f"💀 {loser.name} — rivalry ماشي rivalry هادي bullying رسمي.",
+            f"💀 {loser.name} — {winner.name} كيلعب ونت كتجي تشوف. هادا الفرق.",
+            f"💀 {loser.name} — الأرقام كلها ضدك. حتى المحامي ديالك غادي يستقيل.",
+            f"💀 {loser.name} — من بعد هاد المقارنة، خاصك تبدل hobby.",
+            f"💀 {loser.name} — {winner.name} كيسجل أكثر، كيباصي أحسن، وكيفوز أكثر. ونت؟ كتاخد oxygen.",
+        ]
+        text = random.choice(roasts)
+        text += f"\n\n📊 الفرق: {diff} categories. هادا ماشي close، هادا massacre."
         return text
 
-    # ───────────────────────── legacy / misc ─────────────────────────
+    def rivalry_tie(self, p1: PlayerStats, p2: PlayerStats) -> str:
+        phrases = [
+            f"🤝 {p1.name} و {p2.name} — بحال بحال. rivalry ماشي واضحة، ماشي حتى friendship.",
+            f"🤝 {p1.name} و {p2.name} — tie؟ فالfootball؟ هادا rare بزاف.",
+            f"🤝 {p1.name} و {p2.name} — كتبانو بحال twins، ولكن فالعكس.",
+        ]
+        return random.choice(phrases)
 
-    def match_summary(self, club: ClubStats, motm: PlayerStats) -> str:
-        text = f"الفوز {club.wins}، الخسارة {club.losses}. MOTM: {motm.name} بـ Impact {round(motm.impact_score, 1)}."
+    def milestone_alert(self, player: PlayerStats, stat: str, threshold: int) -> str:
+        emojis = {"goals": "⚽", "assists": "🅰️", "mvps": "🏆", "frauds": "🎭", "possession_losses": "💀", "games": "🎮", "tackles": "🛡️"}
+        emoji = emojis.get(stat, "🔥")
+        if stat == "goals":
+            return f"🚨 {player.name} وصل لـ {threshold} goals! {emoji}\nالتاريخ كيتكتب بدمه."
+        elif stat == "assists":
+            return f"🚨 {player.name} وصل لـ {threshold} assists! {emoji}\nصانع الألعاب الحقيقي."
+        elif stat == "mvps":
+            return f"🚨 {player.name} وصل لـ {threshold} MVPs! {emoji}\nالملك ما كيحتاجش دليل."
+        elif stat == "frauds":
+            return f"🚨 {player.name} وصل لـ {threshold} frauds! {emoji}\nهادا رقم تاريخي... فالعكس."
+        elif stat == "possession_losses":
+            return f"🚨 {player.name} وصل لـ {threshold} possession losses! {emoji}\nالكرة خاصها restraining order."
+        elif stat == "games":
+            return f"🚨 {player.name} وصل لـ {threshold} games! {emoji}\nولاء تاريخي للفريق."
+        elif stat == "tackles":
+            return f"🚨 {player.name} وصل لـ {threshold} tackles! {emoji}\nالدفاع بدا من عندو."
+        else:
+            return f"🚨 {player.name} وصل لـ {threshold} {stat}! {emoji}"
+
+    def excuses(self, player: PlayerStats) -> str:
+        excuses_pool = [
+            "الكونترول كان فيه lag", "النت كان مقطع", "اليد كانت مقلوبة", "القط قطع عليا النت",
+            "الكونترول ناقص البطارية", "الشاشة كانت مظلمة", "كنت لابس الجوارب و الزليج زلق",
+            "الكرسي كان مرتفع", "النور كان كيدور فعينيا", "الكونترول جديد وماشي معتاد عليه",
+            "الwifi ديال الجيران دخل", "العشا كان تقيل", "كنت سهران البارح",
+            "الخوخة ديال الداكرة كانت عاملة", "الجو كان حار", "ال conditioning ديالي كان off",
+            "كنت كنتفكر فالexam", "الphone ديالي دار notification", "الأم كانت كتنادي",
+            "الwater bottle طاح فالكونترول", "الcat walked on the controller",
+            "الحارس كان كيدير glitch", "الgoalkeeper كان level 99", "القائم كان كيدافع عليا",
+            "الكورة ما بغاتش تدخل", "الwind factor كان ضدي", "الkeeper دار superman dive",
+            "كنت كنتجرب new finishing style", "الformation ما كانتش مناسبة", "الtactics كانت zonal marking",
+            "الملعب كان زلق", "الحكم ما دارش foul", "الlinesman كان عندو نظارة قديمة",
+        ]
+        selected = []
+        if player.rating_pg < 6.0:
+            selected.append("الكونترول كان فيه lag")
+        if player.possession_losses > 10:
+            selected.append("النت كان مقطع")
+        if player.goals == 0 and player.games > 2:
+            selected.append("القط قطع عليا النت")
+        if player.pass_accuracy < 70:
+            selected.append("اليد كانت مقلوبة")
+        while len(selected) < 4:
+            exc = random.choice(excuses_pool)
+            if exc not in selected:
+                selected.append(exc)
+        random.shuffle(selected)
+        text = f"📝 **EXCUSES — {player.name}**\n\n"
+        text += f"الدفاع ديال {player.name} فالمحكمة:\n\n"
+        for i, excuse in enumerate(selected[:5], 1):
+            text += f"{i}. {excuse}\n"
+        text += "\n⚖️ **الحكم:** هاد الأعذار أضعف من defense ديال الفريق."
         return text
 
-    def banter(self) -> str:
-        return self._pick(ROAST_PHRASES, "roast")
+    def weekly_award(self, award_type: str, player: PlayerStats, score: float) -> str:
+        if award_type == "fraud_of_the_week":
+            phrases = [
+                f"🎭 {player.name} — Fraud of the Week! Score: {score}/100.\nهاد الأسبوع كامل كتخدم على راسك.",
+                f"🎭 {player.name} — Fraud of the Week!\nالتحقيق مازال مفتوح.",
+                f"🎭 {player.name} — Fraud of the Week!\nالأدلة واضحة بزاف.",
+            ]
+        elif award_type == "ghost_of_the_week":
+            phrases = [
+                f"👻 {player.name} — Ghost of the Week!\nكنت مختافي حتى من الكاميرا.",
+                f"👻 {player.name} — Ghost of the Week!\n90 دقيقة ديال التخفي.",
+                f"👻 {player.name} — Ghost of the Week!\nحتى replay ما جابكش.",
+            ]
+        elif award_type == "mvp_of_the_week":
+            phrases = [
+                f"🏆 {player.name} — MVP of the Week!\nالفريق بلاك بحال WiFi bla router.",
+                f"🏆 {player.name} — MVP of the Week!\nشاد الفريق فوق ضهرك.",
+                f"🏆 {player.name} — MVP of the Week!\nأداء ديال الكبار.",
+            ]
+        elif award_type == "ball_loser_of_the_week":
+            phrases = [
+                f"💀 {player.name} — Ball Loser of the Week!\nالكرة ما بقاتش باغيا تبقى عندك.",
+                f"💀 {player.name} — Ball Loser of the Week!\nكنت موزع رسمي ديال الكرات.",
+                f"💀 {player.name} — Ball Loser of the Week!\nRecord جديد فضياع الكرة.",
+            ]
+        elif award_type == "carry_of_the_week":
+            phrases = [
+                f"💪 {player.name} — Carry of the Week!\nالفريق كامل راكب فوق ضهرك.",
+                f"💪 {player.name} — Carry of the Week!\nإلى ما كنتيش فالملعب كون خسرنا.",
+                f"💪 {player.name} — Carry of the Week!\nكتجر الفريق بوحدك.",
+            ]
+        else:
+            phrases = [f"🏆 {player.name} — Winner! Score: {score}"]
+        return random.choice(phrases)
 
-    def drama(self, players: List[str]) -> str:
-        if len(players) < 2:
-            players = ["Player1", "Player2"]
-        p1, p2 = players[0], players[1]
-        return f"الكافيتيريا كتهضر: {p1} و {p2} كيتخاصمو فالويس شات."
-
-    def meme(self, player: str) -> str:
-        return f"{player}: أنا كندافع — also {player}: 0 tackles."
-
-    def transfer(self, player: str) -> str:
-        return f"BREAKING: {player} غادي ينتقل لـ PSG ب 200M. صافي، هادشي رسمي."
-
-    def predict(self, players: List[str]) -> str:
-        if len(players) < 2:
-            players = ["Player1", "Player2"]
-        p1, p2 = players[0], players[1]
-        return f"ال prediction ديالي: غادي نخسرو 3-1 و {p1} غادي يضيع penalty."
+    def match_poster_caption(self, poster_data: dict) -> str:
+        result = poster_data.get("result", "D")
+        opponent = poster_data.get("opponent", "Unknown")
+        score = poster_data.get("score", "?-?")
+        if result == "W":
+            text = f"✅ فوز {score} vs {opponent}!\n\n"
+        elif result == "L":
+            text = f"❌ خسارة {score} vs {opponent}.\n\n"
+        else:
+            text = f"🤝 تعادل {score} vs {opponent}.\n\n"
+        if poster_data.get("mvp"):
+            mvp = poster_data["mvp"]
+            text += f"🏆 MVP: {mvp['name']} ({mvp['carry_score']} carry score)\n"
+        if poster_data.get("fraud"):
+            fraud = poster_data["fraud"]
+            text += f"🎭 Fraud: {fraud['name']} ({fraud['fraud_score']} fraud score)\n"
+        if poster_data.get("ghost") and poster_data["ghost"]["is_ghost"]:
+            ghost = poster_data["ghost"]
+            text += f"👻 Ghost: {ghost['name']} ({ghost['ghost_points']} ghost points)\n"
+        if poster_data.get("carry"):
+            carry = poster_data["carry"]
+            text += f"💪 Carry: {carry['name']} ({carry['carry_score']} carry score)\n"
+        if poster_data.get("top_performer"):
+            tp = poster_data["top_performer"]
+            text += f"⭐ Top: {tp['name']} (Rating {tp['rating']})\n"
+        if poster_data.get("worst_performer"):
+            wp = poster_data["worst_performer"]
+            text += f"📉 Worst: {wp['name']} (Rating {wp['rating']})\n"
+        return text
