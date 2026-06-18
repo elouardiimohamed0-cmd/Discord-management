@@ -69,7 +69,20 @@ CARD_W, CARD_H = 1440, 2160
 MARGIN = 80
 
 PALETTES = {
-    "gold": {
+    LABEL_TO_TEMPLATE = {
+    "MAN OF THE MATCH": "mvp",
+    "FRAUD DETECTED": "fraud",
+    "GHOST DETECTED": "ghost",
+    "CARRY DETECTED": "carry",
+    "COURT CASE": "court",
+    "PLAYMAKER": "playmaker",
+    "SNIPER": "sniper",
+    "BALL LOSER": "ball_loser",
+    "CLUB LEGEND": "mvp",
+    "PLAYER PROFILE": "mvp",
+    "BIO": "mvp",
+}
+    ("gold": {
         "bg_top": (10, 8, 4), "bg_bot": (30, 22, 8),
         "accent": (255, 215, 0), "accent2": (218, 165, 32),
         "glow": (255, 200, 50), "text": (255, 248, 220),
