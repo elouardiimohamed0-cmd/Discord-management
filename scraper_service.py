@@ -186,8 +186,6 @@ class ScraperService:
                 logger.warning("[HTTP] Status %d", r.status_code)
                 return None
 
-            # httpx auto-decompresses by default (since we removed Accept-Encoding from headers)
-            # But if server sends compressed data without proper headers, handle manually
             raw = r.content
 
             # Check for HTML/Cloudflare challenge
@@ -196,7 +194,7 @@ class ScraperService:
                 self._enter_cooldown("Cloudflare HTML response")
                 return None
 
-            # Manual decompression fallback (if httpx didn't auto-decompress)
+            # Manual decompression fallback
             ce = r.headers.get("content-encoding", "").lower()
             if raw[:2] == b'\x1f\x8b' or "gzip" in ce:
                 try:
@@ -276,9 +274,9 @@ class ScraperService:
 
     def _parse(self, raw):
         """
-        Parse PCT API response. 
+        Parse PCT API response.
         Uses memberStats (season totals) for REAL website stats.
-        Match data is only used for the matches list, not for player stats.
+        Match data supplements missing fields like minutes_played, shots, saves.
         """
         try:
             info = raw.get("clubInfoData") or {}
@@ -304,7 +302,46 @@ class ScraperService:
             if g > 0:
                 res["win_rate"] = round((res["wins"] / g) * 100, 1)
 
-            # ─── STEP 1: REAL PLAYER STATS from memberStats (season totals) ───
+            # ─── STEP 1: Aggregate match data to supplement missing season stats ───
+            raw_matches = raw.get("matches") or {}
+            all_m = (
+                (raw_matches.get("league", []) or [])
+                + (raw_matches.get("playoff", []) or [])
+                + (raw_matches.get("friendly", []) or [])
+            )
+
+            match_agg = {}
+            for rm in all_m[:30]:
+                our_id = str(CLUB_ID)
+                players = rm.get("players", {}).get(our_id, {})
+                for pid, p in players.items():
+                    name = p.get("playername", "Unknown")
+                    if name not in match_agg:
+                        match_agg[name] = {
+                            "games": 0,
+                            "minutes": 0,
+                            "shots": 0,
+                            "pass_attempts": 0,
+                            "pass_completed": 0,
+                            "tackles": 0,
+                            "saves": 0,
+                            "goals_conceded": 0,
+                            "redcards": 0,
+                            "clean_sheets": 0,
+                        }
+                    a = match_agg[name]
+                    a["games"] += 1
+                    a["minutes"] += self._int(p.get("secondsPlayed"), 0) // 60
+                    a["shots"] += self._int(p.get("shots"), 0)
+                    a["pass_attempts"] += self._int(p.get("passattempts"), 0)
+                    a["pass_completed"] += self._int(p.get("passesmade"), 0)
+                    a["tackles"] += self._int(p.get("tacklesmade"), 0)
+                    a["saves"] += self._int(p.get("saves"), 0)
+                    a["goals_conceded"] += self._int(p.get("goalsconceded"), 0)
+                    a["redcards"] += self._int(p.get("redcards"), 0)
+                    a["clean_sheets"] += self._int(p.get("cleansheetsany"), 0)
+
+            # ─── STEP 2: REAL PLAYER STATS from memberStats (season totals) ───
             member_stats = raw.get("memberStats") or {}
             members = member_stats.get("members", [])
 
@@ -324,34 +361,64 @@ class ScraperService:
                 if rating > 10:
                     rating = round(rating / 10.0, 2)
 
-                passes_att = self._int(m.get("passattempts"), 0)
-                passes_comp = self._int(m.get("passesmade"), 0)
-                pass_acc = round((passes_comp / passes_att) * 100, 1) if passes_att > 0 else 0.0
+                # ── Pass accuracy: API gives it directly as a percentage ──
+                pass_acc = self._float(m.get("passSuccessRate"), 0.0)
+
+                # ── Possession losses: derive from passesMade + passSuccessRate ──
+                passes_made = self._int(m.get("passesMade"), 0)
+                if pass_acc > 0 and passes_made > 0:
+                    pass_attempts = round(passes_made / (pass_acc / 100.0))
+                    possession_losses = max(0, pass_attempts - passes_made)
+                else:
+                    possession_losses = 0
+
+                # ── Match data supplements (minutes, shots, saves, etc.) ──
+                agg = match_agg.get(name, {})
+                minutes_played = agg.get("minutes", 0)
+                shots = agg.get("shots", 0)
+                saves = agg.get("saves", 0)
+                goals_conceded = agg.get("goals_conceded", 0)
+
+                # Cards: prefer memberStats redCards, fallback to match aggregation
+                cards = self._int(m.get("redCards"), 0)
+                if cards == 0:
+                    cards = agg.get("redcards", 0)
+
+                # Clean sheets: prefer memberStats, fallback to match data
+                clean_sheets = self._int(m.get("cleanSheetsDef"), 0) + self._int(m.get("cleanSheetsGK"), 0)
+                if clean_sheets == 0:
+                    clean_sheets = agg.get("clean_sheets", 0)
+
+                # Tackles from API (correct camelCase)
+                tackles = self._int(m.get("tacklesMade"), 0)
 
                 res["players"].append({
                     "name": name.strip(),
                     "games": games,
                     "goals": self._int(m.get("goals"), 0),
                     "assists": self._int(m.get("assists"), 0),
-                    "shots": self._int(m.get("shots"), 0),
+                    "shots": shots,
                     "rating": rating,
-                    "tackles": self._int(m.get("tacklesmade"), 0),
-                    "interceptions": self._int(m.get("interceptions"), 0),
-                    "minutes_played": self._int(m.get("secondsPlayed"), 0) // 60,
+                    "tackles": tackles,
+                    "interceptions": 0,          # Not available in PCT API
+                    "minutes_played": minutes_played,
                     "motm": self._int(m.get("manOfTheMatch"), 0),
                     "pass_accuracy": pass_acc,
-                    "possession_losses": self._int(m.get("possessionLost"), 0),
-                    "distance_covered": self._float(m.get("distanceCovered"), 0.0),
+                    "passes_made": passes_made,
+                    "possession_losses": possession_losses,
+                    "distance_covered": 0.0,     # Not available in PCT API
+                    "cards": cards,
+                    "clean_sheets": clean_sheets,
+                    "saves": saves,
+                    "goals_conceded": goals_conceded,
+                    "win_rate": self._float(m.get("winRate"), 0.0),
                 })
 
-            logger.info("[PARSE] %s | Players from memberStats (season totals): %d", 
-                       res["club_name"], len(res["players"]))
+            logger.info("[PARSE] %s | Players from memberStats (season totals): %d",
+                        res["club_name"], len(res["players"]))
             logger.info("[PARSE] Players: %s", [p["name"] for p in res["players"]])
 
-            # ─── STEP 2: Parse matches (for match history only) ───
-            raw_matches = raw.get("matches") or {}
-            all_m = (raw_matches.get("league", []) or []) + (raw_matches.get("playoff", []) or []) + (raw_matches.get("friendly", []) or [])
-
+            # ─── STEP 3: Parse matches (for match history only) ───
             for rm in all_m[:30]:
                 try:
                     m = self._match(rm)
@@ -376,7 +443,6 @@ class ScraperService:
         except Exception as e:
             logger.error("[PARSE] Error: %s", e)
             return None
-
 
     def _match(self, raw):
         try:
