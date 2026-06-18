@@ -195,45 +195,7 @@ def normalize_club_players(club):
                 else:
                     p.name = p.name.strip()
 
-# ─── ACTIVE PLAYER FILTER ───
-# Only keep players who appear in recent match data.
-# This prevents inactive squad members from showing in commands.
-
-def filter_active_players(club: ClubStats) -> None:
-    """
-    Remove players who don't appear in any recent match.
-    Uses raw PSN name stored on player object for reliable matching.
-    """
-    if not club or not club.matches:
-        return
-
-    # Collect all PSN names from match data (lowercased for case-insensitive match)
-    active_psns = set()
-    for m in club.matches:
-        if hasattr(m, "player_stats") and m.player_stats:
-            active_psns.update(k.lower() for k in m.player_stats.keys())
-
-    if not active_psns:
-        logger.warning("[FILTER] No match player data found, skipping filter")
-        return
-
-    filtered = []
-    for p in club.players:
-        raw_psn = getattr(p, "_raw_psn", "").lower()
-        p_name = getattr(p, "name", "").lower()
-
-        # Check raw PSN first, then display name
-        if raw_psn in active_psns or p_name in active_psns:
-            filtered.append(p)
-        else:
-            logger.info("[FILTER] Excluding %s (raw PSN: %s): not in recent match data", p.name, raw_psn)
-
-    before = len(club.players)
-    club.players = filtered
-    after = len(club.players)
-    logger.info("[FILTER] Active players: %d / %d (removed %d inactive)", after, before, before - after)
-
-
+# ─── MATCH-ONLY PLAYER FILTER (for match reports, does NOT mutate club) ───
 def get_match_players(club: ClubStats, match: MatchResult):
     """Return only players who played in a specific match."""
     if not hasattr(match, "player_stats") or not match.player_stats:
@@ -289,7 +251,6 @@ def resolve_image_path(photo_path: str) -> Optional[str]:
         return None
     if os.path.exists(photo_path):
         return photo_path
-    # Try alternative extensions
     base, ext = os.path.splitext(photo_path)
     alts = []
     if ext.lower() == ".jpg":
@@ -309,15 +270,12 @@ def get_squad_display_name(player_name: str) -> str:
     if not player_name or not isinstance(player_name, str):
         return player_name or "Unknown"
     sq = get_squad_map()
-    # Direct match (case-insensitive)
     for sq_name, info in sq.items():
         if sq_name and sq_name.lower() == player_name.strip().lower():
             return info.get("name", sq_name)
-    # Check if any squad name is contained in player name
     for sq_name, info in sq.items():
         if sq_name and sq_name.lower() in player_name.lower():
             return info.get("name", sq_name)
-    # Check if player name is contained in any squad name
     for sq_name, info in sq.items():
         if sq_name and player_name.lower() in sq_name.lower():
             return info.get("name", sq_name)
@@ -349,7 +307,6 @@ def _dict_to_club(data: dict) -> Optional[ClubStats]:
                 raw_name = "Unknown"
             pct_name = raw_name.strip()
 
-            # Try to find squad.json info for this player
             sq_info = get_squad_info(pct_name)
             if not sq_info and pro_name:
                 sq_info = get_squad_info(pro_name)
@@ -357,15 +314,13 @@ def _dict_to_club(data: dict) -> Optional[ClubStats]:
                 sq_info = get_squad_info(psn_name)
 
             if sq_info:
-                # Use squad.json name for display
                 display_name = sq_info.get("name") or pct_name
                 ps = PlayerStats(name=display_name)
-                ps._squad_info = sq_info  # internal attribute for image/position
+                ps._squad_info = sq_info
             else:
                 ps = PlayerStats(name=pct_name)
                 ps._squad_info = {}
 
-            # Store raw PSN for match filtering
             ps._raw_psn = psn_name or pct_name
 
             for k, v in p.items():
@@ -422,24 +377,20 @@ def get_squad_info(pct_name: str) -> dict:
     sq = get_squad_map()
     pct_lower = pct_name.strip().lower()
 
-    # Direct match by name
     for sq_name, info in sq.items():
         if sq_name and sq_name.lower() == pct_lower:
             return info
 
-    # Match by PSN
     for info in sq.values():
         psn = (info.get("psn") or "").strip().lower()
         if psn and psn == pct_lower:
             return info
 
-    # Match by proName / ea_id
     for info in sq.values():
         pro = (info.get("proName") or info.get("ea_id") or "").strip().lower()
         if pro and pro == pct_lower:
             return info
 
-    # Partial match
     for sq_name, info in sq.items():
         if sq_name and (pct_lower in sq_name.lower() or sq_name.lower() in pct_lower):
             return info
@@ -447,7 +398,6 @@ def get_squad_info(pct_name: str) -> dict:
     return {}
 
 def _name_similarity(a: str, b: str) -> float:
-    """Simple similarity score: 0.0 to 1.0"""
     if not a or not b:
         return 0.0
     a, b = a.lower().strip(), b.lower().strip()
@@ -455,15 +405,10 @@ def _name_similarity(a: str, b: str) -> float:
         return 1.0
     if a in b or b in a:
         return max(len(a), len(b)) / max(len(a), len(b), 1) * 0.8
-    # Count common characters
     common = sum((a + b).count(c) for c in set(a) & set(b))
     return common / max(len(a) + len(b), 1)
 
 def find_player(query: str) -> Optional[PlayerStats]:
-    """
-    Find player by real name, nickname, PSN, or proName.
-    Tries multiple strategies in order of specificity.
-    """
     if not current_club or not current_club.players:
         return None
     if not query or not isinstance(query, str):
@@ -473,13 +418,11 @@ def find_player(query: str) -> Optional[PlayerStats]:
     players = current_club.players
     squad_map = get_squad_map()
 
-    # Strategy 1: Exact match on normalized player name
     for p in players:
         name = getattr(p, "name", "")
         if name and isinstance(name, str) and name.strip().lower() == query_clean:
             return p
 
-    # Strategy 2: Exact match on resolved PSN/nickname
     resolved = resolve_query(query)
     if resolved and resolved.lower() != query_clean:
         for p in players:
@@ -487,48 +430,39 @@ def find_player(query: str) -> Optional[PlayerStats]:
             if name and isinstance(name, str) and name.strip().lower() == resolved.lower().strip():
                 return p
 
-    # Strategy 3: Partial match on player name (contains)
     for p in players:
         name = getattr(p, "name", "")
         if name and isinstance(name, str) and query_clean in name.strip().lower():
             return p
 
-    # Strategy 4: Partial match on squad name, PSN, nickname, or proName
     for p in players:
         name = getattr(p, "name", "")
         if not name or not isinstance(name, str):
             continue
         info = squad_map.get(name.strip(), {})
-        # Check squad name
         sq_name = (info.get("name") or "").strip().lower()
         if query_clean in sq_name or sq_name == query_clean:
             return p
-        # Check squad PSN
         sq_psn = (info.get("psn") or info.get("PSN") or "").strip().lower()
         if query_clean in sq_psn or sq_psn == query_clean:
             return p
-        # Check squad nickname
         sq_nick = (info.get("nickname") or "").strip().lower()
         if query_clean in sq_nick or sq_nick == query_clean:
             return p
-        # Check proName
         sq_pro = (info.get("proName") or "").strip().lower()
         if query_clean in sq_pro or sq_pro == query_clean:
             return p
 
-    # Strategy 5: Reverse lookup - query might be a PSN/proName, find matching squad name
     for sq_name, info in squad_map.items():
         sq_psn = (info.get("psn") or info.get("PSN") or "").strip().lower()
         sq_nick = (info.get("nickname") or "").strip().lower()
         sq_pro = (info.get("proName") or "").strip().lower()
         if query_clean == sq_psn or query_clean == sq_nick or query_clean == sq_pro or query_clean in sq_psn or query_clean in sq_nick or query_clean in sq_pro:
-            # Found squad entry matching query, now find player with that squad name
             for p in players:
                 p_name = getattr(p, "name", "")
                 if p_name and isinstance(p_name, str) and p_name.strip().lower() == sq_name.lower().strip():
                     return p
 
-    # Strategy 6: Fuzzy match - find closest name by similarity
     best_match = None
     best_score = 0.0
     for p in players:
@@ -536,7 +470,6 @@ def find_player(query: str) -> Optional[PlayerStats]:
         if not name or not isinstance(name, str):
             continue
         score = _name_similarity(query_clean, name.strip())
-        # Also check squad aliases
         info = squad_map.get(name.strip(), {})
         for alias in [info.get("name"), info.get("psn"), info.get("PSN"), info.get("nickname"), info.get("proName")]:
             if alias and isinstance(alias, str):
@@ -566,7 +499,7 @@ async def _fetch_club_data(force=False, source="background"):
                 current_club = club
                 current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
                 normalize_club_players(current_club)
-                filter_active_players(current_club)  # ← ONLY SHOW PLAYERS WHO PLAYED
+                # NOTE: We do NOT filter active players here. All squad members stay loaded.
                 _data_cache_time = time.time()
                 logger.info("Data loaded: %d players, %d matches", len(club.players), len(club.matches))
                 return current_club
@@ -580,7 +513,6 @@ async def ensure_data(ctx: commands.Context):
     if _is_data_fresh():
         return True
     if current_club and current_club.players:
-        # Validate that players have names
         valid_players = [p for p in current_club.players if getattr(p, "name", None) and isinstance(p.name, str) and p.name.strip()]
         if len(valid_players) > 0:
             return True
@@ -719,7 +651,7 @@ async def before_daily():
     logger.info("Daily post waiting %.0fs until midnight", wait)
     await asyncio.sleep(min(wait, 3600))
 
-@tasks.loop(minutes=10)  # Changed from 5 to 10 minutes
+@tasks.loop(minutes=10)
 async def match_monitor():
     """Background task: scrape every 10 minutes. Commands NEVER scrape."""
     global current_club
@@ -743,15 +675,14 @@ async def match_monitor():
                 logger.info("Match monitor: no new match")
                 return
 
-        # Update current club
+        # Update current club — ALL players stay loaded
         current_club = club
         current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
         normalize_club_players(current_club)
-        filter_active_players(current_club)
 
         result = f"{latest.score_for}-{latest.score_against}"
         
-        # ONLY use players who played in THIS match
+        # ONLY use players who played in THIS match for the report
         match_players = get_match_players(current_club, latest)
         report = darija.match_report(result, match_players)
 
@@ -871,7 +802,7 @@ async def cmd_sync(ctx):
             logger.error("SYNC ERROR: %s", tb)
             await rl.ctx_send(ctx, f"Sync failed: {str(e)[:800]}")
 
-# ── Player commands (all read from current_club cache, NEVER scrape) ──
+# ── Player commands: photo card + stats as text embed ──
 @bot.command(name="stats")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_stats(ctx, *, player: str):
@@ -887,14 +818,20 @@ async def cmd_stats(ctx, *, player: str):
     display_name = target.name
     async with ctx.typing():
         try:
-            card = imgen.generate_player_card(target, pos, division=current_club.division, photo_path=img_path)
-            file = discord.File(card, filename=f"{display_name}_card.png")
-            roast_text = darija.roast(target, pos)
-            embed = discord.Embed(title=f"📊 {display_name} — {pos}", description=roast_text, color=0x1e90ff)
+            card = imgen.generate_player_photo_card(target, pos, "gold", "PLAYER PROFILE", photo_path=img_path)
+            file = discord.File(card, filename=f"{display_name}.png")
+            embed = discord.Embed(title=f"📊 {display_name} — {pos}", color=0x1e90ff)
+            embed.add_field(name="Games", value=str(target.games), inline=True)
+            embed.add_field(name="Goals", value=str(target.goals), inline=True)
+            embed.add_field(name="Assists", value=str(target.assists), inline=True)
+            embed.add_field(name="Rating", value=f"{round(target.rating_pg, 1)}", inline=True)
+            embed.add_field(name="Pass %", value=f"{round(target.pass_accuracy, 1)}%", inline=True)
+            embed.add_field(name="Possession Lost", value=str(target.possession_losses), inline=True)
             embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
-            embed.add_field(name="Clutch", value=str(target.clutch_score), inline=True)
-            embed.add_field(name="Error", value=str(target.error_score), inline=True)
-            await rl.ctx_send(ctx, embed=embed, file=file)
+            embed.add_field(name="MOTM", value=str(target.motm), inline=True)
+            embed.add_field(name="Win %", value=f"{round(target.win_rate, 1)}%", inline=True)
+            embed.add_field(name="Tackles", value=str(target.tackles), inline=True)
+            await rl.ctx_send(ctx, file=file, embed=embed)
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -911,14 +848,14 @@ async def cmd_mvp(ctx):
             raw_img = sq_info.get("image")
             img_path = resolve_image_path(raw_img)
             display_name = mvp.name
-            card = imgen.generate_mvp_card(mvp, pos, photo_path=img_path)
+            card = imgen.generate_player_photo_card(mvp, pos, "gold", "MAN OF THE MATCH", photo_path=img_path)
             file = discord.File(card, filename="mvp.png")
-            mvp_text = darija.mvp(mvp)
-            embed = discord.Embed(title=f"🏆 MAN OF THE MATCH — {display_name}", description=mvp_text, color=0xffd700)
+            embed = discord.Embed(title=f"🏆 MAN OF THE MATCH — {display_name}", color=0xffd700)
             embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
             embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
             embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
-            await rl.ctx_send(ctx, embed=embed, file=file)
+            embed.add_field(name="Impact", value=str(mvp.impact_score), inline=True)
+            await rl.ctx_send(ctx, file=file, embed=embed)
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -932,7 +869,7 @@ async def cmd_worst(ctx):
             worst = StatsEngine.get_worst(current_club.players)
             pos = get_squad_map().get(worst.name, {}).get("position", "CM")
             roast = darija.roast(worst, pos)
-            embed = discord.Embed(title="🗑️ WORST PLAYER", description=roast, color=0x8b0000)
+            embed = discord.Embed(title=f"🗑️ WORST PLAYER — {worst.name}", description=roast, color=0x8b0000)
             await rl.ctx_send(ctx, embed=embed)
         except Exception as e:
             traceback.print_exc()
@@ -947,7 +884,7 @@ async def cmd_who_sold(ctx):
             fraud = StatsEngine.get_fraud(current_club.players)
             pos = get_squad_map().get(fraud.name, {}).get("position", "CM")
             roast = darija.fraud(fraud)
-            embed = discord.Embed(title="🎭 FRAUD DETECTED", description=roast, color=0xff4500)
+            embed = discord.Embed(title=f"🎭 FRAUD DETECTED — {fraud.name}", description=roast, color=0xff4500)
             await rl.ctx_send(ctx, embed=embed)
         except Exception as e:
             traceback.print_exc()
@@ -962,7 +899,7 @@ async def cmd_carry(ctx):
             carry = StatsEngine.get_carry(current_club.players)
             pos = get_squad_map().get(carry.name, {}).get("position", "CM")
             praise = darija.carry(carry)
-            embed = discord.Embed(title="💪 CARRY DETECTED", description=praise, color=0x00ff00)
+            embed = discord.Embed(title=f"💪 CARRY DETECTED — {carry.name}", description=praise, color=0x00ff00)
             await rl.ctx_send(ctx, embed=embed)
         except Exception as e:
             traceback.print_exc()
@@ -986,7 +923,7 @@ async def cmd_fraud(ctx, *, player: str):
             else:
                 text = f"✅ CLEAN\n\n{target.name} — Throwing: {target.throwing_score}\n\nهادا لاعب صحيح."
                 color = 0x00ff00
-            embed = discord.Embed(title="FRAUD CHECK", description=text, color=color)
+            embed = discord.Embed(title=f"FRAUD CHECK — {target.name}", description=text, color=color)
             await rl.ctx_send(ctx, embed=embed)
         except Exception as e:
             traceback.print_exc()
@@ -1018,7 +955,7 @@ async def cmd_ghost(ctx):
             ghost = StatsEngine.get_ghost(current_club.players)
             pos = get_squad_map().get(ghost.name, {}).get("position", "CM")
             roast = darija.ghost(ghost)
-            embed = discord.Embed(title="👻 GHOST DETECTED", description=roast, color=0x9370db)
+            embed = discord.Embed(title=f"👻 GHOST DETECTED — {ghost.name}", description=roast, color=0x9370db)
             await rl.ctx_send(ctx, embed=embed)
         except Exception as e:
             traceback.print_exc()
@@ -1033,7 +970,7 @@ async def cmd_pass(ctx):
             hog = StatsEngine.get_ball_hog(current_club.players)
             pos = get_squad_map().get(hog.name, {}).get("position", "CM")
             roast = darija.ball_loser(hog)
-            embed = discord.Embed(title="⚽ PASS THE BALL!", description=roast, color=0xffa500)
+            embed = discord.Embed(title=f"⚽ PASS THE BALL! — {hog.name}", description=roast, color=0xffa500)
             await rl.ctx_send(ctx, embed=embed)
         except Exception as e:
             traceback.print_exc()
@@ -1212,10 +1149,15 @@ async def cmd_roastplayer(ctx, *, player: str):
     async with ctx.typing():
         try:
             roast = darija.roast(target, pos)
-            card = imgen.generate_roast_card(target, roast, pos, photo_path=img_path)
-            file = discord.File(card, filename=f"{display_name}_roast.png")
+            card = imgen.generate_player_photo_card(target, pos, "red", "FRAUD DETECTED", photo_path=img_path)
+            file = discord.File(card, filename=f"{display_name}.png")
             embed = discord.Embed(title=f"🔥 ROAST REPORT — {display_name}", description=roast, color=0xff0000)
-            await rl.ctx_send(ctx, embed=embed, file=file)
+            embed.add_field(name="Throwing", value=str(round(target.throwing_score, 1)), inline=True)
+            embed.add_field(name="Error", value=str(round(target.error_score, 1)), inline=True)
+            embed.add_field(name="Pass %", value=f"{round(target.pass_accuracy, 1)}%", inline=True)
+            embed.add_field(name="Possession Lost", value=str(target.possession_losses), inline=True)
+            embed.add_field(name="Rating", value=str(round(target.rating_pg, 1)), inline=True)
+            await rl.ctx_send(ctx, file=file, embed=embed)
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1269,19 +1211,18 @@ async def cmd_player(ctx, *, player: str):
     display_name = target.name
     async with ctx.typing():
         try:
-            card = imgen.generate_anime_card(target, pos, "mvp", "PLAYER PROFILE", photo_path=img_path)
-            file = discord.File(card, filename=f"{display_name}_profile.png")
-            lines = [
-                f"**Position:** {pos}",
-                f"**Games:** {target.games}",
-                f"**Goals:** {target.goals} | **Assists:** {target.assists}",
-                f"**Rating:** {round(target.rating_pg, 1)}",
-                f"**Impact:** {target.impact_score} | **Clutch:** {target.clutch_score}",
-                f"**Pass Accuracy:** {round(target.pass_accuracy, 1)}%",
-                f"**Possession Lost:** {target.possession_losses}",
-            ]
-            embed = discord.Embed(title=f"👤 {display_name}", description="\n".join(lines), color=0x1e90ff)
-            await rl.ctx_send(ctx, embed=embed, file=file)
+            card = imgen.generate_player_photo_card(target, pos, "purple", "PLAYER PROFILE", photo_path=img_path)
+            file = discord.File(card, filename=f"{display_name}.png")
+            embed = discord.Embed(title=f"👤 {display_name} — {pos}", color=0x1e90ff)
+            embed.add_field(name="Games", value=str(target.games), inline=True)
+            embed.add_field(name="Goals", value=str(target.goals), inline=True)
+            embed.add_field(name="Assists", value=str(target.assists), inline=True)
+            embed.add_field(name="Rating", value=f"{round(target.rating_pg, 1)}", inline=True)
+            embed.add_field(name="Pass %", value=f"{round(target.pass_accuracy, 1)}%", inline=True)
+            embed.add_field(name="Possession Lost", value=str(target.possession_losses), inline=True)
+            embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
+            embed.add_field(name="MOTM", value=str(target.motm), inline=True)
+            await rl.ctx_send(ctx, file=file, embed=embed)
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1301,10 +1242,14 @@ async def cmd_anime_card(ctx, *, player: str):
     display_name = target.name
     async with ctx.typing():
         try:
-            card = imgen.generate_anime_card(target, pos, "beast", "⚡ ANIME LEGEND", photo_path=img_path)
-            file = discord.File(card, filename=f"{display_name}_anime.png")
-            embed = discord.Embed(title=f"⚡ {display_name}", color=0x00ffff)
-            await rl.ctx_send(ctx, embed=embed, file=file)
+            card = imgen.generate_player_photo_card(target, pos, "purple", "ANIME LEGEND", photo_path=img_path)
+            file = discord.File(card, filename=f"{display_name}.png")
+            embed = discord.Embed(title=f"⚡ {display_name} — {pos}", color=0x00ffff)
+            embed.add_field(name="Goals", value=str(target.goals), inline=True)
+            embed.add_field(name="Assists", value=str(target.assists), inline=True)
+            embed.add_field(name="Rating", value=f"{round(target.rating_pg, 1)}", inline=True)
+            embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
+            await rl.ctx_send(ctx, file=file, embed=embed)
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1327,12 +1272,13 @@ async def cmd_beast_mode(ctx, *, player: str = None):
     display_name = target.name
     async with ctx.typing():
         try:
-            card = imgen.generate_beast_card(target, pos, photo_path=img_path)
-            file = discord.File(card, filename="beast.png")
-            embed = discord.Embed(title=f"⚡ BEAST MODE — {display_name}",
-                                  description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
-                                  color=0x00bfff)
-            await rl.ctx_send(ctx, embed=embed, file=file)
+            card = imgen.generate_player_photo_card(target, pos, "blue", "BEAST MODE", photo_path=img_path)
+            file = discord.File(card, filename=f"{display_name}.png")
+            embed = discord.Embed(title=f"⚡ BEAST MODE — {display_name}", color=0x00bfff)
+            embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
+            embed.add_field(name="Goals", value=str(target.goals), inline=True)
+            embed.add_field(name="Rating", value=f"{round(target.rating_pg, 1)}", inline=True)
+            await rl.ctx_send(ctx, file=file, embed=embed)
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1353,11 +1299,15 @@ async def cmd_court_case(ctx, *, player: str):
     async with ctx.typing():
         try:
             text = darija.court_case(target)
-            card = imgen.generate_court_case(target, pos, ["Evidence generated by Roast Engine"], photo_path=img_path)
-            file = discord.File(card, filename="court.png")
+            card = imgen.generate_player_photo_card(target, pos, "red", "COURT CASE", photo_path=img_path)
+            file = discord.File(card, filename=f"{display_name}.png")
             color = 0xff0000 if target.throwing_score > 3.0 or target.rating_pg < 5.5 else 0x00ff00
             embed = discord.Embed(title=f"⚖️ COURT CASE: {display_name}", description=text, color=color)
-            await rl.ctx_send(ctx, embed=embed, file=file)
+            embed.add_field(name="Throwing", value=str(round(target.throwing_score, 1)), inline=True)
+            embed.add_field(name="Error", value=str(round(target.error_score, 1)), inline=True)
+            embed.add_field(name="Pass %", value=f"{round(target.pass_accuracy, 1)}%", inline=True)
+            embed.add_field(name="Rating", value=str(round(target.rating_pg, 1)), inline=True)
+            await rl.ctx_send(ctx, file=file, embed=embed)
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1371,7 +1321,7 @@ async def cmd_ball_loser(ctx):
             loser = max(current_club.players, key=lambda p: p.possession_losses)
             pos = get_squad_map().get(loser.name, {}).get("position", "CM")
             roast = darija.ball_loser(loser)
-            embed = discord.Embed(title="💀 BALL LOSER", description=roast, color=0x8b0000)
+            embed = discord.Embed(title=f"💀 BALL LOSER — {loser.name}", description=roast, color=0x8b0000)
             await rl.ctx_send(ctx, embed=embed)
         except Exception as e:
             traceback.print_exc()
@@ -1387,10 +1337,14 @@ async def cmd_playmaker(ctx):
             pos = get_squad_map().get(pm.name, {}).get("position", "CM")
             text = darija.playmaker(pm)
             img_path = get_squad_map().get(pm.name, {}).get("image")
-            card = imgen.generate_playmaker_card(pm, pos, photo_path=img_path)
-            file = discord.File(card, filename="playmaker.png")
-            embed = discord.Embed(title="🎨 PLAYMAKER", description=text, color=0x00ff00)
-            await rl.ctx_send(ctx, embed=embed, file=file)
+            img_path = resolve_image_path(img_path)
+            card = imgen.generate_player_photo_card(pm, pos, "green", "PLAYMAKER", photo_path=img_path)
+            file = discord.File(card, filename=f"{pm.name}.png")
+            embed = discord.Embed(title=f"🎨 PLAYMAKER — {pm.name}", description=text, color=0x00ff00)
+            embed.add_field(name="Assists", value=str(pm.assists), inline=True)
+            embed.add_field(name="Pass %", value=f"{round(pm.pass_accuracy, 1)}%", inline=True)
+            embed.add_field(name="Rating", value=str(round(pm.rating_pg, 1)), inline=True)
+            await rl.ctx_send(ctx, file=file, embed=embed)
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1404,10 +1358,14 @@ async def cmd_sniper(ctx):
             sniper = max(current_club.players, key=lambda p: p.goals * 2 + p.rating_pg)
             pos = get_squad_map().get(sniper.name, {}).get("position", "CM")
             img_path = get_squad_map().get(sniper.name, {}).get("image")
-            card = imgen.generate_sniper_card(sniper, pos, photo_path=img_path)
-            file = discord.File(card, filename="sniper.png")
-            embed = discord.Embed(title="🎯 SNIPER", description=f"**{sniper.name}** — {sniper.goals} goals | Rating: {round(sniper.rating_pg, 1)}", color=0xff4500)
-            await rl.ctx_send(ctx, embed=embed, file=file)
+            img_path = resolve_image_path(img_path)
+            card = imgen.generate_player_photo_card(sniper, pos, "blue", "SNIPER", photo_path=img_path)
+            file = discord.File(card, filename=f"{sniper.name}.png")
+            embed = discord.Embed(title=f"🎯 SNIPER — {sniper.name}", color=0xff4500)
+            embed.add_field(name="Goals", value=str(sniper.goals), inline=True)
+            embed.add_field(name="Rating", value=str(round(sniper.rating_pg, 1)), inline=True)
+            embed.add_field(name="Impact", value=str(sniper.impact_score), inline=True)
+            await rl.ctx_send(ctx, file=file, embed=embed)
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1424,7 +1382,7 @@ async def cmd_keeper(ctx):
                 return
             keeper = max(gks, key=lambda p: p.tackles + p.interceptions)
             text = darija.keeper(keeper)
-            embed = discord.Embed(title="🧤 KEEPER", description=text, color=0x1e90ff)
+            embed = discord.Embed(title=f"🧤 KEEPER — {keeper.name}", description=text, color=0x1e90ff)
             await rl.ctx_send(ctx, embed=embed)
         except Exception as e:
             traceback.print_exc()
@@ -1531,13 +1489,11 @@ async def cmd_story(ctx):
         traceback.print_exc()
         await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-# ─── NEW COMMANDS: form, records, legend, match_report ───
 @bot.command(name="form")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_form(ctx, *, player: str):
     if not await ensure_data(ctx): return
     
-    # Parse "Shark 10" -> player="Shark", num=10
     num = 5
     parts = player.rsplit(" ", 1)
     if len(parts) == 2 and parts[1].isdigit():
@@ -1553,15 +1509,12 @@ async def cmd_form(ctx, *, player: str):
         await rl.ctx_send(ctx, "ما لقيتش match history.")
         return
     
-    # Find raw PSN for match lookup
     raw_psn = getattr(target, "_raw_psn", target.name)
     
-    # Build match data
     matches_data = []
     for m in current_club.matches[:num]:
         ps = m.player_stats.get(raw_psn, {})
         if not ps:
-            # Fallback: try matching by display name
             for pid, pstat in m.player_stats.items():
                 if pid.lower() == target.name.lower():
                     ps = pstat
@@ -1612,7 +1565,6 @@ async def cmd_records(ctx):
     biggest_loss = min(matches, key=lambda m: m.score_for - m.score_against)
     most_goals_match = max(matches, key=lambda m: m.score_for)
     
-    # Best individual match rating
     best_rating = 0.0
     best_rating_player = "None"
     for m in matches:
@@ -1622,7 +1574,6 @@ async def cmd_records(ctx):
                 best_rating = r
                 best_rating_player = psn
     
-    # Longest win streak
     streak = 0
     best_streak = 0
     for m in reversed(matches):
@@ -1669,15 +1620,14 @@ async def cmd_legend(ctx):
             raw_img = sq_info.get("image")
             img_path = resolve_image_path(raw_img)
             display_name = mvp.name
-            card = imgen.generate_legend_card(mvp, pos, photo_path=img_path)
+            card = imgen.generate_player_photo_card(mvp, pos, "gold", "CLUB LEGEND", photo_path=img_path)
             file = discord.File(card, filename="legend.png")
-            text = darija.mvp(mvp)
-            embed = discord.Embed(title=f"👑 CLUB LEGEND — {display_name}", description=text, color=0xffd700)
+            embed = discord.Embed(title=f"👑 CLUB LEGEND — {display_name}", color=0xffd700)
             embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
             embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
             embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
             embed.add_field(name="Impact", value=str(mvp.impact_score), inline=True)
-            await rl.ctx_send(ctx, embed=embed, file=file)
+            await rl.ctx_send(ctx, file=file, embed=embed)
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1757,7 +1707,7 @@ async def slash_sync(interaction: discord.Interaction):
         logger.error("SYNC ERROR: %s", tb)
         await rl.interaction_send(interaction, f"Sync failed: {str(e)[:800]}")
 
-@bot.tree.command(name="stats", description="Player stats + premium card")
+@bot.tree.command(name="stats", description="Player stats + premium photo card")
 @app_commands.describe(player="Player name, PSN, or nickname")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_stats(interaction: discord.Interaction, player: str):
@@ -1773,14 +1723,20 @@ async def slash_stats(interaction: discord.Interaction, player: str):
     img_path = resolve_image_path(raw_img)
     display_name = target.name
     try:
-        card = imgen.generate_player_card(target, pos, division=current_club.division, photo_path=img_path)
-        file = discord.File(card, filename=f"{display_name}_card.png")
-        roast_text = darija.roast(target, pos)
-        embed = discord.Embed(title=f"📊 {display_name} — {pos}", description=roast_text, color=0x1e90ff)
+        card = imgen.generate_player_photo_card(target, pos, "gold", "PLAYER PROFILE", photo_path=img_path)
+        file = discord.File(card, filename=f"{display_name}.png")
+        embed = discord.Embed(title=f"📊 {display_name} — {pos}", color=0x1e90ff)
+        embed.add_field(name="Games", value=str(target.games), inline=True)
+        embed.add_field(name="Goals", value=str(target.goals), inline=True)
+        embed.add_field(name="Assists", value=str(target.assists), inline=True)
+        embed.add_field(name="Rating", value=f"{round(target.rating_pg, 1)}", inline=True)
+        embed.add_field(name="Pass %", value=f"{round(target.pass_accuracy, 1)}%", inline=True)
+        embed.add_field(name="Possession Lost", value=str(target.possession_losses), inline=True)
         embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
-        embed.add_field(name="Clutch", value=str(target.clutch_score), inline=True)
-        embed.add_field(name="Error", value=str(target.error_score), inline=True)
-        await rl.interaction_send(interaction, embed=embed, file=file)
+        embed.add_field(name="MOTM", value=str(target.motm), inline=True)
+        embed.add_field(name="Win %", value=f"{round(target.win_rate, 1)}%", inline=True)
+        embed.add_field(name="Tackles", value=str(target.tackles), inline=True)
+        await rl.interaction_send(interaction, file=file, embed=embed)
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -1801,18 +1757,18 @@ async def slash_player(interaction: discord.Interaction, player: str):
     img_path = resolve_image_path(raw_img)
     display_name = target.name
     try:
-        card = imgen.generate_anime_card(target, pos, "mvp", "PLAYER PROFILE", photo_path=img_path)
-        file = discord.File(card, filename=f"{display_name}_profile.png")
-        lines = [
-            f"**Position:** {pos}",
-            f"**Games:** {target.games}",
-            f"**Goals:** {target.goals} | **Assists:** {target.assists}",
-            f"**Rating:** {round(target.rating_pg, 1)}",
-            f"**Impact:** {target.impact_score} | **Clutch:** {target.clutch_score}",
-            f"**Pass Accuracy:** {round(target.pass_accuracy, 1)}%",
-        ]
-        embed = discord.Embed(title=f"👤 {display_name}", description="\n".join(lines), color=0x1e90ff)
-        await rl.interaction_send(interaction, embed=embed, file=file)
+        card = imgen.generate_player_photo_card(target, pos, "purple", "PLAYER PROFILE", photo_path=img_path)
+        file = discord.File(card, filename=f"{display_name}.png")
+        embed = discord.Embed(title=f"👤 {display_name} — {pos}", color=0x1e90ff)
+        embed.add_field(name="Games", value=str(target.games), inline=True)
+        embed.add_field(name="Goals", value=str(target.goals), inline=True)
+        embed.add_field(name="Assists", value=str(target.assists), inline=True)
+        embed.add_field(name="Rating", value=f"{round(target.rating_pg, 1)}", inline=True)
+        embed.add_field(name="Pass %", value=f"{round(target.pass_accuracy, 1)}%", inline=True)
+        embed.add_field(name="Possession Lost", value=str(target.possession_losses), inline=True)
+        embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
+        embed.add_field(name="MOTM", value=str(target.motm), inline=True)
+        await rl.interaction_send(interaction, file=file, embed=embed)
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -1833,10 +1789,14 @@ async def slash_anime_card(interaction: discord.Interaction, player: str):
     img_path = resolve_image_path(raw_img)
     display_name = target.name
     try:
-        card = imgen.generate_anime_card(target, pos, "beast", "⚡ ANIME LEGEND", photo_path=img_path)
-        file = discord.File(card, filename=f"{display_name}_anime.png")
-        embed = discord.Embed(title=f"⚡ {display_name}", color=0x00ffff)
-        await rl.interaction_send(interaction, embed=embed, file=file)
+        card = imgen.generate_player_photo_card(target, pos, "purple", "ANIME LEGEND", photo_path=img_path)
+        file = discord.File(card, filename=f"{display_name}.png")
+        embed = discord.Embed(title=f"⚡ {display_name} — {pos}", color=0x00ffff)
+        embed.add_field(name="Goals", value=str(target.goals), inline=True)
+        embed.add_field(name="Assists", value=str(target.assists), inline=True)
+        embed.add_field(name="Rating", value=f"{round(target.rating_pg, 1)}", inline=True)
+        embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
+        await rl.interaction_send(interaction, file=file, embed=embed)
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -1860,12 +1820,13 @@ async def slash_beast_mode(interaction: discord.Interaction, player: str = None)
     img_path = resolve_image_path(raw_img)
     display_name = target.name
     try:
-        card = imgen.generate_beast_card(target, pos, photo_path=img_path)
-        file = discord.File(card, filename="beast.png")
-        embed = discord.Embed(title=f"⚡ BEAST MODE — {display_name}",
-                              description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
-                              color=0x00bfff)
-        await rl.interaction_send(interaction, embed=embed, file=file)
+        card = imgen.generate_player_photo_card(target, pos, "blue", "BEAST MODE", photo_path=img_path)
+        file = discord.File(card, filename=f"{display_name}.png")
+        embed = discord.Embed(title=f"⚡ BEAST MODE — {display_name}", color=0x00bfff)
+        embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
+        embed.add_field(name="Goals", value=str(target.goals), inline=True)
+        embed.add_field(name="Rating", value=f"{round(target.rating_pg, 1)}", inline=True)
+        await rl.interaction_send(interaction, file=file, embed=embed)
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -1887,11 +1848,15 @@ async def slash_court_case(interaction: discord.Interaction, player: str):
     display_name = target.name
     try:
         text = darija.court_case(target)
-        card = imgen.generate_court_case(target, pos, ["Evidence generated by Roast Engine"], photo_path=img_path)
-        file = discord.File(card, filename="court.png")
+        card = imgen.generate_player_photo_card(target, pos, "red", "COURT CASE", photo_path=img_path)
+        file = discord.File(card, filename=f"{display_name}.png")
         color = 0xff0000 if target.throwing_score > 3.0 or target.rating_pg < 5.5 else 0x00ff00
         embed = discord.Embed(title=f"⚖️ COURT CASE: {display_name}", description=text, color=color)
-        await rl.interaction_send(interaction, embed=embed, file=file)
+        embed.add_field(name="Throwing", value=str(round(target.throwing_score, 1)), inline=True)
+        embed.add_field(name="Error", value=str(round(target.error_score, 1)), inline=True)
+        embed.add_field(name="Pass %", value=f"{round(target.pass_accuracy, 1)}%", inline=True)
+        embed.add_field(name="Rating", value=str(round(target.rating_pg, 1)), inline=True)
+        await rl.interaction_send(interaction, file=file, embed=embed)
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -1908,14 +1873,14 @@ async def slash_mvp(interaction: discord.Interaction):
         raw_img = sq_info.get("image")
         img_path = resolve_image_path(raw_img)
         display_name = mvp.name
-        card = imgen.generate_mvp_card(mvp, pos, photo_path=img_path)
+        card = imgen.generate_player_photo_card(mvp, pos, "gold", "MAN OF THE MATCH", photo_path=img_path)
         file = discord.File(card, filename="mvp.png")
-        mvp_text = darija.mvp(mvp)
-        embed = discord.Embed(title="🏆 MAN OF THE MATCH", description=mvp_text, color=0xffd700)
+        embed = discord.Embed(title=f"🏆 MAN OF THE MATCH — {display_name}", color=0xffd700)
         embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
         embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
         embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
-        await rl.interaction_send(interaction, embed=embed, file=file)
+        embed.add_field(name="Impact", value=str(mvp.impact_score), inline=True)
+        await rl.interaction_send(interaction, file=file, embed=embed)
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -1929,7 +1894,7 @@ async def slash_worst(interaction: discord.Interaction):
         worst = StatsEngine.get_worst(current_club.players)
         pos = get_squad_map().get(worst.name, {}).get("position", "CM")
         roast = darija.roast(worst, pos)
-        embed = discord.Embed(title="🗑️ WORST PLAYER", description=roast, color=0x8b0000)
+        embed = discord.Embed(title=f"🗑️ WORST PLAYER — {worst.name}", description=roast, color=0x8b0000)
         await rl.interaction_send(interaction, embed=embed)
     except Exception as e:
         traceback.print_exc()
@@ -1944,7 +1909,7 @@ async def slash_who_sold(interaction: discord.Interaction):
         fraud = StatsEngine.get_fraud(current_club.players)
         pos = get_squad_map().get(fraud.name, {}).get("position", "CM")
         roast = darija.fraud(fraud)
-        embed = discord.Embed(title="🎭 FRAUD DETECTED", description=roast, color=0xff4500)
+        embed = discord.Embed(title=f"🎭 FRAUD DETECTED — {fraud.name}", description=roast, color=0xff4500)
         await rl.interaction_send(interaction, embed=embed)
     except Exception as e:
         traceback.print_exc()
@@ -1959,7 +1924,7 @@ async def slash_carry(interaction: discord.Interaction):
         carry = StatsEngine.get_carry(current_club.players)
         pos = get_squad_map().get(carry.name, {}).get("position", "CM")
         praise = darija.carry(carry)
-        embed = discord.Embed(title="💪 CARRY DETECTED", description=praise, color=0x00ff00)
+        embed = discord.Embed(title=f"💪 CARRY DETECTED — {carry.name}", description=praise, color=0x00ff00)
         await rl.interaction_send(interaction, embed=embed)
     except Exception as e:
         traceback.print_exc()
@@ -1984,7 +1949,7 @@ async def slash_fraud_check(interaction: discord.Interaction, player: str):
         else:
             text = f"✅ CLEAN\n\n{target.name} — Throwing: {target.throwing_score}\n\nهادا لاعب صحيح."
             color = 0x00ff00
-        embed = discord.Embed(title="FRAUD CHECK", description=text, color=color)
+        embed = discord.Embed(title=f"FRAUD CHECK — {target.name}", description=text, color=color)
         await rl.interaction_send(interaction, embed=embed)
     except Exception as e:
         traceback.print_exc()
@@ -2016,7 +1981,7 @@ async def slash_ghost(interaction: discord.Interaction):
         ghost = StatsEngine.get_ghost(current_club.players)
         pos = get_squad_map().get(ghost.name, {}).get("position", "CM")
         roast = darija.ghost(ghost)
-        embed = discord.Embed(title="👻 GHOST DETECTED", description=roast, color=0x9370db)
+        embed = discord.Embed(title=f"👻 GHOST DETECTED — {ghost.name}", description=roast, color=0x9370db)
         await rl.interaction_send(interaction, embed=embed)
     except Exception as e:
         traceback.print_exc()
@@ -2031,7 +1996,7 @@ async def slash_pass_ball(interaction: discord.Interaction):
         hog = StatsEngine.get_ball_hog(current_club.players)
         pos = get_squad_map().get(hog.name, {}).get("position", "CM")
         roast = darija.ball_loser(hog)
-        embed = discord.Embed(title="⚽ PASS THE BALL!", description=roast, color=0xffa500)
+        embed = discord.Embed(title=f"⚽ PASS THE BALL! — {hog.name}", description=roast, color=0xffa500)
         await rl.interaction_send(interaction, embed=embed)
     except Exception as e:
         traceback.print_exc()
@@ -2046,7 +2011,7 @@ async def slash_ball_loser(interaction: discord.Interaction):
         loser = max(current_club.players, key=lambda p: p.possession_losses)
         pos = get_squad_map().get(loser.name, {}).get("position", "CM")
         roast = darija.ball_loser(loser)
-        embed = discord.Embed(title="💀 BALL LOSER", description=roast, color=0x8b0000)
+        embed = discord.Embed(title=f"💀 BALL LOSER — {loser.name}", description=roast, color=0x8b0000)
         await rl.interaction_send(interaction, embed=embed)
     except Exception as e:
         traceback.print_exc()
@@ -2062,10 +2027,14 @@ async def slash_playmaker(interaction: discord.Interaction):
         pos = get_squad_map().get(pm.name, {}).get("position", "CM")
         text = darija.playmaker(pm)
         img_path = get_squad_map().get(pm.name, {}).get("image")
-        card = imgen.generate_playmaker_card(pm, pos, photo_path=img_path)
-        file = discord.File(card, filename="playmaker.png")
-        embed = discord.Embed(title="🎨 PLAYMAKER", description=text, color=0x00ff00)
-        await rl.interaction_send(interaction, embed=embed, file=file)
+        img_path = resolve_image_path(img_path)
+        card = imgen.generate_player_photo_card(pm, pos, "green", "PLAYMAKER", photo_path=img_path)
+        file = discord.File(card, filename=f"{pm.name}.png")
+        embed = discord.Embed(title=f"🎨 PLAYMAKER — {pm.name}", description=text, color=0x00ff00)
+        embed.add_field(name="Assists", value=str(pm.assists), inline=True)
+        embed.add_field(name="Pass %", value=f"{round(pm.pass_accuracy, 1)}%", inline=True)
+        embed.add_field(name="Rating", value=str(round(pm.rating_pg, 1)), inline=True)
+        await rl.interaction_send(interaction, file=file, embed=embed)
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -2079,10 +2048,14 @@ async def slash_sniper(interaction: discord.Interaction):
         sniper = max(current_club.players, key=lambda p: p.goals * 2 + p.rating_pg)
         pos = get_squad_map().get(sniper.name, {}).get("position", "CM")
         img_path = get_squad_map().get(sniper.name, {}).get("image")
-        card = imgen.generate_sniper_card(sniper, pos, photo_path=img_path)
-        file = discord.File(card, filename="sniper.png")
-        embed = discord.Embed(title="🎯 SNIPER", description=f"**{sniper.name}** — {sniper.goals} goals | Rating: {round(sniper.rating_pg, 1)}", color=0xff4500)
-        await rl.interaction_send(interaction, embed=embed, file=file)
+        img_path = resolve_image_path(img_path)
+        card = imgen.generate_player_photo_card(sniper, pos, "blue", "SNIPER", photo_path=img_path)
+        file = discord.File(card, filename=f"{sniper.name}.png")
+        embed = discord.Embed(title=f"🎯 SNIPER — {sniper.name}", color=0xff4500)
+        embed.add_field(name="Goals", value=str(sniper.goals), inline=True)
+        embed.add_field(name="Rating", value=str(round(sniper.rating_pg, 1)), inline=True)
+        embed.add_field(name="Impact", value=str(sniper.impact_score), inline=True)
+        await rl.interaction_send(interaction, file=file, embed=embed)
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -2099,7 +2072,7 @@ async def slash_keeper(interaction: discord.Interaction):
             return
         keeper = max(gks, key=lambda p: p.tackles + p.interceptions)
         text = darija.keeper(keeper)
-        embed = discord.Embed(title="🧤 KEEPER", description=text, color=0x1e90ff)
+        embed = discord.Embed(title=f"🧤 KEEPER — {keeper.name}", description=text, color=0x1e90ff)
         await rl.interaction_send(interaction, embed=embed)
     except Exception as e:
         traceback.print_exc()
@@ -2402,10 +2375,15 @@ async def slash_roastplayer(interaction: discord.Interaction, player: str):
     display_name = target.name
     try:
         roast = darija.roast(target, pos)
-        card = imgen.generate_roast_card(target, roast, pos, photo_path=img_path)
-        file = discord.File(card, filename=f"{display_name}_roast.png")
+        card = imgen.generate_player_photo_card(target, pos, "red", "FRAUD DETECTED", photo_path=img_path)
+        file = discord.File(card, filename=f"{display_name}.png")
         embed = discord.Embed(title=f"🔥 ROAST REPORT — {display_name}", description=roast, color=0xff0000)
-        await rl.interaction_send(interaction, embed=embed, file=file)
+        embed.add_field(name="Throwing", value=str(round(target.throwing_score, 1)), inline=True)
+        embed.add_field(name="Error", value=str(round(target.error_score, 1)), inline=True)
+        embed.add_field(name="Pass %", value=f"{round(target.pass_accuracy, 1)}%", inline=True)
+        embed.add_field(name="Possession Lost", value=str(target.possession_losses), inline=True)
+        embed.add_field(name="Rating", value=str(round(target.rating_pg, 1)), inline=True)
+        await rl.interaction_send(interaction, file=file, embed=embed)
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -2577,10 +2555,9 @@ async def slash_legend(interaction: discord.Interaction):
         raw_img = sq_info.get("image")
         img_path = resolve_image_path(raw_img)
         display_name = mvp.name
-        card = imgen.generate_legend_card(mvp, pos, photo_path=img_path)
+        card = imgen.generate_player_photo_card(mvp, pos, "gold", "CLUB LEGEND", photo_path=img_path)
         file = discord.File(card, filename="legend.png")
-        text = darija.mvp(mvp)
-        embed = discord.Embed(title=f"👑 CLUB LEGEND — {display_name}", description=text, color=0xffd700)
+        embed = discord.Embed(title=f"👑 CLUB LEGEND — {display_name}", color=0xffd700)
         embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
         embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
         embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
