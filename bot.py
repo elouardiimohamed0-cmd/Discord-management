@@ -154,7 +154,10 @@ def _build_nickname_maps():
     NICKNAME_TO_PSN.clear()
     players_iter = []
     if isinstance(squad, dict):
-        players_iter = squad.get("players", []) if "players" in squad else list(squad.values())
+        if "players" in squad:
+            players_iter = squad.get("players", [])
+        else:
+            players_iter = squad.values()
     elif isinstance(squad, list):
         players_iter = squad
     for p in players_iter:
@@ -165,6 +168,9 @@ def _build_nickname_maps():
         if psn and nickname:
             PSN_TO_NICKNAME[psn.lower()] = nickname
             NICKNAME_TO_PSN[nickname.lower()] = psn
+    logger.info("[SQUAD] Nickname maps built: %d PSN->name, %d name->PSN", 
+                len(PSN_TO_NICKNAME), len(NICKNAME_TO_PSN))
+
 
 def resolve_nickname(name):
     if not name or not isinstance(name, str):
@@ -222,6 +228,48 @@ DATA_CACHE_TTL = 600  # 10 minutes
 # ─────────────────────────────────────────────────────────────
 # DATA CONVERSION: dict -> ClubStats/PlayerStats
 # ─────────────────────────────────────────────────────────────
+# ─── IMAGE PATH RESOLVER (handles .jpg ↔ .jpeg fallback) ───
+def resolve_image_path(photo_path: str) -> Optional[str]:
+    """Try the exact path, then fallback extensions."""
+    if not photo_path:
+        return None
+    if os.path.exists(photo_path):
+        return photo_path
+    # Try alternative extensions
+    base, ext = os.path.splitext(photo_path)
+    alts = []
+    if ext.lower() == ".jpg":
+        alts = [base + ".jpeg", base + ".JPEG", base + ".JPG"]
+    elif ext.lower() == ".jpeg":
+        alts = [base + ".jpg", base + ".JPG", base + ".JPEG"]
+    elif ext.lower() == ".png":
+        alts = [base + ".jpg", base + ".jpeg"]
+    for alt in alts:
+        if os.path.exists(alt):
+            return alt
+    return None
+
+# ─── SQUAD NAME RESOLVER ───
+def get_squad_display_name(player_name: str) -> str:
+    """Return the proper squad.json name for a player, or the original name."""
+    if not player_name or not isinstance(player_name, str):
+        return player_name or "Unknown"
+    sq = get_squad_map()
+    # Direct match (case-insensitive)
+    for sq_name, info in sq.items():
+        if sq_name and sq_name.lower() == player_name.strip().lower():
+            return info.get("name", sq_name)
+    # Check if any squad name is contained in player name
+    for sq_name, info in sq.items():
+        if sq_name and sq_name.lower() in player_name.lower():
+            return info.get("name", sq_name)
+    # Check if player name is contained in any squad name
+    for sq_name, info in sq.items():
+        if sq_name and player_name.lower() in sq_name.lower():
+            return info.get("name", sq_name)
+    return player_name
+
+
 def _dict_to_club(data: dict) -> Optional[ClubStats]:
     if not data:
         return None
@@ -277,13 +325,19 @@ def _dict_to_club(data: dict) -> Optional[ClubStats]:
 # ─────────────────────────────────────────────────────────────
 def get_squad_map():
     """Handle both {"players": [...]} and flat {nickname: {...}} squad.json structures."""
+    result = {}
     if isinstance(squad, dict):
         if "players" in squad:
-            return {p.get("name", ""): p for p in squad.get("players", []) if isinstance(p, dict)}
+            result = {p.get("name", ""): p for p in squad.get("players", []) if isinstance(p, dict)}
         else:
-            # Flat dict: keys are nicknames, values are player objects
-            return {p.get("name", ""): p for p in squad.values() if isinstance(p, dict)}
-    return {}
+            result = {p.get("name", ""): p for p in squad.values() if isinstance(p, dict)}
+    if not result:
+        logger.warning("[SQUAD] squad.json loaded but get_squad_map() returned empty. squad type=%s, keys=%s", 
+                      type(squad).__name__, list(squad.keys())[:10] if isinstance(squad, dict) else "N/A")
+    else:
+        logger.info("[SQUAD] Loaded %d players from squad.json", len(result))
+    return result
+
 
 def _name_similarity(a: str, b: str) -> float:
     """Simple similarity score: 0.0 to 1.0"""
@@ -530,10 +584,12 @@ async def daily_post():
         if not pick:
             return
         is_bad = pick.get("type") == "bad"
-        img_path = get_squad_map().get(pick["player"].name, {}).get("image")
-        card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad)
+        raw_img = get_squad_map().get(pick["player"].name, {}).get("image")
+        img_path = resolve_image_path(raw_img)
+        display_name = get_squad_display_name(pick["player"].name)
+        card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad, photo_path=img_path)
         file = discord.File(card, filename="daily.png")
-        embed = discord.Embed(title=pick["title"], description=pick["roast"], color=0xff0000 if is_bad else 0xffd700)
+        embed = discord.Embed(title=pick.get("title", f"📊 Daily Stat — {display_name}"), description=pick["roast"], color=0xff0000 if is_bad else 0xffd700)
         await rl.channel_send(channel, embed=embed, file=file)
         logger.info("Daily post sent")
     except Exception as e:
@@ -706,14 +762,17 @@ async def cmd_stats(ctx, *, player: str):
         await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
         return
     squad_map = get_squad_map()
-    pos = squad_map.get(target.name, {}).get("position", "CM")
-    img_path = squad_map.get(target.name, {}).get("image")
+    sq_info = squad_map.get(target.name, {})
+    pos = sq_info.get("position", "CM")
+    raw_img = sq_info.get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = get_squad_display_name(target.name)
     async with ctx.typing():
         try:
-            card = imgen.generate_player_card(target, pos, division=current_club.division)
-            file = discord.File(card, filename=f"{target.name}_card.png")
+            card = imgen.generate_player_card(target, pos, division=current_club.division, photo_path=img_path)
+            file = discord.File(card, filename=f"{display_name}_card.png")
             roast_text = darija.roast(target, pos)
-            embed = discord.Embed(title=f"📊 {target.name} — {pos}", description=roast_text, color=0x1e90ff)
+            embed = discord.Embed(title=f"📊 {display_name} — {pos}", description=roast_text, color=0x1e90ff)
             embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
             embed.add_field(name="Clutch", value=str(target.clutch_score), inline=True)
             embed.add_field(name="Error", value=str(target.error_score), inline=True)
@@ -730,12 +789,14 @@ async def cmd_mvp(ctx):
         try:
             squad_map = get_squad_map()
             mvp = StatsEngine.get_mvp(current_club.players)
-            pos = squad_map.get(mvp.name, {}).get("position", "CM")
-            img_path = squad_map.get(mvp.name, {}).get("image")
-            card = imgen.generate_mvp_card(mvp, pos)
+            sq_info = squad_map.get(mvp.name, {})
+            pos = sq_info.get("position", "CM")
+            img_path = resolve_image_path(sq_info.get("image"))
+            display_name = get_squad_display_name(mvp.name)
+            card = imgen.generate_mvp_card(mvp, pos, photo_path=img_path)
             file = discord.File(card, filename="mvp.png")
             mvp_text = darija.mvp(mvp)
-            embed = discord.Embed(title="🏆 MAN OF THE MATCH", description=mvp_text, color=0xffd700)
+            embed = discord.Embed(title=f"🏆 MAN OF THE MATCH — {display_name}", description=mvp_text, color=0xffd700)
             embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
             embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
             embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
@@ -1026,14 +1087,17 @@ async def cmd_roastplayer(ctx, *, player: str):
         await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
         return
     squad_map = get_squad_map()
-    pos = squad_map.get(target.name, {}).get("position", "CM")
-    img_path = squad_map.get(target.name, {}).get("image")
+    sq_info = squad_map.get(target.name, {})
+    pos = sq_info.get("position", "CM")
+    raw_img = squad_map.get(target.name, {}).get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = get_squad_display_name(target.name)
     async with ctx.typing():
         try:
             roast = darija.roast(target, pos)
-            card = imgen.generate_roast_card(target, roast, pos)
-            file = discord.File(card, filename=f"{target.name}_roast.png")
-            embed = discord.Embed(title=f"🔥 ROAST REPORT — {target.name}", description=roast, color=0xff0000)
+            card = imgen.generate_roast_card(target, roast, pos, photo_path=img_path)
+            file = discord.File(card, filename=f"{display_name}_roast.png")
+            embed = discord.Embed(title=f"🔥 ROAST REPORT — {display_name}", description=roast, color=0xff0000)
             await rl.ctx_send(ctx, embed=embed, file=file)
         except Exception as e:
             traceback.print_exc()
@@ -1082,12 +1146,15 @@ async def cmd_player(ctx, *, player: str):
         await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
         return
     squad_map = get_squad_map()
-    pos = squad_map.get(target.name, {}).get("position", "CM")
-    img_path = squad_map.get(target.name, {}).get("image")
+    sq_info = squad_map.get(target.name, {})
+    pos = sq_info.get("position", "CM")
+    raw_img = sq_info.get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = get_squad_display_name(target.name)
     async with ctx.typing():
         try:
-            card = imgen.generate_anime_card(target, pos, "mvp", "PLAYER PROFILE")
-            file = discord.File(card, filename=f"{target.name}_profile.png")
+            card = imgen.generate_anime_card(target, pos, "mvp", "PLAYER PROFILE", photo_path=img_path)
+            file = discord.File(card, filename=f"{display_name}_profile.png")
             lines = [
                 f"**Position:** {pos}",
                 f"**Games:** {target.games}",
@@ -1097,7 +1164,7 @@ async def cmd_player(ctx, *, player: str):
                 f"**Pass Accuracy:** {round(target.pass_accuracy, 1)}%",
                 f"**Possession Lost:** {target.possession_losses}",
             ]
-            embed = discord.Embed(title=f"👤 {target.name}", description="\n".join(lines), color=0x1e90ff)
+            embed = discord.Embed(title=f"👤 {display_name}", description="\n".join(lines), color=0x1e90ff)
             await rl.ctx_send(ctx, embed=embed, file=file)
         except Exception as e:
             traceback.print_exc()
@@ -1112,13 +1179,16 @@ async def cmd_anime_card(ctx, *, player: str):
         await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
         return
     squad_map = get_squad_map()
-    pos = squad_map.get(target.name, {}).get("position", "CM")
-    img_path = squad_map.get(target.name, {}).get("image")
+    sq_info = squad_map.get(target.name, {})
+    pos = sq_info.get("position", "CM")
+    raw_img = squad_map.get(target.name, {}).get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = get_squad_display_name(target.name)
     async with ctx.typing():
         try:
-            card = imgen.generate_anime_card(target, pos, "beast", "⚡ ANIME LEGEND")
-            file = discord.File(card, filename=f"{target.name}_anime.png")
-            embed = discord.Embed(title=f"⚡ {target.name}", color=0x00ffff)
+            card = imgen.generate_anime_card(target, pos, "beast", "⚡ ANIME LEGEND", photo_path=img_path)
+            file = discord.File(card, filename=f"{display_name}_anime.png")
+            embed = discord.Embed(title=f"⚡ {display_name}", color=0x00ffff)
             await rl.ctx_send(ctx, embed=embed, file=file)
         except Exception as e:
             traceback.print_exc()
@@ -1136,13 +1206,16 @@ async def cmd_beast_mode(ctx, *, player: str = None):
         await rl.ctx_send(ctx, "ما لقيتش player.")
         return
     squad_map = get_squad_map()
-    pos = squad_map.get(target.name, {}).get("position", "CM")
-    img_path = squad_map.get(target.name, {}).get("image")
+    sq_info = squad_map.get(target.name, {})
+    pos = sq_info.get("position", "CM")
+    raw_img = squad_map.get(target.name, {}).get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = get_squad_display_name(target.name)
     async with ctx.typing():
         try:
-            card = imgen.generate_beast_card(target, pos)
+            card = imgen.generate_beast_card(target, pos, photo_path=img_path)
             file = discord.File(card, filename="beast.png")
-            embed = discord.Embed(title=f"⚡ BEAST MODE — {target.name}",
+            embed = discord.Embed(title=f"⚡ BEAST MODE — {display_name}",
                 description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
                 color=0x00bfff)
             await rl.ctx_send(ctx, embed=embed, file=file)
@@ -1159,15 +1232,18 @@ async def cmd_court_case(ctx, *, player: str):
         await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
         return
     squad_map = get_squad_map()
-    pos = squad_map.get(target.name, {}).get("position", "CM")
-    img_path = squad_map.get(target.name, {}).get("image")
+    sq_info = squad_map.get(target.name, {})
+    pos = sq_info.get("position", "CM")
+    raw_img = squad_map.get(target.name, {}).get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = get_squad_display_name(target.name)
     async with ctx.typing():
         try:
             text = darija.court_case(target)
-            card = imgen.generate_court_case(target, pos, ["Evidence generated by Roast Engine"])
+            card = imgen.generate_court_case(target, pos, ["Evidence generated by Roast Engine"], photo_path=img_path)
             file = discord.File(card, filename="court.png")
             color = 0xff0000 if target.throwing_score > 3.0 or target.rating_pg < 5.5 else 0x00ff00
-            embed = discord.Embed(title=f"⚖️ COURT CASE: {target.name}", description=text, color=color)
+            embed = discord.Embed(title=f"⚖️ COURT CASE: {display_name}", description=text, color=color)
             await rl.ctx_send(ctx, embed=embed, file=file)
         except Exception as e:
             traceback.print_exc()
@@ -1198,7 +1274,7 @@ async def cmd_playmaker(ctx):
             pos = get_squad_map().get(pm.name, {}).get("position", "CM")
             text = darija.playmaker(pm)
             img_path = get_squad_map().get(pm.name, {}).get("image")
-            card = imgen.generate_playmaker_card(pm, pos)
+            card = imgen.generate_playmaker_card(pm, pos, photo_path=img_path)
             file = discord.File(card, filename="playmaker.png")
             embed = discord.Embed(title="🎨 PLAYMAKER", description=text, color=0x00ff00)
             await rl.ctx_send(ctx, embed=embed, file=file)
@@ -1215,7 +1291,7 @@ async def cmd_sniper(ctx):
             sniper = max(current_club.players, key=lambda p: p.goals * 2 + p.rating_pg)
             pos = get_squad_map().get(sniper.name, {}).get("position", "CM")
             img_path = get_squad_map().get(sniper.name, {}).get("image")
-            card = imgen.generate_sniper_card(sniper, pos)
+            card = imgen.generate_sniper_card(sniper, pos, photo_path=img_path)
             file = discord.File(card, filename="sniper.png")
             embed = discord.Embed(title="🎯 SNIPER", description=f"**{sniper.name}** — {sniper.goals} goals | Rating: {round(sniper.rating_pg, 1)}", color=0xff4500)
             await rl.ctx_send(ctx, embed=embed, file=file)
@@ -1319,10 +1395,12 @@ async def cmd_daily(ctx):
                 await rl.ctx_send(ctx, "ما قدرتش نجيب daily stat.")
                 return
             is_bad = pick.get("type") == "bad"
-            img_path = get_squad_map().get(pick["player"].name, {}).get("image")
-            card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad)
+            raw_img = get_squad_map().get(pick["player"].name, {}).get("image")
+            img_path = resolve_image_path(raw_img)
+            display_name = get_squad_display_name(pick["player"].name)
+            card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad, photo_path=img_path)
             file = discord.File(card, filename="daily.png")
-            embed = discord.Embed(title=pick["title"], description=pick["roast"], color=0xff0000 if is_bad else 0xffd700)
+            embed = discord.Embed(title=pick.get("title", f"📊 Daily Stat — {display_name}"), description=pick["roast"], color=0xff0000 if is_bad else 0xffd700)
             await rl.ctx_send(ctx, embed=embed, file=file)
         except Exception as e:
             traceback.print_exc()
@@ -1357,6 +1435,8 @@ async def slash_debug(interaction: discord.Interaction):
     cache_age = int(time.time() - _data_cache_time) if _data_cache_time else "N/A"
     metrics = scraper.metrics()
     db_stats = await scraper.db_stats()
+    sq_map = get_squad_map()
+    sq_names = list(sq_map.keys())[:5] if sq_map else ["EMPTY - squad.json missing?"]
     lines = [
         f"PCT_URL: {Config.PCT_CLUB_URL}",
         f"PORT: {Config.PORT}",
@@ -1365,6 +1445,8 @@ async def slash_debug(interaction: discord.Interaction):
         f"Data loaded: {data_loaded}",
         f"Players: {player_count}",
         f"Cache age: {cache_age}s",
+        f"Squad.json loaded: {len(sq_map)} players",
+        f"Squad sample: {', '.join(sq_names)}",
         f"Scraper cooldown: {metrics['cooldown']} ({metrics['cooldown_remaining']}s)",
         f"Scraper rate limited: {metrics['rate_limited']}",
         f"Scraper requests/hour: {metrics['requests_hour']}/{scraper._max_per_hour}",
@@ -1403,13 +1485,16 @@ async def slash_stats(interaction: discord.Interaction, player: str):
         await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
         return
     squad_map = get_squad_map()
-    pos = squad_map.get(target.name, {}).get("position", "CM")
-    img_path = squad_map.get(target.name, {}).get("image")
+    sq_info = squad_map.get(target.name, {})
+    pos = sq_info.get("position", "CM")
+    raw_img = squad_map.get(target.name, {}).get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = get_squad_display_name(target.name)
     try:
-        card = imgen.generate_player_card(target, pos, division=current_club.division)
-        file = discord.File(card, filename=f"{target.name}_card.png")
+        card = imgen.generate_player_card(target, pos, division=current_club.division, photo_path=img_path)
+        file = discord.File(card, filename=f"{display_name}_card.png")
         roast_text = darija.roast(target, pos)
-        embed = discord.Embed(title=f"📊 {target.name} — {pos}", description=roast_text, color=0x1e90ff)
+        embed = discord.Embed(title=f"📊 {display_name} — {pos}", description=roast_text, color=0x1e90ff)
         embed.add_field(name="Impact", value=str(target.impact_score), inline=True)
         embed.add_field(name="Clutch", value=str(target.clutch_score), inline=True)
         embed.add_field(name="Error", value=str(target.error_score), inline=True)
@@ -1429,11 +1514,14 @@ async def slash_player(interaction: discord.Interaction, player: str):
         await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
         return
     squad_map = get_squad_map()
-    pos = squad_map.get(target.name, {}).get("position", "CM")
-    img_path = squad_map.get(target.name, {}).get("image")
+    sq_info = squad_map.get(target.name, {})
+    pos = sq_info.get("position", "CM")
+    raw_img = squad_map.get(target.name, {}).get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = get_squad_display_name(target.name)
     try:
-        card = imgen.generate_anime_card(target, pos, "mvp", "PLAYER PROFILE")
-        file = discord.File(card, filename=f"{target.name}_profile.png")
+        card = imgen.generate_anime_card(target, pos, "mvp", "PLAYER PROFILE", photo_path=img_path)
+        file = discord.File(card, filename=f"{display_name}_profile.png")
         lines = [
             f"**Position:** {pos}",
             f"**Games:** {target.games}",
@@ -1442,7 +1530,7 @@ async def slash_player(interaction: discord.Interaction, player: str):
             f"**Impact:** {target.impact_score} | **Clutch:** {target.clutch_score}",
             f"**Pass Accuracy:** {round(target.pass_accuracy, 1)}%",
         ]
-        embed = discord.Embed(title=f"👤 {target.name}", description="\n".join(lines), color=0x1e90ff)
+        embed = discord.Embed(title=f"👤 {display_name}", description="\n".join(lines), color=0x1e90ff)
         await rl.interaction_send(interaction, embed=embed, file=file)
     except Exception as e:
         traceback.print_exc()
@@ -1459,12 +1547,15 @@ async def slash_anime_card(interaction: discord.Interaction, player: str):
         await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
         return
     squad_map = get_squad_map()
-    pos = squad_map.get(target.name, {}).get("position", "CM")
-    img_path = squad_map.get(target.name, {}).get("image")
+    sq_info = squad_map.get(target.name, {})
+    pos = sq_info.get("position", "CM")
+    raw_img = squad_map.get(target.name, {}).get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = get_squad_display_name(target.name)
     try:
-        card = imgen.generate_anime_card(target, pos, "beast", "⚡ ANIME LEGEND")
-        file = discord.File(card, filename=f"{target.name}_anime.png")
-        embed = discord.Embed(title=f"⚡ {target.name}", color=0x00ffff)
+        card = imgen.generate_anime_card(target, pos, "beast", "⚡ ANIME LEGEND", photo_path=img_path)
+        file = discord.File(card, filename=f"{display_name}_anime.png")
+        embed = discord.Embed(title=f"⚡ {display_name}", color=0x00ffff)
         await rl.interaction_send(interaction, embed=embed, file=file)
     except Exception as e:
         traceback.print_exc()
@@ -1484,12 +1575,15 @@ async def slash_beast_mode(interaction: discord.Interaction, player: str = None)
         await rl.interaction_send(interaction, "ما لقيتش player.")
         return
     squad_map = get_squad_map()
-    pos = squad_map.get(target.name, {}).get("position", "CM")
-    img_path = squad_map.get(target.name, {}).get("image")
+    sq_info = squad_map.get(target.name, {})
+    pos = sq_info.get("position", "CM")
+    raw_img = squad_map.get(target.name, {}).get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = get_squad_display_name(target.name)
     try:
-        card = imgen.generate_beast_card(target, pos)
+        card = imgen.generate_beast_card(target, pos, photo_path=img_path)
         file = discord.File(card, filename="beast.png")
-        embed = discord.Embed(title=f"⚡ BEAST MODE — {target.name}",
+        embed = discord.Embed(title=f"⚡ BEAST MODE — {display_name}",
             description=f"Impact: {target.impact_score} | Goals: {target.goals} | Rating: {round(target.rating_pg, 1)}",
             color=0x00bfff)
         await rl.interaction_send(interaction, embed=embed, file=file)
@@ -1508,14 +1602,17 @@ async def slash_court_case(interaction: discord.Interaction, player: str):
         await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
         return
     squad_map = get_squad_map()
-    pos = squad_map.get(target.name, {}).get("position", "CM")
-    img_path = squad_map.get(target.name, {}).get("image")
+    sq_info = squad_map.get(target.name, {})
+    pos = sq_info.get("position", "CM")
+    raw_img = squad_map.get(target.name, {}).get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = get_squad_display_name(target.name)
     try:
         text = darija.court_case(target)
-        card = imgen.generate_court_case(target, pos, ["Evidence generated by Roast Engine"])
+        card = imgen.generate_court_case(target, pos, ["Evidence generated by Roast Engine"], photo_path=img_path)
         file = discord.File(card, filename="court.png")
         color = 0xff0000 if target.throwing_score > 3.0 or target.rating_pg < 5.5 else 0x00ff00
-        embed = discord.Embed(title=f"⚖️ COURT CASE: {target.name}", description=text, color=color)
+        embed = discord.Embed(title=f"⚖️ COURT CASE: {display_name}", description=text, color=color)
         await rl.interaction_send(interaction, embed=embed, file=file)
     except Exception as e:
         traceback.print_exc()
@@ -1529,9 +1626,12 @@ async def slash_mvp(interaction: discord.Interaction):
     try:
         squad_map = get_squad_map()
         mvp = StatsEngine.get_mvp(current_club.players)
-        pos = squad_map.get(mvp.name, {}).get("position", "CM")
-        img_path = squad_map.get(mvp.name, {}).get("image")
-        card = imgen.generate_mvp_card(mvp, pos)
+        sq_info = squad_map.get(mvp.name, {})
+        pos = sq_info.get("position", "CM")
+        raw_img = squad_map.get(mvp.name, {}).get("image")
+        img_path = resolve_image_path(raw_img)
+        display_name = get_squad_display_name(mvp.name)
+        card = imgen.generate_mvp_card(mvp, pos, photo_path=img_path)
         file = discord.File(card, filename="mvp.png")
         mvp_text = darija.mvp(mvp)
         embed = discord.Embed(title="🏆 MAN OF THE MATCH", description=mvp_text, color=0xffd700)
@@ -1685,7 +1785,7 @@ async def slash_playmaker(interaction: discord.Interaction):
         pos = get_squad_map().get(pm.name, {}).get("position", "CM")
         text = darija.playmaker(pm)
         img_path = get_squad_map().get(pm.name, {}).get("image")
-        card = imgen.generate_playmaker_card(pm, pos)
+        card = imgen.generate_playmaker_card(pm, pos, photo_path=img_path)
         file = discord.File(card, filename="playmaker.png")
         embed = discord.Embed(title="🎨 PLAYMAKER", description=text, color=0x00ff00)
         await rl.interaction_send(interaction, embed=embed, file=file)
@@ -1702,7 +1802,7 @@ async def slash_sniper(interaction: discord.Interaction):
         sniper = max(current_club.players, key=lambda p: p.goals * 2 + p.rating_pg)
         pos = get_squad_map().get(sniper.name, {}).get("position", "CM")
         img_path = get_squad_map().get(sniper.name, {}).get("image")
-        card = imgen.generate_sniper_card(sniper, pos)
+        card = imgen.generate_sniper_card(sniper, pos, photo_path=img_path)
         file = discord.File(card, filename="sniper.png")
         embed = discord.Embed(title="🎯 SNIPER", description=f"**{sniper.name}** — {sniper.goals} goals | Rating: {round(sniper.rating_pg, 1)}", color=0xff4500)
         await rl.interaction_send(interaction, embed=embed, file=file)
@@ -1883,10 +1983,12 @@ async def slash_daily(interaction: discord.Interaction):
             await rl.interaction_send(interaction, "ما قدرتش نجيب daily stat.")
             return
         is_bad = pick.get("type") == "bad"
-        img_path = get_squad_map().get(pick["player"].name, {}).get("image")
-        card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad)
+        raw_img = get_squad_map().get(pick["player"].name, {}).get("image")
+        img_path = resolve_image_path(raw_img)
+        display_name = get_squad_display_name(pick["player"].name)
+        card = imgen.generate_daily_card(pick["player"], pick["stat_name"], pick["stat_value"], pick["roast"], is_bad, photo_path=img_path)
         file = discord.File(card, filename="daily.png")
-        embed = discord.Embed(title=pick["title"], description=pick["roast"], color=0xff0000 if is_bad else 0xffd700)
+        embed = discord.Embed(title=pick.get("title", f"📊 Daily Stat — {display_name}"), description=pick["roast"], color=0xff0000 if is_bad else 0xffd700)
         await rl.interaction_send(interaction, embed=embed, file=file)
     except Exception as e:
         traceback.print_exc()
@@ -2016,13 +2118,16 @@ async def slash_roastplayer(interaction: discord.Interaction, player: str):
         await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
         return
     squad_map = get_squad_map()
-    pos = squad_map.get(target.name, {}).get("position", "CM")
-    img_path = squad_map.get(target.name, {}).get("image")
+    sq_info = squad_map.get(target.name, {})
+    pos = sq_info.get("position", "CM")
+    raw_img = squad_map.get(target.name, {}).get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = get_squad_display_name(target.name)
     try:
         roast = darija.roast(target, pos)
-        card = imgen.generate_roast_card(target, roast, pos)
-        file = discord.File(card, filename=f"{target.name}_roast.png")
-        embed = discord.Embed(title=f"🔥 ROAST REPORT — {target.name}", description=roast, color=0xff0000)
+        card = imgen.generate_roast_card(target, roast, pos, photo_path=img_path)
+        file = discord.File(card, filename=f"{display_name}_roast.png")
+        embed = discord.Embed(title=f"🔥 ROAST REPORT — {display_name}", description=roast, color=0xff0000)
         await rl.interaction_send(interaction, embed=embed, file=file)
     except Exception as e:
         traceback.print_exc()
