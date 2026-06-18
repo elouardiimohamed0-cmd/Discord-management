@@ -1,5 +1,4 @@
 """image_gen.py — EA FC Pro Clubs premium card generator.
-Resolution: 1440x2160 (portrait)
 Pure Pillow — no Groq, no AI, no randomness.
 """
 
@@ -33,12 +32,10 @@ def _load_player_photo(name: str, assets_dir: str, max_size=(1600, 1600), photo_
             print(f"[PHOTO DEBUG] ❌ Failed: {path} — {e}")
             return None
 
-    # Try explicit path first
     img = _try_load(photo_path)
     if img:
         return img
 
-    # Search by name variations
     clean = name.replace(" ", "_").lower()
     upper = name.upper()
     title = name.title()
@@ -163,26 +160,22 @@ class ImageGenerator:
         pal = PALETTES.get(palette_name, PALETTES["gold"])
         W, H = CARD_W, CARD_H
 
-        # Dark premium background
         img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
         img = _glow_circle(img, W // 2, H // 3, 700, pal["glow"], 0.2)
         draw = ImageDraw.Draw(img)
 
-        # ── TOP: Nickname + Position ──
         nickname = getattr(player, "_squad_info", {}).get("nickname", player.name)
         f_name = self._font(90, bold=True)
         draw.text((W // 2, 70), nickname.upper(), fill=pal["text"], font=f_name, anchor="mm")
 
-        # Position badge
         f_pos = self._font(40, bold=True)
         pw, ph = 160, 70
         px = W // 2 - pw // 2
         draw.rounded_rectangle([px, 125, px + pw, 125 + ph], radius=15, fill=pal["accent"], outline=pal["accent2"], width=2)
         draw.text((W // 2, 125 + ph // 2), pos.upper(), fill=(10, 10, 10), font=f_pos, anchor="mm")
 
-        # ── CENTER: Photo (preserve aspect ratio, max size, centered) ──
         photo_max_w = W - 100
-        photo_max_h = H - 320  # space for header + footer
+        photo_max_h = H - 320
         photo = _load_player_photo(
             player.name, self.assets_dir,
             max_size=(photo_max_w, photo_max_h),
@@ -193,31 +186,25 @@ class ImageGenerator:
         print(f"[CARD DEBUG] Player: {player.name}, Nickname: {nickname}, Asset: {photo_path}, Loaded: {photo is not None}")
 
         if photo:
-            # Center the photo
             px = (W - photo.width) // 2
             py = 220 + (photo_max_h - photo.height) // 2
 
-            # Soft glow behind photo
             shadow = Image.new("RGBA", (photo.width + 80, photo.height + 80), (0, 0, 0, 0))
             s_draw = ImageDraw.Draw(shadow)
             s_draw.rounded_rectangle([20, 20, photo.width + 60, photo.height + 60], radius=40, fill=(*pal["glow"], 60))
             shadow = shadow.filter(ImageFilter.GaussianBlur(radius=40))
             img.paste(shadow, (px - 40, py - 40), shadow)
 
-            # Paste photo (with rounded mask)
             mask = Image.new("L", photo.size, 0)
             ImageDraw.Draw(mask).rounded_rectangle([0, 0, photo.width, photo.height], radius=30, fill=255)
             img.paste(photo, (px, py), mask)
         else:
-            # Fallback: large silhouette text
             f_err = self._font(60, bold=True)
             draw.text((W // 2, H // 2), f"[NO PHOTO]\n{player.name}", fill=pal["text_dim"], font=f_err, anchor="mm")
 
-        # ── FOOTER ──
         f_foot = self._font(28)
         draw.text((W // 2, H - 35), f"RACHAD L3ERGONI • {label}", fill=pal["text_dim"], font=f_foot, anchor="mm")
 
-        # Final
         img = img.convert("RGB")
         enhancer = ImageEnhance.Sharpness(img)
         img = enhancer.enhance(1.1)
@@ -227,10 +214,7 @@ class ImageGenerator:
         buf.seek(0)
         return buf
 
-    # ───────────────────────────────────────────
-    # LEGACY / SPECIAL CARDS
-    # ───────────────────────────────────────────
-
+    # ─── FIXED: all wrappers pass photo_path= (not photo_override=) ───
     def generate_player_card(self, player, pos, division=6, photo_path=None):
         return self.generate_player_photo_card(player, pos, "gold", "PLAYER PROFILE", photo_path=photo_path)
 
@@ -413,11 +397,7 @@ class ImageGenerator:
         buf.seek(0)
         return buf
 
-    # ───────────────────────────────────────────
-    # FORM CARD — Last N Matches Trend
-    # ───────────────────────────────────────────
     def generate_form_card(self, player, matches_data, num_matches):
-        """Form card showing last N matches trend."""
         pal = PALETTES["blue"]
         W, H = CARD_W, CARD_H
         img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
@@ -431,7 +411,6 @@ class ImageGenerator:
         f_name = self._font(110, bold=True)
         draw.text((W // 2, 200), nickname.upper(), fill=pal["text"], font=f_name, anchor="mm")
 
-        # Match rows
         row_h = 280
         start_y = 340
         f_label = self._font(32, bold=True)
@@ -443,10 +422,8 @@ class ImageGenerator:
             y = start_y + i * row_h
             draw.rounded_rectangle([MARGIN, y, W - MARGIN, y + row_h - 20], radius=20, fill=(25, 25, 25, 200), outline=(*pal["accent"], 80), width=2)
 
-            # Date + Opponent
             draw.text((MARGIN + 30, y + 15), f"{md['date']} vs {md['opponent']}", fill=pal["text_dim"], font=f_label)
 
-            # Stats
             stats = [
                 ("RATING", f"{md['rating']}"),
                 ("GOALS", str(md['goals'])),
@@ -462,7 +439,6 @@ class ImageGenerator:
 
             ratings.append(md['rating'])
 
-        # Trend
         if len(ratings) >= 2:
             half = len(ratings) // 2
             avg_first = sum(ratings[:half]) / max(half, 1)
@@ -497,11 +473,7 @@ class ImageGenerator:
         buf.seek(0)
         return buf
 
-    # ───────────────────────────────────────────
-    # RECORDS CARD — Club Historical Records
-    # ───────────────────────────────────────────
     def generate_records_card(self, club, records):
-        """Club records card."""
         pal = PALETTES["gold"]
         W, H = CARD_W, CARD_H
         img = _gradient_bg(W, H, (8, 6, 2), (25, 18, 6)).convert("RGBA")
