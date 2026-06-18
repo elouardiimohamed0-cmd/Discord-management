@@ -3,10 +3,33 @@ from typing import List, Optional
 from models import PlayerStats
 
 class DarijaEngine:
-    def __init__(self, squad_data: dict):
+    def __init__(self, squad_data):
+        # Guard against string/None (legacy bug protection)
+        if isinstance(squad_data, str) or squad_data is None:
+            squad_data = {}
+
         self.squad = squad_data
-        self.nicknames = {p.get("name", "").lower(): p.get("nickname", "") for p in squad_data.get("players", [])}
-        self.bios = {p.get("name", "").lower(): p.get("bio", "") for p in squad_data.get("players", [])}
+
+        # Normalize to a list of player dicts (handles flat dict AND "players" list)
+        players = []
+        if isinstance(squad_data, dict):
+            if "players" in squad_data and isinstance(squad_data.get("players"), list):
+                players = squad_data["players"]
+            else:
+                # Flat dict like {"dictator": {...}, "shark": {...}}
+                players = list(squad_data.values())
+        elif isinstance(squad_data, list):
+            players = squad_data
+
+        self.nicknames = {}
+        self.bios = {}
+        for p in players:
+            if not isinstance(p, dict):
+                continue
+            name = p.get("name", "")
+            if isinstance(name, str) and name.strip():
+                self.nicknames[name.lower()] = p.get("nickname", "") or ""
+                self.bios[name.lower()] = p.get("bio", "") or ""
 
     def get_nickname(self, name: str) -> str:
         return self.nicknames.get(name.lower(), name)
@@ -75,11 +98,11 @@ class DarijaEngine:
         result = match_result.get("result", "D")
 
         if result == "W":
-            return f"✅ فوز {score} vs {opponent}! الفريق كامل شاد.",
+            return f"✅ فوز {score} vs {opponent}! الفريق كامل شاد."
         elif result == "L":
-            return f"❌ خسارة {score} vs {opponent}. الفريق خاصو يتجمع.",
+            return f"❌ خسارة {score} vs {opponent}. الفريق خاصو يتجمع."
         else:
-            return f"🤝 تعادل {score} vs {opponent}. نتيجة عادلة.",
+            return f"🤝 تعادل {score} vs {opponent}. نتيجة عادلة."
 
     def leaderboard_intro(self, club_name: str) -> str:
         phrases = [
@@ -101,8 +124,14 @@ class DarijaEngine:
         else:
             return f"💀 {name} ({nick}) — {bio}\nRating: {player.rating_pg} | Goals: {player.goals} | Assists: {player.assists}\nالأداء ديالك اليوم كيهضر. كيهضر بزاف على خيبتك."
 
-    def court_case(self, player: PlayerStats, charges: List[str]) -> str:
+    def court_case(self, player: PlayerStats, charges: List[str] = None) -> str:
         name = player.name
+        if charges is None:
+            charges = [
+                f"Throwing score: {round(getattr(player, 'throwing_score', 0), 1)}",
+                f"Error score: {round(getattr(player, 'error_score', 0), 1)}",
+                f"Rating: {round(getattr(player, 'rating_pg', 0), 1)}",
+            ]
         text = f"⚖️ **المحكمة الرياضية — قضية {name}**\n\n"
         text += f"التهم:\n"
         for i, charge in enumerate(charges, 1):
@@ -145,7 +174,7 @@ class DarijaEngine:
         ]
         for rec in records[:3]:
             text += f"👑 {rec.player_name} — {rec.description}\n"
-            text += f"   {random.choice(praises)}\n\n"
+            text += f"  {random.choice(praises)}\n\n"
         return text
 
     def fame_praise(self, player: PlayerStats) -> str:
@@ -173,7 +202,7 @@ class DarijaEngine:
         ]
         for rec in records[:3]:
             text += f"💀 {rec.player_name} — {rec.description}\n"
-            text += f"   {random.choice(roasts)}\n\n"
+            text += f"  {random.choice(roasts)}\n\n"
         return text
 
     def rivalry_roast(self, winner: PlayerStats, loser: PlayerStats, stats: dict) -> str:
@@ -316,4 +345,64 @@ class DarijaEngine:
         if poster_data.get("worst_performer"):
             wp = poster_data["worst_performer"]
             text += f"📉 Worst: {wp['name']} (Rating {wp['rating']})\n"
+        return text
+
+    # ─── MISSING METHODS ADDED (called by bot.py) ───
+
+    def fraud(self, player: PlayerStats) -> str:
+        return self.fraud_verdict(player)
+
+    def carry(self, player: PlayerStats) -> str:
+        return self.praise(player)
+
+    def ghost(self, player: PlayerStats) -> str:
+        return self.roast(player, "ghost")
+
+    def ball_loser(self, player: PlayerStats) -> str:
+        return self.roast(player, "fraud")
+
+    def playmaker(self, player: PlayerStats) -> str:
+        return self.praise(player)
+
+    def keeper(self, player: PlayerStats) -> str:
+        name = player.name
+        phrases = [
+            f"🧤 {name} — الحارس ديالنا كيتسطى!",
+            f"🧤 {name} — كيدافع بزاف، كيحبس بزاف.",
+            f"🧤 {name} — كيحمي المرمى بحال wall.",
+        ]
+        return random.choice(phrases)
+
+    def compare(self, p1: PlayerStats, p2: PlayerStats) -> str:
+        text = f"⚔️ **{p1.name} vs {p2.name}**\n\n"
+        text += f"Goals: {p1.goals} vs {p2.goals}\n"
+        text += f"Assists: {p1.assists} vs {p2.assists}\n"
+        text += f"Rating: {round(p1.rating_pg, 1)} vs {round(p2.rating_pg, 1)}\n"
+        text += f"Impact: {getattr(p1, 'impact_score', 0)} vs {getattr(p2, 'impact_score', 0)}\n"
+        return text
+
+    def hall_of_shame(self, players: list) -> str:
+        if not players:
+            return "🏛️ **Hall of Shame**\n\nما كاين حتى شي player لحد الآن."
+        text = "🏛️ **HALL OF SHAME** — الأرقام ما كتكدبش\n\n"
+        roasts = [
+            "هادا الأداء خاصو يتعرض فالمحكمة.",
+            "التاريخ غادي يتذكرك، ولكن فالعكس.",
+            "هادا مشي لاعب، هادا case study.",
+            "الأرقام كتهضر بوحدها — وكتقول خايب.",
+            "هادا level ديال iron 4.",
+            "الفريق بلا هاد اللاعب كيكون أحسن.",
+            "VAR رفع يديه من داك الأداء.",
+        ]
+        worst = sorted(players, key=lambda p: getattr(p, 'rating_pg', 0))[:3]
+        for p in worst:
+            text += f"💀 {p.name} — Rating: {round(getattr(p, 'rating_pg', 0), 1)}\n"
+            text += f"  {random.choice(roasts)}\n\n"
+        return text
+
+    def match_report(self, result: str, match_players: list) -> str:
+        text = f"⚽ **Match Result: {result}**\n\n"
+        if match_players:
+            for p in match_players:
+                text += f"• {p.name}: {getattr(p, 'goals', 0)}G, {getattr(p, 'assists', 0)}A, {round(getattr(p, 'rating_pg', 0), 1)}R\n"
         return text
