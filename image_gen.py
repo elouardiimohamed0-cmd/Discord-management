@@ -1,5 +1,4 @@
-"""
-image_gen.py — PHASE 2.4
+"""image_gen.py — PHASE 2.4
 EA FC 26 / TOTY / TOTS / Blue Lock inspired card generator.
 Resolution: 2160x3840 (UHD portrait)
 """
@@ -10,7 +9,6 @@ import math
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 from typing import List, Optional, Dict
 from models import PlayerStats, ClubStats
-
 
 # ─── PLAYER IMAGE LOADER ───
 
@@ -94,7 +92,6 @@ PALETTES = {
     },
 }
 
-
 def _load_font(size: int, bold=False):
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -110,7 +107,6 @@ def _load_font(size: int, bold=False):
                 pass
     return ImageFont.load_default()
 
-
 def _hexagon_points(cx, cy, radius):
     points = []
     for i in range(6):
@@ -119,7 +115,6 @@ def _hexagon_points(cx, cy, radius):
         y = cy + radius * math.sin(angle)
         points.append((x, y))
     return points
-
 
 def _gradient_bg(w, h, c1, c2):
     img = Image.new("RGB", (w, h), c1)
@@ -132,7 +127,6 @@ def _gradient_bg(w, h, c1, c2):
         draw.line([(0, y), (w, y)], fill=(r, g, b))
     return img
 
-
 def _glow_circle(img, cx, cy, radius, color, intensity=0.35):
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -141,15 +135,45 @@ def _glow_circle(img, cx, cy, radius, color, intensity=0.35):
         draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*color, max(0, alpha // 4)))
     return Image.alpha_composite(img.convert("RGBA"), overlay)
 
+def _load_player_photo(name: str, assets_dir: str, size=(1400, 1400), photo_path: Optional[str] = None):
+    """
+    Load player photo. If photo_path is provided, use it directly.
+    Otherwise search by name in assets_dir.
+    """
+    # If explicit path provided, try it first
+    if photo_path and os.path.exists(photo_path):
+        try:
+            img = Image.open(photo_path).convert("RGBA")
+            img = img.resize(size, Image.LANCZOS)
+            return img
+        except Exception:
+            pass
 
-def _load_player_photo(name: str, assets_dir: str, size=(1400, 1400)):
+    # Fallback: search by name
     clean = name.replace(" ", "_").lower()
     candidates = [
         os.path.join(assets_dir, f"{name}.png"),
         os.path.join(assets_dir, f"{name}.jpg"),
+        os.path.join(assets_dir, f"{name}.jpeg"),
         os.path.join(assets_dir, f"{clean}.png"),
         os.path.join(assets_dir, f"{clean}.jpg"),
+        os.path.join(assets_dir, f"{clean}.jpeg"),
     ]
+    # Also try uppercase
+    upper = name.upper()
+    candidates.extend([
+        os.path.join(assets_dir, f"{upper}.png"),
+        os.path.join(assets_dir, f"{upper}.jpg"),
+        os.path.join(assets_dir, f"{upper}.jpeg"),
+    ])
+    # Try title case
+    title = name.title()
+    candidates.extend([
+        os.path.join(assets_dir, f"{title}.png"),
+        os.path.join(assets_dir, f"{title}.jpg"),
+        os.path.join(assets_dir, f"{title}.jpeg"),
+    ])
+
     for path in candidates:
         if os.path.exists(path):
             try:
@@ -160,21 +184,15 @@ def _load_player_photo(name: str, assets_dir: str, size=(1400, 1400)):
                 pass
     return None
 
-
 def _draw_stat_box(draw, x, y, w, h, label, value, palette, font_label, font_value):
     pal = palette
-    # Box background with subtle transparency
     _draw_rounded_rect(draw, (x, y, x + w, y + h), 20, (30, 30, 30, 180), (*pal["accent"], 120), 3)
-    # Label
     draw.text((x + 30, y + 20), label, fill=pal["text_dim"], font=font_label)
-    # Value
     draw.text((x + 30, y + 80), str(value), fill=pal["text"], font=font_value)
-
 
 def _draw_rounded_rect(draw, xy, radius, fill, outline=None, width=2):
     x1, y1, x2, y2 = xy
     draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline, width=width)
-
 
 class ImageGenerator:
     def __init__(self, assets_dir: str = "assets"):
@@ -186,7 +204,6 @@ class ImageGenerator:
         if key not in self.fonts:
             self.fonts[key] = _load_font(size, bold)
         return self.fonts[key]
-
 
     # ───────────────────────────────────────────
     # CORE EA FC PRO CARD BUILDER
@@ -309,7 +326,7 @@ class ImageGenerator:
 
         # ── BOTTOM FOOTER ──
         f_foot = self._font(36)
-        draw.text((W // 2, H - 80), "RACHAD L3ERGONI  •  PRO CLUBS TRACKER", fill=pal["text_dim"], font=f_foot, anchor="mm")
+        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • PRO CLUBS TRACKER", fill=pal["text_dim"], font=f_foot, anchor="mm")
 
         # Final composite and sharpen
         img = img.convert("RGB")
@@ -321,29 +338,26 @@ class ImageGenerator:
         buf.seek(0)
         return buf
 
-
     # ───────────────────────────────────────────
     # PUBLIC CARD METHODS (all bot.py interfaces)
     # ───────────────────────────────────────────
 
-    def generate_player_card(self, player, pos, division=6):
+    def generate_player_card(self, player, pos, division=6, photo_path=None):
         """Standard player profile card — Gold theme."""
-        return self._build_fc_card(player, pos, "gold", "PLAYER PROFILE")
+        return self._build_fc_card(player, pos, "gold", "PLAYER PROFILE", photo_override=photo_path)
 
-    def generate_mvp_card(self, player, pos):
+    def generate_mvp_card(self, player, pos, photo_path=None):
         """MVP card — TOTY Gold theme."""
-        return self._build_fc_card(player, pos, "gold", "MAN OF THE MATCH")
+        return self._build_fc_card(player, pos, "gold", "MAN OF THE MATCH", photo_override=photo_path)
 
-    def generate_roast_card(self, player, roast_text, pos):
+    def generate_roast_card(self, player, roast_text, pos, photo_path=None):
         """Roast card — Red theme with roast text baked in."""
-        # Build red card
         pal = PALETTES["red"]
         W, H = CARD_W, CARD_H
         img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
         img = _glow_circle(img, W // 2, H // 3, 800, pal["glow"], 0.3)
         draw = ImageDraw.Draw(img)
 
-        # Top label
         f_label = self._font(60, bold=True)
         draw.text((W // 2, 70), "⚠️ FRAUD DETECTED", fill=pal["accent"], font=f_label, anchor="mm")
 
@@ -357,7 +371,7 @@ class ImageGenerator:
         draw.text((W // 2, hex_y), str(rating), fill=pal["badge"], font=f_rating, anchor="mm")
 
         # Photo
-        photo = _load_player_photo(player.name, self.assets_dir, (1200, 1200))
+        photo = _load_player_photo(player.name, self.assets_dir, (1200, 1200), photo_path=photo_path)
         if photo:
             px = (W - photo.width) // 2
             py = 650
@@ -385,7 +399,6 @@ class ImageGenerator:
         roast_y = 2320
         box_pad = 80
         f_roast = self._font(48)
-        # Estimate text size
         lines = []
         words = roast_text.split()
         line = ""
@@ -424,7 +437,7 @@ class ImageGenerator:
             draw.text((x + 30, y + 65), str(sv), fill=pal["text"], font=f_sval)
 
         f_foot = self._font(36)
-        draw.text((W // 2, H - 80), "RACHAD L3ERGONI  •  FRAUD ALERT", fill=pal["text_dim"], font=f_foot, anchor="mm")
+        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • FRAUD ALERT", fill=pal["text_dim"], font=f_foot, anchor="mm")
 
         img = img.convert("RGB")
         buf = io.BytesIO()
@@ -432,7 +445,7 @@ class ImageGenerator:
         buf.seek(0)
         return buf
 
-    def generate_anime_card(self, player, pos, style, label):
+    def generate_anime_card(self, player, pos, style, label, photo_path=None):
         """Blue Lock / Anime style card — Purple theme."""
         pal = PALETTES["purple"]
         W, H = CARD_W, CARD_H
@@ -457,7 +470,7 @@ class ImageGenerator:
         draw.text((W // 2, hex_y + 110), "OVR", fill=pal["text_dim"], font=f_ovr, anchor="mm")
 
         # Photo
-        photo = _load_player_photo(player.name, self.assets_dir, (1300, 1300))
+        photo = _load_player_photo(player.name, self.assets_dir, (1300, 1300), photo_path=photo_path)
         if photo:
             px = (W - photo.width) // 2
             py = 650
@@ -505,7 +518,7 @@ class ImageGenerator:
             draw.text((x + 30, y + 70), str(sv), fill=pal["text"], font=f_sval)
 
         f_foot = self._font(36)
-        draw.text((W // 2, H - 80), "RACHAD L3ERGONI  •  ANIME EDITION", fill=pal["text_dim"], font=f_foot, anchor="mm")
+        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • ANIME EDITION", fill=pal["text_dim"], font=f_foot, anchor="mm")
 
         img = img.convert("RGB")
         buf = io.BytesIO()
@@ -513,11 +526,11 @@ class ImageGenerator:
         buf.seek(0)
         return buf
 
-    def generate_beast_card(self, player, pos):
+    def generate_beast_card(self, player, pos, photo_path=None):
         """Beast Mode — Blue theme."""
-        return self._build_fc_card(player, pos, "blue", "BEAST MODE")
+        return self._build_fc_card(player, pos, "blue", "BEAST MODE", photo_override=photo_path)
 
-    def generate_court_case(self, player, pos, evidence):
+    def generate_court_case(self, player, pos, evidence, photo_path=None):
         """Court Case — Red theme with evidence list."""
         pal = PALETTES["red"]
         W, H = CARD_W, CARD_H
@@ -538,7 +551,7 @@ class ImageGenerator:
         draw.text((W // 2, hex_y), str(rating), fill=pal["badge"], font=f_rating, anchor="mm")
 
         # Photo
-        photo = _load_player_photo(player.name, self.assets_dir, (1100, 1100))
+        photo = _load_player_photo(player.name, self.assets_dir, (1100, 1100), photo_path=photo_path)
         if photo:
             px = (W - photo.width) // 2
             py = 600
@@ -574,7 +587,7 @@ class ImageGenerator:
         draw.text((W // 2, v_y), verdict, fill=v_color, font=f_verdict, anchor="mm")
 
         f_foot = self._font(36)
-        draw.text((W // 2, H - 80), "RACHAD L3ERGONI  •  COURT OF LAW", fill=pal["text_dim"], font=f_foot, anchor="mm")
+        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • COURT OF LAW", fill=pal["text_dim"], font=f_foot, anchor="mm")
 
         img = img.convert("RGB")
         buf = io.BytesIO()
@@ -582,13 +595,13 @@ class ImageGenerator:
         buf.seek(0)
         return buf
 
-    def generate_playmaker_card(self, player, pos):
+    def generate_playmaker_card(self, player, pos, photo_path=None):
         """Playmaker — Green theme."""
-        return self._build_fc_card(player, pos, "green", "PLAYMAKER")
+        return self._build_fc_card(player, pos, "green", "PLAYMAKER", photo_override=photo_path)
 
-    def generate_sniper_card(self, player, pos):
+    def generate_sniper_card(self, player, pos, photo_path=None):
         """Sniper — Blue theme."""
-        return self._build_fc_card(player, pos, "blue", "SNIPER")
+        return self._build_fc_card(player, pos, "blue", "SNIPER", photo_override=photo_path)
 
     def generate_leaderboard(self, players, metric):
         """Leaderboard card — Dark theme with top 5."""
@@ -625,7 +638,7 @@ class ImageGenerator:
             draw.text((W - MARGIN - 60, y + row_h // 2 - 30), str(val), fill=pal["accent"], font=f_val, anchor="rm")
 
         f_foot = self._font(36)
-        draw.text((W // 2, H - 80), "RACHAD L3ERGONI  •  PRO CLUBS TRACKER", fill=pal["text_dim"], font=f_foot, anchor="mm")
+        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • PRO CLUBS TRACKER", fill=pal["text_dim"], font=f_foot, anchor="mm")
 
         img = img.convert("RGB")
         buf = io.BytesIO()
@@ -645,7 +658,7 @@ class ImageGenerator:
         draw.text((W // 2, 100), club.club_name.upper(), fill=pal["accent"], font=f_title, anchor="mm")
 
         f_sub = self._font(50)
-        draw.text((W // 2, 220), f"Division {club.division}  •  Skill {club.skill_rating}", fill=pal["text_dim"], font=f_sub, anchor="mm")
+        draw.text((W // 2, 220), f"Division {club.division} • Skill {club.skill_rating}", fill=pal["text_dim"], font=f_sub, anchor="mm")
         draw.text((W // 2, 300), f"{club.wins}W — {club.losses}L — {club.draws}D", fill=pal["text"], font=f_sub, anchor="mm")
 
         # MOTM section
@@ -657,7 +670,7 @@ class ImageGenerator:
         draw.text((W // 2, motm_y + 120), motm.name.upper(), fill=pal["text"], font=f_mname, anchor="mm")
 
         f_mstats = self._font(50)
-        draw.text((W // 2, motm_y + 260), f"Impact: {motm.impact_score}  |  Goals: {motm.goals}  |  Rating: {round(motm.rating_pg, 1)}", fill=pal["text_dim"], font=f_mstats, anchor="mm")
+        draw.text((W // 2, motm_y + 260), f"Impact: {motm.impact_score} | Goals: {motm.goals} | Rating: {round(motm.rating_pg, 1)}", fill=pal["text_dim"], font=f_mstats, anchor="mm")
 
         # Recent matches
         match_y = motm_y + 400
@@ -673,7 +686,7 @@ class ImageGenerator:
             draw.text((W - MARGIN - 40, y), m.date.strftime("%d/%m/%Y"), fill=pal["text_dim"], font=f_mrow, anchor="rm")
 
         f_foot = self._font(36)
-        draw.text((W // 2, H - 80), "RACHAD L3ERGONI  •  MATCH REPORT", fill=pal["text_dim"], font=f_foot, anchor="mm")
+        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • MATCH REPORT", fill=pal["text_dim"], font=f_foot, anchor="mm")
 
         img = img.convert("RGB")
         buf = io.BytesIO()
@@ -681,7 +694,7 @@ class ImageGenerator:
         buf.seek(0)
         return buf
 
-    def generate_daily_card(self, player, stat_name, stat_value, roast, is_bad=False):
+    def generate_daily_card(self, player, stat_name, stat_value, roast, is_bad=False, photo_path=None):
         """Daily Stat card — Red for bad, Gold for good."""
         pal = PALETTES["red"] if is_bad else PALETTES["gold"]
         W, H = CARD_W, CARD_H
@@ -697,7 +710,7 @@ class ImageGenerator:
         draw.text((W // 2, 180), f"{stat_name}: {stat_value}", fill=pal["text"], font=f_stat, anchor="mm")
 
         # Photo
-        photo = _load_player_photo(player.name, self.assets_dir, (1200, 1200))
+        photo = _load_player_photo(player.name, self.assets_dir, (1200, 1200), photo_path=photo_path)
         if photo:
             px = (W - photo.width) // 2
             py = 320
@@ -752,7 +765,7 @@ class ImageGenerator:
             draw.text((x + 20, y + 60), str(sv), fill=pal["text"], font=f_sval)
 
         f_foot = self._font(36)
-        draw.text((W // 2, H - 80), "RACHAD L3ERGONI  •  DAILY STAT", fill=pal["text_dim"], font=f_foot, anchor="mm")
+        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • DAILY STAT", fill=pal["text_dim"], font=f_foot, anchor="mm")
 
         img = img.convert("RGB")
         buf = io.BytesIO()
