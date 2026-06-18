@@ -202,42 +202,31 @@ def normalize_club_players(club):
 def filter_active_players(club: ClubStats) -> None:
     """
     Remove players who don't appear in any recent match.
-    Uses squad.json to bridge PSN mismatches (e.g., Kira69Meniari -> A999KIRA).
+    Uses raw PSN name stored on player object for reliable matching.
     """
     if not club or not club.matches:
         return
 
+    # Collect all PSN names from match data (lowercased for case-insensitive match)
     active_psns = set()
     for m in club.matches:
         if hasattr(m, "player_stats") and m.player_stats:
-            active_psns.update(m.player_stats.keys())
+            active_psns.update(k.lower() for k in m.player_stats.keys())
 
     if not active_psns:
         logger.warning("[FILTER] No match player data found, skipping filter")
         return
 
-    squad_map = get_squad_map()
     filtered = []
     for p in club.players:
-        p_name = getattr(p, "name", "")
-        if not p_name:
-            continue
+        raw_psn = getattr(p, "_raw_psn", "").lower()
+        p_name = getattr(p, "name", "").lower()
 
-        # Find PSN for this player via squad.json
-        psn = None
-        for sq_name, info in squad_map.items():
-            if sq_name and sq_name.lower() == p_name.lower():
-                psn = (info.get("psn") or "").strip()
-                break
-
-        if not psn:
-            psn = p_name
-
-        psn_lower = psn.lower()
-        if psn_lower in active_psns or p_name.lower() in active_psns:
+        # Check raw PSN first, then display name
+        if raw_psn in active_psns or p_name in active_psns:
             filtered.append(p)
         else:
-            logger.info("[FILTER] Excluding %s (PSN: %s): not in recent match data", p_name, psn)
+            logger.info("[FILTER] Excluding %s (raw PSN: %s): not in recent match data", p.name, raw_psn)
 
     before = len(club.players)
     club.players = filtered
@@ -250,21 +239,12 @@ def get_match_players(club: ClubStats, match: MatchResult):
     if not hasattr(match, "player_stats") or not match.player_stats:
         return club.players
 
-    match_psns = set(match.player_stats.keys())
-    squad_map = get_squad_map()
-
-    # Build reverse map: squad_name -> psn
-    squad_to_psn = {}
-    for sq_name, info in squad_map.items():
-        psn = (info.get("psn") or "").strip().lower()
-        if psn:
-            squad_to_psn[sq_name.lower()] = psn
-
+    match_psns = set(k.lower() for k in match.player_stats.keys())
     result = []
     for p in club.players:
+        raw_psn = getattr(p, "_raw_psn", "").lower()
         p_name = getattr(p, "name", "").lower()
-        psn = squad_to_psn.get(p_name, p_name)
-        if psn in match_psns or p_name in match_psns:
+        if raw_psn in match_psns or p_name in match_psns:
             result.append(p)
 
     return result if result else club.players
@@ -364,6 +344,7 @@ def _dict_to_club(data: dict) -> Optional[ClubStats]:
         for p in data.get("players", []):
             raw_name = p.get("name")
             pro_name = p.get("pro_name", "")
+            psn_name = p.get("psn_name", "")
             if not raw_name or not isinstance(raw_name, str) or not raw_name.strip():
                 raw_name = "Unknown"
             pct_name = raw_name.strip()
@@ -372,6 +353,8 @@ def _dict_to_club(data: dict) -> Optional[ClubStats]:
             sq_info = get_squad_info(pct_name)
             if not sq_info and pro_name:
                 sq_info = get_squad_info(pro_name)
+            if not sq_info and psn_name:
+                sq_info = get_squad_info(psn_name)
 
             if sq_info:
                 # Use squad.json name for display
@@ -381,6 +364,9 @@ def _dict_to_club(data: dict) -> Optional[ClubStats]:
             else:
                 ps = PlayerStats(name=pct_name)
                 ps._squad_info = {}
+
+            # Store raw PSN for match filtering
+            ps._raw_psn = psn_name or pct_name
 
             for k, v in p.items():
                 if hasattr(ps, k) and k != "name":
@@ -855,6 +841,7 @@ async def cmd_help(ctx):
         "**Rankings:** `!mvp` `!worst` `!carry` `!ballon` `!ghost` `!ball_loser` `!playmaker` `!sniper` `!keeper`\n\n"
         "**Roast Engine:** `!fraud [player]` `!who_sold` `!pass` `!court_case [player]` `!serial_offender [player]` `!hall_of_shame`\n\n"
         "**Compare:** `!compare p1 p2` `!lastmatch` `!club` `!leaderboard [metric]`\n\n"
+        "**Form & Records:** `!form [player] [N]` `!records` `!legend` `!match_report`\n\n"
         "**History:** `!history [player]` `!rankings` `!awards`\n\n"
         "**Fun:** `!daily` `!story` `!banter` `!drama` `!meme [player]` `!transfer [player]` `!predict`\n\n"
         "**Settings:** `!personality [mode]` `!roast` `!stop` `!roastplayer [player]`"
@@ -1539,6 +1526,176 @@ async def cmd_story(ctx):
     try:
         text = story_engine.generate_story(current_club.players)
         embed = discord.Embed(title="📖 Story of the Day", description=text, color=0x9370db)
+        await rl.ctx_send(ctx, embed=embed)
+    except Exception as e:
+        traceback.print_exc()
+        await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
+
+# ─── NEW COMMANDS: form, records, legend, match_report ───
+@bot.command(name="form")
+@commands.cooldown(1, 5, commands.BucketType.user)
+async def cmd_form(ctx, *, player: str):
+    if not await ensure_data(ctx): return
+    
+    # Parse "Shark 10" -> player="Shark", num=10
+    num = 5
+    parts = player.rsplit(" ", 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        num = min(int(parts[1]), 20)
+        player = parts[0]
+    
+    target = find_player(player)
+    if not target:
+        await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
+        return
+    
+    if not current_club.matches:
+        await rl.ctx_send(ctx, "ما لقيتش match history.")
+        return
+    
+    # Find raw PSN for match lookup
+    raw_psn = getattr(target, "_raw_psn", target.name)
+    
+    # Build match data
+    matches_data = []
+    for m in current_club.matches[:num]:
+        ps = m.player_stats.get(raw_psn, {})
+        if not ps:
+            # Fallback: try matching by display name
+            for pid, pstat in m.player_stats.items():
+                if pid.lower() == target.name.lower():
+                    ps = pstat
+                    break
+        if ps:
+            pa = ps.get("passes_attempted", 0)
+            pc = ps.get("passes_completed", 0)
+            pass_acc = round(pc / max(pa, 1) * 100, 1) if pa > 0 else 0
+            matches_data.append({
+                "date": m.date.strftime("%d/%m"),
+                "opponent": m.opponent,
+                "rating": round(ps.get("rating", 0), 1),
+                "goals": ps.get("goals", 0),
+                "assists": ps.get("assists", 0),
+                "pass_acc": pass_acc,
+            })
+    
+    if not matches_data:
+        await rl.ctx_send(ctx, f"ما لقيتش match history لـ {target.name}.")
+        return
+    
+    sq_info = getattr(target, "_squad_info", {}) or {}
+    pos = sq_info.get("position", "CM")
+    raw_img = sq_info.get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = target.name
+    
+    async with ctx.typing():
+        try:
+            card = imgen.generate_form_card(target, matches_data, len(matches_data))
+            file = discord.File(card, filename="form.png")
+            embed = discord.Embed(title=f"📈 Form — {display_name} (Last {len(matches_data)})", color=0x00bfff)
+            await rl.ctx_send(ctx, embed=embed, file=file)
+        except Exception as e:
+            traceback.print_exc()
+            await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
+
+@bot.command(name="records")
+@commands.cooldown(1, 10, commands.BucketType.user)
+async def cmd_records(ctx):
+    if not await ensure_data(ctx): return
+    if not current_club.matches:
+        await rl.ctx_send(ctx, "ما لقيتش match history.")
+        return
+    
+    matches = current_club.matches
+    biggest_win = max(matches, key=lambda m: m.score_for - m.score_against)
+    biggest_loss = min(matches, key=lambda m: m.score_for - m.score_against)
+    most_goals_match = max(matches, key=lambda m: m.score_for)
+    
+    # Best individual match rating
+    best_rating = 0.0
+    best_rating_player = "None"
+    for m in matches:
+        for psn, ps in m.player_stats.items():
+            r = ps.get("rating", 0)
+            if r > best_rating:
+                best_rating = r
+                best_rating_player = psn
+    
+    # Longest win streak
+    streak = 0
+    best_streak = 0
+    for m in reversed(matches):
+        if m.result == "W":
+            streak += 1
+            best_streak = max(best_streak, streak)
+        else:
+            streak = 0
+    
+    total_goals = sum(m.score_for for m in matches)
+    total_matches = len(matches)
+    win_rate = round(sum(1 for m in matches if m.result == "W") / total_matches * 100, 1) if total_matches > 0 else 0
+    
+    records = [
+        ("Biggest Win", f"{biggest_win.score_for}-{biggest_win.score_against} vs {biggest_win.opponent}"),
+        ("Biggest Loss", f"{biggest_loss.score_for}-{biggest_loss.score_against} vs {biggest_loss.opponent}"),
+        ("Most Goals (Match)", f"{most_goals_match.score_for} vs {most_goals_match.opponent}"),
+        ("Best Match Rating", f"{round(best_rating, 1)} by {best_rating_player}"),
+        ("Longest Win Streak", f"{best_streak} matches"),
+        ("Total Goals Scored", str(total_goals)),
+        ("Total Matches", str(total_matches)),
+        ("Win Rate", f"{win_rate}%"),
+    ]
+    
+    async with ctx.typing():
+        try:
+            card = imgen.generate_records_card(current_club, records)
+            file = discord.File(card, filename="records.png")
+            embed = discord.Embed(title="🏆 Club Records", color=0xffd700)
+            await rl.ctx_send(ctx, embed=embed, file=file)
+        except Exception as e:
+            traceback.print_exc()
+            await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
+
+@bot.command(name="legend")
+@commands.cooldown(1, 5, commands.BucketType.user)
+async def cmd_legend(ctx):
+    if not await ensure_data(ctx): return
+    async with ctx.typing():
+        try:
+            mvp = StatsEngine.get_mvp(current_club.players)
+            sq_info = getattr(mvp, "_squad_info", {}) or {}
+            pos = sq_info.get("position", "CM")
+            raw_img = sq_info.get("image")
+            img_path = resolve_image_path(raw_img)
+            display_name = mvp.name
+            card = imgen.generate_legend_card(mvp, pos, photo_path=img_path)
+            file = discord.File(card, filename="legend.png")
+            text = darija.mvp(mvp)
+            embed = discord.Embed(title=f"👑 CLUB LEGEND — {display_name}", description=text, color=0xffd700)
+            embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
+            embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
+            embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
+            embed.add_field(name="Impact", value=str(mvp.impact_score), inline=True)
+            await rl.ctx_send(ctx, embed=embed, file=file)
+        except Exception as e:
+            traceback.print_exc()
+            await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
+
+@bot.command(name="match_report")
+@commands.cooldown(1, 10, commands.BucketType.user)
+async def cmd_match_report(ctx):
+    if not await ensure_data(ctx): return
+    if not current_club.matches:
+        await rl.ctx_send(ctx, "ما لقيتش match history.")
+        return
+    try:
+        last = current_club.matches[0]
+        result = f"{last.score_for}-{last.score_against}"
+        match_players = get_match_players(current_club, last)
+        report = darija.match_report(result, match_players)
+        color = 0x00ff00 if last.result == "W" else 0xff0000 if last.result == "L" else 0xffff00
+        embed = discord.Embed(title=f"⚽ Match Report: {last.opponent} {result}", description=report, color=color)
         await rl.ctx_send(ctx, embed=embed)
     except Exception as e:
         traceback.print_exc()
@@ -2288,6 +2445,171 @@ async def slash_hall_of_shame(interaction: discord.Interaction):
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
+@bot.tree.command(name="form", description="Player form over last N matches")
+@app_commands.describe(player="Player name", matches="Number of matches")
+@app_commands.choices(matches=[
+    app_commands.Choice(name="5", value=5),
+    app_commands.Choice(name="10", value=10),
+    app_commands.Choice(name="20", value=20),
+])
+@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
+async def slash_form(interaction: discord.Interaction, player: str, matches: app_commands.Choice[int]):
+    await interaction.response.defer()
+    if not await ensure_data_interaction(interaction): return
+    
+    target = find_player(player)
+    if not target:
+        await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
+        return
+    
+    if not current_club.matches:
+        await rl.interaction_send(interaction, "ما لقيتش match history.")
+        return
+    
+    num = matches.value
+    raw_psn = getattr(target, "_raw_psn", target.name)
+    
+    matches_data = []
+    for m in current_club.matches[:num]:
+        ps = m.player_stats.get(raw_psn, {})
+        if not ps:
+            for pid, pstat in m.player_stats.items():
+                if pid.lower() == target.name.lower():
+                    ps = pstat
+                    break
+        if ps:
+            pa = ps.get("passes_attempted", 0)
+            pc = ps.get("passes_completed", 0)
+            pass_acc = round(pc / max(pa, 1) * 100, 1) if pa > 0 else 0
+            matches_data.append({
+                "date": m.date.strftime("%d/%m"),
+                "opponent": m.opponent,
+                "rating": round(ps.get("rating", 0), 1),
+                "goals": ps.get("goals", 0),
+                "assists": ps.get("assists", 0),
+                "pass_acc": pass_acc,
+            })
+    
+    if not matches_data:
+        await rl.interaction_send(interaction, f"ما لقيتش match history لـ {target.name}.")
+        return
+    
+    sq_info = getattr(target, "_squad_info", {}) or {}
+    pos = sq_info.get("position", "CM")
+    raw_img = sq_info.get("image")
+    img_path = resolve_image_path(raw_img)
+    display_name = target.name
+    
+    try:
+        card = imgen.generate_form_card(target, matches_data, len(matches_data))
+        file = discord.File(card, filename="form.png")
+        embed = discord.Embed(title=f"📈 Form — {display_name} (Last {len(matches_data)})", color=0x00bfff)
+        await rl.interaction_send(interaction, embed=embed, file=file)
+    except Exception as e:
+        traceback.print_exc()
+        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
+
+@bot.tree.command(name="records", description="Club historical records")
+@app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
+async def slash_records(interaction: discord.Interaction):
+    await interaction.response.defer()
+    if not await ensure_data_interaction(interaction): return
+    if not current_club.matches:
+        await rl.interaction_send(interaction, "ما لقيتش match history.")
+        return
+    
+    matches = current_club.matches
+    biggest_win = max(matches, key=lambda m: m.score_for - m.score_against)
+    biggest_loss = min(matches, key=lambda m: m.score_for - m.score_against)
+    most_goals_match = max(matches, key=lambda m: m.score_for)
+    
+    best_rating = 0.0
+    best_rating_player = "None"
+    for m in matches:
+        for psn, ps in m.player_stats.items():
+            r = ps.get("rating", 0)
+            if r > best_rating:
+                best_rating = r
+                best_rating_player = psn
+    
+    streak = 0
+    best_streak = 0
+    for m in reversed(matches):
+        if m.result == "W":
+            streak += 1
+            best_streak = max(best_streak, streak)
+        else:
+            streak = 0
+    
+    total_goals = sum(m.score_for for m in matches)
+    total_matches = len(matches)
+    win_rate = round(sum(1 for m in matches if m.result == "W") / total_matches * 100, 1) if total_matches > 0 else 0
+    
+    records = [
+        ("Biggest Win", f"{biggest_win.score_for}-{biggest_win.score_against} vs {biggest_win.opponent}"),
+        ("Biggest Loss", f"{biggest_loss.score_for}-{biggest_loss.score_against} vs {biggest_loss.opponent}"),
+        ("Most Goals (Match)", f"{most_goals_match.score_for} vs {most_goals_match.opponent}"),
+        ("Best Match Rating", f"{round(best_rating, 1)} by {best_rating_player}"),
+        ("Longest Win Streak", f"{best_streak} matches"),
+        ("Total Goals Scored", str(total_goals)),
+        ("Total Matches", str(total_matches)),
+        ("Win Rate", f"{win_rate}%"),
+    ]
+    
+    try:
+        card = imgen.generate_records_card(current_club, records)
+        file = discord.File(card, filename="records.png")
+        embed = discord.Embed(title="🏆 Club Records", color=0xffd700)
+        await rl.interaction_send(interaction, embed=embed, file=file)
+    except Exception as e:
+        traceback.print_exc()
+        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
+
+@bot.tree.command(name="legend", description="Club legend — best all-time player")
+@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
+async def slash_legend(interaction: discord.Interaction):
+    await interaction.response.defer()
+    if not await ensure_data_interaction(interaction): return
+    try:
+        mvp = StatsEngine.get_mvp(current_club.players)
+        sq_info = getattr(mvp, "_squad_info", {}) or {}
+        pos = sq_info.get("position", "CM")
+        raw_img = sq_info.get("image")
+        img_path = resolve_image_path(raw_img)
+        display_name = mvp.name
+        card = imgen.generate_legend_card(mvp, pos, photo_path=img_path)
+        file = discord.File(card, filename="legend.png")
+        text = darija.mvp(mvp)
+        embed = discord.Embed(title=f"👑 CLUB LEGEND — {display_name}", description=text, color=0xffd700)
+        embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
+        embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
+        embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
+        embed.add_field(name="Impact", value=str(mvp.impact_score), inline=True)
+        await rl.interaction_send(interaction, embed=embed, file=file)
+    except Exception as e:
+        traceback.print_exc()
+        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
+
+@bot.tree.command(name="match_report", description="Full report of latest match")
+@app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
+async def slash_match_report(interaction: discord.Interaction):
+    await interaction.response.defer()
+    if not await ensure_data_interaction(interaction): return
+    if not current_club.matches:
+        await rl.interaction_send(interaction, "ما لقيتش match history.")
+        return
+    try:
+        last = current_club.matches[0]
+        result = f"{last.score_for}-{last.score_against}"
+        match_players = get_match_players(current_club, last)
+        report = darija.match_report(result, match_players)
+        color = 0x00ff00 if last.result == "W" else 0xff0000 if last.result == "L" else 0xffff00
+        embed = discord.Embed(title=f"⚽ Match Report: {last.opponent} {result}", description=report, color=color)
+        await rl.interaction_send(interaction, embed=embed)
+    except Exception as e:
+        traceback.print_exc()
+        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
+
 @bot.tree.command(name="help", description="Show all commands")
 @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
 async def slash_help(interaction: discord.Interaction):
@@ -2303,6 +2625,7 @@ async def slash_help(interaction: discord.Interaction):
             "**Rankings:** /mvp /worst /carry_detector /ballon_dor /ghost_detector /ball_loser /playmaker /sniper /keeper\n\n"
             "**Roast Engine:** /fraud_check [player] /who_sold /pass_the_ball /court_case [player] /serial_offender [player] /hall_of_shame\n\n"
             "**Compare:** /compare p1 p2 /lastmatch /clubinfo /leaderboard\n\n"
+            "**Form & Records:** /form [player] [N] /records /legend /match_report\n\n"
             "**History:** /history [player] /rankings /awards\n\n"
             "**Fun:** /daily /story /banter /drama /meme [player] /transfer [player] /predict\n\n"
             "**Settings:** /personality [mode] /roast /stop /roastplayer [player]"
