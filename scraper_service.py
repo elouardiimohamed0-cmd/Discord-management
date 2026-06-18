@@ -318,15 +318,10 @@ class ScraperService:
                     name = p.get("playername", "Unknown")
                     if name not in match_agg:
                         match_agg[name] = {
-                            "games": 0,
-                            "minutes": 0,
-                            "shots": 0,
-                            "pass_attempts": 0,
-                            "pass_completed": 0,
-                            "tackles": 0,
-                            "saves": 0,
-                            "goals_conceded": 0,
-                            "redcards": 0,
+                            "games": 0, "minutes": 0, "shots": 0,
+                            "pass_attempts": 0, "pass_completed": 0,
+                            "tackles": 0, "saves": 0,
+                            "goals_conceded": 0, "redcards": 0,
                             "clean_sheets": 0,
                         }
                     a = match_agg[name]
@@ -348,7 +343,8 @@ class ScraperService:
             for m in members:
                 if not isinstance(m, dict):
                     continue
-                name = m.get("proName") or m.get("name")
+                name = m.get("name")  # PSN / EA ID
+                pro_name = m.get("proName")  # In-game name
                 if not name or not isinstance(name, str) or not name.strip():
                     continue
 
@@ -394,6 +390,7 @@ class ScraperService:
 
                 res["players"].append({
                     "name": name.strip(),
+                    "pro_name": pro_name.strip() if pro_name else "",
                     "games": games,
                     "goals": self._int(m.get("goals"), 0),
                     "assists": self._int(m.get("assists"), 0),
@@ -418,7 +415,7 @@ class ScraperService:
                         res["club_name"], len(res["players"]))
             logger.info("[PARSE] Players: %s", [p["name"] for p in res["players"]])
 
-            # ─── STEP 3: Parse matches (for match history only) ───
+            # ─── STEP 3: Parse matches (for match history + per-match player stats) ───
             for rm in all_m[:30]:
                 try:
                     m = self._match(rm)
@@ -466,6 +463,26 @@ class ScraperService:
                     ds = datetime.fromtimestamp(int(ts)).isoformat()
                 except Exception:
                     pass
+
+            # Extract per-match player stats
+            player_stats = {}
+            our_players = raw.get("players", {}).get(our_id, {})
+            for pid, p in our_players.items():
+                psn = p.get("playername", "Unknown")
+                player_stats[psn] = {
+                    "goals": self._int(p.get("goals"), 0),
+                    "assists": self._int(p.get("assists"), 0),
+                    "shots": self._int(p.get("shots"), 0),
+                    "passes_attempted": self._int(p.get("passattempts"), 0),
+                    "passes_completed": self._int(p.get("passesmade"), 0),
+                    "tackles": self._int(p.get("tacklesmade"), 0),
+                    "saves": self._int(p.get("saves"), 0),
+                    "minutes": self._int(p.get("secondsPlayed"), 0) // 60,
+                    "rating": self._float(p.get("rating"), 0.0),
+                    "redcards": self._int(p.get("redcards"), 0),
+                    "clean_sheets": self._int(p.get("cleansheetsany"), 0),
+                }
+
             return {
                 "match_id": str(raw.get("matchId", ts or "")),
                 "date": ds,
@@ -473,6 +490,7 @@ class ScraperService:
                 "score_for": gf,
                 "score_against": ga,
                 "result": r,
+                "player_stats": player_stats,
             }
         except Exception:
             return None
