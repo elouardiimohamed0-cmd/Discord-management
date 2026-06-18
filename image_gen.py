@@ -247,7 +247,7 @@ class ImageGenerator:
         # ── PLAYER PHOTO ──
         photo_y = 900
         photo_size = (1300, 1300)
-        photo = photo_override or _load_player_photo(player.name, self.assets_dir, photo_size)
+        photo = _load_player_photo(player.name, self.assets_dir, photo_size, photo_path=photo_override)
         if photo:
             # Center photo
             px = (W - photo.width) // 2
