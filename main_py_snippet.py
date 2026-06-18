@@ -1,47 +1,50 @@
 import os
 import subprocess
 import sys
+import threading
 
 TEMPLATES_DIR = "assets/templates"
 
-def ensure_templates_exist():
-    """Generate templates on first boot if missing."""
+def _generate_templates_async():
+    """Run template generation in background thread."""
     required = [
         "mvp.png", "fraud.png", "ghost.png", "carry.png",
         "court.png", "playmaker.png", "sniper.png", "ball_loser.png"
     ]
-
+    
     os.makedirs(TEMPLATES_DIR, exist_ok=True)
-
+    
     missing = [
         f for f in required 
         if not os.path.exists(os.path.join(TEMPLATES_DIR, f))
     ]
-
-    if missing:
-        print(f"[BOOT] Missing templates: {missing}")
-        print("[BOOT] Starting template generation (this takes ~10-15 min)...")
-
+    
+    if not missing:
+        print("[BOOT] ✅ All templates present.")
+        return
+    
+    print(f"[BOOT] Missing templates: {missing}")
+    print("[BOOT] Starting BACKGROUND template generation...")
+    
+    try:
         result = subprocess.run(
             [sys.executable, "generate_templates.py"],
             capture_output=True,
             text=True,
-            timeout=1200  # 20 minutes max
+            timeout=600  # 10 minutes max
         )
-
         print(result.stdout)
         if result.stderr:
             print(f"[BOOT] stderr: {result.stderr}")
-
-        if result.returncode != 0:
-            print("[BOOT] ⚠️ Template generation failed, falling back to gradients.")
+        if result.returncode == 0:
+            print("[BOOT] ✅ Templates generated in background.")
         else:
-            print("[BOOT] ✅ All templates generated.")
-    else:
-        print("[BOOT] ✅ All templates present.")
+            print("[BOOT] ⚠️ Template generation failed, using gradients.")
+    except Exception as e:
+        print(f"[BOOT] ⚠️ Template generation error: {e}")
 
-# Run immediately on import — BEFORE discord bot starts
-ensure_templates_exist()
+# Start background thread immediately — bot is NOT blocked
+threading.Thread(target=_generate_templates_async, daemon=True).start()
 
 # ─── REST OF YOUR MAIN.PY BELOW ───
 # import discord
