@@ -40,6 +40,6 @@ COPY . .
 
 # Expose health check port
 EXPOSE 8000
-
+RUN apt-get update && apt-get install -y fonts-dejavu-core fonts-liberation && rm -rf /var/lib/apt/lists/*
 # Run the bot
 CMD ["python", "bot.py"]
