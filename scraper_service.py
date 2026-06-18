@@ -343,14 +343,15 @@ class ScraperService:
             for m in members:
                 if not isinstance(m, dict):
                     continue
-                name = m.get("name")  # PSN / EA ID
-                pro_name = m.get("proName")  # In-game name
-                if not name or not isinstance(name, str) or not name.strip():
+                psn_name = m.get("name", "")  # PSN / EA ID (raw API name)
+                pro_name = m.get("proName", "")  # In-game name
+                display_name = pro_name or psn_name
+                if not display_name or not isinstance(display_name, str) or not display_name.strip():
                     continue
 
                 games = self._int(m.get("gamesPlayed"), 0)
                 if games == 0:
-                    logger.debug("[FILTER] Excluding %s: 0 games played this season", name)
+                    logger.debug("[FILTER] Excluding %s: 0 games played this season", psn_name)
                     continue
 
                 rating = self._float(m.get("ratingAve"), 0.0)
@@ -369,7 +370,7 @@ class ScraperService:
                     possession_losses = 0
 
                 # ── Match data supplements (minutes, shots, saves, etc.) ──
-                agg = match_agg.get(name, {})
+                agg = match_agg.get(psn_name, {})
                 minutes_played = agg.get("minutes", 0)
                 shots = agg.get("shots", 0)
                 saves = agg.get("saves", 0)
@@ -389,7 +390,8 @@ class ScraperService:
                 tackles = self._int(m.get("tacklesMade"), 0)
 
                 res["players"].append({
-                    "name": name.strip(),
+                    "name": display_name.strip(),
+                    "psn_name": psn_name.strip(),  # ← RAW PSN for filtering
                     "pro_name": pro_name.strip() if pro_name else "",
                     "games": games,
                     "goals": self._int(m.get("goals"), 0),
