@@ -261,7 +261,7 @@ bot = commands.Bot(
 squad = load_squad()
 _build_nickname_maps()
 scraper = ScraperService()
-darija = DarijaEngine(Config.DEFAULT_PERSONALITY)
+darija = DarijaEngine(squad)
 imgen = ImageGenerator(Config.ASSETS_DIR)
 memory = SquadMemory()
 daily_engine = DailyEngine(darija)
