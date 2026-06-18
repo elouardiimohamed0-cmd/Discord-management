@@ -277,8 +277,8 @@ class ScraperService:
     def _parse(self, raw):
         """
         Parse PCT API response. 
-        CRITICAL: Only include players who actually appeared in the scraped matches.
-        squad.json is ONLY used for nickname/image mapping, NOT for forcing players into stats.
+        Uses memberStats (season totals) for REAL website stats.
+        Match data is only used for the matches list, not for player stats.
         """
         try:
             info = raw.get("clubInfoData") or {}
@@ -304,107 +304,63 @@ class ScraperService:
             if g > 0:
                 res["win_rate"] = round((res["wins"] / g) * 100, 1)
 
-            # ─── STEP 1: Parse matches and extract ONLY players who appeared ───
+            # ─── STEP 1: REAL PLAYER STATS from memberStats (season totals) ───
+            member_stats = raw.get("memberStats") or {}
+            members = member_stats.get("members", [])
+
+            for m in members:
+                if not isinstance(m, dict):
+                    continue
+                name = m.get("proName") or m.get("name")
+                if not name or not isinstance(name, str) or not name.strip():
+                    continue
+
+                games = self._int(m.get("gamesPlayed"), 0)
+                if games == 0:
+                    logger.debug("[FILTER] Excluding %s: 0 games played this season", name)
+                    continue
+
+                rating = self._float(m.get("ratingAve"), 0.0)
+                if rating > 10:
+                    rating = round(rating / 10.0, 2)
+
+                passes_att = self._int(m.get("passattempts"), 0)
+                passes_comp = self._int(m.get("passesmade"), 0)
+                pass_acc = round((passes_comp / passes_att) * 100, 1) if passes_att > 0 else 0.0
+
+                res["players"].append({
+                    "name": name.strip(),
+                    "games": games,
+                    "goals": self._int(m.get("goals"), 0),
+                    "assists": self._int(m.get("assists"), 0),
+                    "shots": self._int(m.get("shots"), 0),
+                    "rating": rating,
+                    "tackles": self._int(m.get("tacklesmade"), 0),
+                    "interceptions": self._int(m.get("interceptions"), 0),
+                    "minutes_played": self._int(m.get("secondsPlayed"), 0) // 60,
+                    "motm": self._int(m.get("manOfTheMatch"), 0),
+                    "pass_accuracy": pass_acc,
+                    "possession_losses": self._int(m.get("possessionLost"), 0),
+                    "distance_covered": self._float(m.get("distanceCovered"), 0.0),
+                })
+
+            logger.info("[PARSE] %s | Players from memberStats (season totals): %d", 
+                       res["club_name"], len(res["players"]))
+            logger.info("[PARSE] Players: %s", [p["name"] for p in res["players"]])
+
+            # ─── STEP 2: Parse matches (for match history only) ───
             raw_matches = raw.get("matches") or {}
             all_m = (raw_matches.get("league", []) or []) + (raw_matches.get("playoff", []) or []) + (raw_matches.get("friendly", []) or [])
 
-            match_players = {}  # name -> {appearances, goals, assists, ...}
-            match_count = 0
-
-            for rm in all_m[:10]:  # Last 10 matches max
+            for rm in all_m[:30]:
                 try:
                     m = self._match(rm)
                     if m:
                         res["matches"].append(m)
-                        match_count += 1
+                except Exception:
+                    pass
 
-                        # Extract players from THIS match only
-                        our_id = str(CLUB_ID)
-                        our_players_raw = rm.get("players", {}).get(our_id, {})
-
-                        match_player_names = set()
-                        for pid, p in our_players_raw.items():
-                            if not isinstance(p, dict):
-                                continue
-                            name = p.get("playername", "") or p.get("name", "Unknown")
-                            if not name or not isinstance(name, str) or not name.strip():
-                                continue
-                            name = name.strip()
-                            match_player_names.add(name)
-
-                            if name not in match_players:
-                                match_players[name] = {
-                                    "appearances": 0,
-                                    "goals": 0,
-                                    "assists": 0,
-                                    "shots": 0,
-                                    "tackles": 0,
-                                    "interceptions": 0,
-                                    "passes_attempted": 0,
-                                    "passes_completed": 0,
-                                    "minutes": 0,
-                                    "motm": 0,
-                                    "possession_losses": 0,
-                                    "ratings": [],
-                                }
-
-                            mp = match_players[name]
-                            mp["appearances"] += 1
-                            mp["goals"] += self._int(p.get("goals"), 0)
-                            mp["assists"] += self._int(p.get("assists"), 0)
-                            mp["shots"] += self._int(p.get("shots"), 0)
-                            mp["tackles"] += self._int(p.get("tacklesmade"), 0)
-                            mp["interceptions"] += self._int(p.get("interceptions"), 0)
-                            mp["passes_attempted"] += self._int(p.get("passattempts"), 0)
-                            mp["passes_completed"] += self._int(p.get("passesmade"), 0)
-                            mp["minutes"] += self._int(p.get("secondsPlayed"), 0) // 60
-                            mp["motm"] += 1 if str(p.get("man_of_the_match", "0")) == "1" else 0
-                            mp["possession_losses"] += self._int(p.get("passattempts"), 0) - self._int(p.get("passesmade"), 0)
-
-                            rating = self._float(p.get("rating"), 0.0)
-                            if rating > 10:
-                                rating = round(rating / 10.0, 2)
-                            mp["ratings"].append(rating)
-
-                        logger.debug("[MATCH %s] Players found: %s", m.get("match_id", "?"), list(match_player_names))
-                except Exception as e:
-                    logger.warning("[MATCH] Parse error: %s", e)
-                    continue
-
-            # ─── STEP 2: Build player list ONLY from match appearances ───
-            # HARD FILTER: appearances > 0 required
-            included = 0
-            excluded = 0
-
-            for name, stats in match_players.items():
-                if stats["appearances"] == 0:
-                    excluded += 1
-                    logger.debug("[FILTER] Excluding %s: 0 appearances", name)
-                    continue
-
-                included += 1
-                avg_rating = round(sum(stats["ratings"]) / len(stats["ratings"]), 2) if stats["ratings"] else 0.0
-                pass_acc = round((stats["passes_completed"] / stats["passes_attempted"]) * 100, 1) if stats["passes_attempted"] > 0 else 0.0
-
-                res["players"].append({
-                    "name": name,
-                    "games": stats["appearances"],
-                    "goals": stats["goals"],
-                    "assists": stats["assists"],
-                    "shots": stats["shots"],
-                    "rating": avg_rating,
-                    "tackles": stats["tackles"],
-                    "interceptions": stats["interceptions"],
-                    "minutes_played": stats["minutes"],
-                    "motm": stats["motm"],
-                    "pass_accuracy": pass_acc,
-                    "possession_losses": stats["possession_losses"],
-                    "distance_covered": 0.0,  # Not available per-match
-                })
-
-            logger.info("[PARSE] %s | Matches: %d | Players aggregated: %d | Excluded (0 apps): %d", 
-                       res["club_name"], match_count, included, excluded)
-            logger.info("[PARSE] Included players: %s", [p["name"] for p in res["players"]])
+            logger.info("[PARSE] Matches parsed: %d", len(res["matches"]))
 
             # Save async
             try:
