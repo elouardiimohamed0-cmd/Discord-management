@@ -5,6 +5,7 @@ import logging
 import traceback
 import time
 import json
+import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -954,6 +955,45 @@ async def cmd_bio(ctx, *, player: str):
 
 @bot.command(name="mvp")
 @commands.cooldown(1, 5, commands.BucketType.user)
+async def _maybe_send_video(channel, player, card_type: str, match_id: str = ""):
+    """Fire-and-forget video generation. Posts to channel when ready."""
+    from services.pika import PikaClient
+    pika = PikaClient()
+    if not pika.is_available():
+        return
+
+    cache_dir = "cache/videos"
+    os.makedirs(cache_dir, exist_ok=True)
+    name = getattr(player, "name", "match") if player else "match"
+    key = hashlib.md5(f"{name}:{card_type}:{match_id}".encode()).hexdigest() + ".mp4"
+    path = os.path.join(cache_dir, key)
+
+    # Send cached video immediately
+    if os.path.exists(path):
+        try:
+            await channel.send(file=discord.File(path, filename=f"{card_type}_reveal.mp4"))
+        except Exception as e:
+            logger.error("Failed to send cached video: %s", e)
+        return
+
+    # Generate in background
+    prompts = {
+        "mvp": f"Cinematic golden MVP celebration, {name} spotlight, epic slow motion, crowd cheering, 3 seconds",
+        "fraud": f"Dramatic red fraud exposure, {name} spotlight, comedic shame walk, 3 seconds",
+        "ghost": f"Ghostly disappearance, {name} fading into purple mist, empty pitch, 3 seconds",
+        "carry": f"Epic superhuman carry, {name} lifting team, blue energy, cinematic, 3 seconds",
+        "court": f"Courtroom drama gavel slam, {name} on trial, dramatic lighting, 3 seconds",
+        "match": f"Epic stadium match intro, floodlights, crowd roar, green pitch, cinematic, 3 seconds",
+    }
+    prompt = prompts.get(card_type, f"Cinematic sports moment featuring {name}")
+
+    try:
+        video_bytes = await asyncio.to_thread(pika.generate_video, prompt, duration=3, motion=2)
+        with open(path, "wb") as f:
+            f.write(video_bytes)
+        await channel.send(file=discord.File(path, filename=f"{card_type}_reveal.mp4"))
+    except Exception as e:
+        logger.error("Video generation failed: %s", e)
 async def cmd_mvp(ctx):
     if not await ensure_data(ctx): return
     async with ctx.typing():
@@ -973,6 +1013,7 @@ async def cmd_mvp(ctx):
             embed.add_field(name="Impact", value=str(mvp.impact_score), inline=True)
             embed.add_field(name="Win %", value=f"{round(mvp.win_rate, 1)}%", inline=True)
             await rl.ctx_send(ctx, file=file, embed=embed)
+            asyncio.create_task(_maybe_send_video(ctx.channel, mvp, "mvp"))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -988,6 +1029,7 @@ async def cmd_worst(ctx):
             roast = darija.roast(worst, pos)
             embed = discord.Embed(title=f"🗑️ WORST PLAYER — {worst.name}", description=roast, color=0x8b0000)
             await rl.ctx_send(ctx, embed=embed)
+            asyncio.create_task(_maybe_send_video(ctx.channel, target, "fraud"))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1003,6 +1045,7 @@ async def cmd_who_sold(ctx):
             roast = darija.fraud(fraud)
             embed = discord.Embed(title=f"🎭 FRAUD DETECTED — {fraud.name}", description=roast, color=0xff4500)
             await rl.ctx_send(ctx, embed=embed)
+            asyncio.create_task(_maybe_send_video(ctx.channel, ghost, "ghost"))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1018,6 +1061,7 @@ async def cmd_carry(ctx):
             praise = darija.carry(carry)
             embed = discord.Embed(title=f"💪 CARRY DETECTED — {carry.name}", description=praise, color=0x00ff00)
             await rl.ctx_send(ctx, embed=embed)
+            asyncio.create_task(_maybe_send_video(ctx.channel, carry, "carry"))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1186,6 +1230,7 @@ async def cmd_court_case(ctx, *, player: str):
             embed.add_field(name="Rating", value=str(round(target.rating_pg, 1)), inline=True)
             embed.add_field(name="Win %", value=f"{round(target.win_rate, 1)}%", inline=True)
             await rl.ctx_send(ctx, file=file, embed=embed)
+            asyncio.create_task(_maybe_send_video(ctx.channel, target, "court"))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1201,6 +1246,7 @@ async def cmd_ball_loser(ctx):
             roast = darija.ball_loser(loser)
             embed = discord.Embed(title=f"💀 BALL LOSER — {loser.name}", description=roast, color=0x8b0000)
             await rl.ctx_send(ctx, embed=embed)
+            asyncio.create_task(_maybe_send_video(ctx.channel, None, "match"))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1743,6 +1789,7 @@ async def slash_stats(interaction: discord.Interaction, player: str):
         embed.add_field(name="Win %", value=f"{round(target.win_rate, 1)}%", inline=True)
         embed.add_field(name="Tackles", value=str(target.tackles), inline=True)
         await rl.interaction_send(interaction, file=file, embed=embed)
+        asyncio.create_task(_maybe_send_video(interaction.channel, mvp, "mvp"))
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -1842,6 +1889,7 @@ async def slash_worst(interaction: discord.Interaction):
         roast = darija.roast(worst, pos)
         embed = discord.Embed(title=f"🗑️ WORST PLAYER — {worst.name}", description=roast, color=0x8b0000)
         await rl.interaction_send(interaction, embed=embed)
+        asyncio.create_task(_maybe_send_video(interaction.channel, target, "fraud"))
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -1857,6 +1905,7 @@ async def slash_who_sold(interaction: discord.Interaction):
         roast = darija.fraud(fraud)
         embed = discord.Embed(title=f"🎭 FRAUD DETECTED — {fraud.name}", description=roast, color=0xff4500)
         await rl.interaction_send(interaction, embed=embed)
+        asyncio.create_task(_maybe_send_video(interaction.channel, target, "fraud"))
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
