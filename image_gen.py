@@ -226,7 +226,15 @@ class ImageGenerator:
         img.save(buf, format="PNG", optimize=True)
         buf.seek(0)
         return buf
-
+    def _load_template_for_label(self, label: str):
+        """Check assets/templates/ for a premium background matching this label."""
+        card_type = LABEL_TO_TEMPLATE.get(label)
+        if not card_type:
+            return None
+        path = os.path.join(self.assets_dir, "templates", f"{card_type}.png")
+        if os.path.exists(path):
+            return Image.open(path)
+        return None
     # ─── FIXED: all wrappers pass photo_path= (not photo_override=) ───
     def generate_player_card(self, player, pos, division=6, photo_path=None):
         return self.generate_player_photo_card(player, pos, "gold", "PLAYER PROFILE", photo_path=photo_path)
