@@ -1,125 +1,26 @@
-"""image_gen.py — EA FC Pro Clubs premium card generator.
-Pure Pillow — no Groq, no AI, no randomness.
+"""
+image_gen_ecosystem.py — PHASE 4 Image Generators
+====================================================
+Add these methods to your existing ImageGenerator class in image_gen.py,
+or import them as a mixin. These generate:
+  • Match Posters
+  • Hall of Shame cards
+  • Hall of Fame cards
+  • Rivalry cards
+  • Milestone cards
+  • Weekly Awards cards
 """
 
 import io
 import os
 import math
-import logging
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 from typing import List, Optional, Dict
 from models import PlayerStats, ClubStats
 
-logger = logging.getLogger("rachad_bot.image_gen")
-
-# ─── PLAYER IMAGE LOADER — preserves aspect ratio ───
-
-def _load_player_photo(name: str, assets_dir: str, max_size=(1600, 1600), photo_path: Optional[str] = None, preserve_aspect: bool = True):
-    """Load player photo. Uses thumbnail to preserve aspect ratio by default."""
-
-    def _try_load(path):
-        if not path or not os.path.exists(path):
-            return None
-        try:
-            img = Image.open(path).convert("RGBA")
-            if preserve_aspect:
-                img.thumbnail(max_size, Image.LANCZOS)
-            else:
-                img = img.resize(max_size, Image.LANCZOS)
-            print(f"[PHOTO DEBUG] ✅ Loaded: {path} ({img.width}x{img.height})")
-            return img
-        except Exception as e:
-            print(f"[PHOTO DEBUG] ❌ Failed: {path} — {e}")
-            return None
-
-    img = _try_load(photo_path)
-    if img:
-        return img
-
-    clean = name.replace(" ", "_").lower()
-    upper = name.upper()
-    title = name.title()
-
-    candidates = [
-        os.path.join(assets_dir, f"{name}.png"),
-        os.path.join(assets_dir, f"{name}.jpg"),
-        os.path.join(assets_dir, f"{name}.jpeg"),
-        os.path.join(assets_dir, f"{clean}.png"),
-        os.path.join(assets_dir, f"{clean}.jpg"),
-        os.path.join(assets_dir, f"{clean}.jpeg"),
-        os.path.join(assets_dir, f"{upper}.png"),
-        os.path.join(assets_dir, f"{upper}.jpg"),
-        os.path.join(assets_dir, f"{upper}.jpeg"),
-        os.path.join(assets_dir, f"{title}.png"),
-        os.path.join(assets_dir, f"{title}.jpg"),
-        os.path.join(assets_dir, f"{title}.jpeg"),
-    ]
-
-    for path in candidates:
-        img = _try_load(path)
-        if img:
-            return img
-
-    print(f"[PHOTO DEBUG] ❌ No photo found for: {name}")
-    return None
-
-
-# ─── CONSTANTS ───
+# Re-use existing constants from image_gen.py
 CARD_W, CARD_H = 1440, 2160
 MARGIN = 80
-
-PALETTES = {
-    "gold": {
-        "bg_top": (10, 8, 4), "bg_bot": (30, 22, 8),
-        "accent": (255, 215, 0), "accent2": (218, 165, 32),
-        "glow": (255, 200, 50), "text": (255, 248, 220),
-        "text_dim": (200, 180, 140), "badge": (255, 215, 0),
-    },
-    "blue": {
-        "bg_top": (2, 6, 18), "bg_bot": (8, 18, 45),
-        "accent": (0, 191, 255), "accent2": (30, 144, 255),
-        "glow": (0, 150, 255), "text": (230, 245, 255),
-        "text_dim": (150, 180, 210), "badge": (0, 191, 255),
-    },
-    "red": {
-        "bg_top": (18, 4, 4), "bg_bot": (45, 8, 8),
-        "accent": (255, 50, 50), "accent2": (200, 30, 30),
-        "glow": (255, 60, 60), "text": (255, 230, 230),
-        "text_dim": (210, 150, 150), "badge": (255, 50, 50),
-    },
-    "purple": {
-        "bg_top": (12, 4, 18), "bg_bot": (35, 10, 50),
-        "accent": (186, 85, 211), "accent2": (147, 51, 234),
-        "glow": (180, 60, 220), "text": (245, 230, 255),
-        "text_dim": (180, 150, 200), "badge": (186, 85, 211),
-    },
-    "green": {
-        "bg_top": (4, 14, 6), "bg_bot": (8, 35, 14),
-        "accent": (50, 255, 100), "accent2": (30, 200, 70),
-        "glow": (60, 255, 120), "text": (230, 255, 235),
-        "text_dim": (150, 210, 170), "badge": (50, 255, 100),
-    },
-    "dark": {
-        "bg_top": (8, 8, 8), "bg_bot": (20, 20, 20),
-        "accent": (180, 180, 180), "accent2": (120, 120, 120),
-        "glow": (150, 150, 150), "text": (240, 240, 240),
-        "text_dim": (160, 160, 160), "badge": (200, 200, 200),
-    },
-}
-
-def _load_font(size: int, bold=False):
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-    ]
-    for path in candidates:
-        if path and os.path.exists(path):
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                pass
-    return ImageFont.load_default()
 
 def _gradient_bg(w, h, c1, c2):
     img = Image.new("RGB", (w, h), c1)
@@ -140,368 +41,487 @@ def _glow_circle(img, cx, cy, radius, color, intensity=0.35):
         draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*color, max(0, alpha // 4)))
     return Image.alpha_composite(img.convert("RGBA"), overlay)
 
+def _load_font(size, bold=False):
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    ]
+    for path in candidates:
+        if path and os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
 
-class ImageGenerator:
-    def __init__(self, assets_dir: str = "assets"):
-        self.assets_dir = assets_dir
-        self.fonts = {}
 
-    def _font(self, size, bold=False):
-        key = (size, bold)
-        if key not in self.fonts:
-            self.fonts[key] = _load_font(size, bold)
-        return self.fonts[key]
-
-    # ───────────────────────────────────────────
-    # PHOTO-ONLY PLAYER CARD (main focus)
-    # ───────────────────────────────────────────
-    def generate_player_photo_card(self, player, pos, palette_name="gold", label="PLAYER", photo_path=None):
-        """Clean photo card. Photo is the main focus, preserving aspect ratio. No stat boxes."""
-        pal = PALETTES.get(palette_name, PALETTES["gold"])
-        W, H = CARD_W, CARD_H
-
-        img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
-        img = _glow_circle(img, W // 2, H // 3, 700, pal["glow"], 0.2)
-        draw = ImageDraw.Draw(img)
-
-        nickname = getattr(player, "_squad_info", {}).get("nickname", player.name)
-        f_name = self._font(90, bold=True)
-        draw.text((W // 2, 70), nickname.upper(), fill=pal["text"], font=f_name, anchor="mm")
-
-        f_pos = self._font(40, bold=True)
-        pw, ph = 160, 70
-        px = W // 2 - pw // 2
-        draw.rounded_rectangle([px, 125, px + pw, 125 + ph], radius=15, fill=pal["accent"], outline=pal["accent2"], width=2)
-        draw.text((W // 2, 125 + ph // 2), pos.upper(), fill=(10, 10, 10), font=f_pos, anchor="mm")
-
-        photo_max_w = W - 100
-        photo_max_h = H - 320
-        photo = _load_player_photo(
-            player.name, self.assets_dir,
-            max_size=(photo_max_w, photo_max_h),
-            photo_path=photo_path,
-            preserve_aspect=True
-        )
-
-        print(f"[CARD DEBUG] Player: {player.name}, Nickname: {nickname}, Asset: {photo_path}, Loaded: {photo is not None}")
-
-        if photo:
-            px = (W - photo.width) // 2
-            py = 220 + (photo_max_h - photo.height) // 2
-
-            shadow = Image.new("RGBA", (photo.width + 80, photo.height + 80), (0, 0, 0, 0))
-            s_draw = ImageDraw.Draw(shadow)
-            s_draw.rounded_rectangle([20, 20, photo.width + 60, photo.height + 60], radius=40, fill=(*pal["glow"], 60))
-            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=40))
-            img.paste(shadow, (px - 40, py - 40), shadow)
-
-            mask = Image.new("L", photo.size, 0)
-            ImageDraw.Draw(mask).rounded_rectangle([0, 0, photo.width, photo.height], radius=30, fill=255)
-            img.paste(photo, (px, py), mask)
-        else:
-            f_err = self._font(60, bold=True)
-            draw.text((W // 2, H // 2), f"[NO PHOTO]\n{player.name}", fill=pal["text_dim"], font=f_err, anchor="mm")
-
-        f_foot = self._font(28)
-        draw.text((W // 2, H - 35), f"RACHAD L3ERGONI • {label}", fill=pal["text_dim"], font=f_foot, anchor="mm")
-
-        img = img.convert("RGB")
-        enhancer = ImageEnhance.Sharpness(img)
-        img = enhancer.enhance(1.1)
-
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        buf.seek(0)
-        return buf
-
-    # ─── FIXED: all wrappers pass photo_path= (not photo_override=) ───
-    def generate_player_card(self, player, pos, division=6, photo_path=None):
-        return self.generate_player_photo_card(player, pos, "gold", "PLAYER PROFILE", photo_path=photo_path)
-
-    def generate_mvp_card(self, player, pos, photo_path=None):
-        return self.generate_player_photo_card(player, pos, "gold", "MAN OF THE MATCH", photo_path=photo_path)
-
-    def generate_roast_card(self, player, roast_text, pos, photo_path=None):
-        return self.generate_player_photo_card(player, pos, "red", "FRAUD DETECTED", photo_path=photo_path)
-
-    def generate_anime_card(self, player, pos, style, label, photo_path=None):
-        return self.generate_player_photo_card(player, pos, "purple", "ANIME LEGEND", photo_path=photo_path)
-
-    def generate_beast_card(self, player, pos, photo_path=None):
-        return self.generate_player_photo_card(player, pos, "blue", "BEAST MODE", photo_path=photo_path)
-
-    def generate_court_case(self, player, pos, evidence, photo_path=None):
-        return self.generate_player_photo_card(player, pos, "red", "COURT CASE", photo_path=photo_path)
-
-    def generate_playmaker_card(self, player, pos, photo_path=None):
-        return self.generate_player_photo_card(player, pos, "green", "PLAYMAKER", photo_path=photo_path)
-
-    def generate_sniper_card(self, player, pos, photo_path=None):
-        return self.generate_player_photo_card(player, pos, "blue", "SNIPER", photo_path=photo_path)
-
-    def generate_legend_card(self, player, pos, photo_path=None):
-        return self.generate_player_photo_card(player, pos, "gold", "CLUB LEGEND", photo_path=photo_path)
-
-    def generate_leaderboard(self, players, metric):
-        pal = PALETTES["dark"]
-        W, H = CARD_W, CARD_H
-        img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
-        img = _glow_circle(img, W // 2, H // 2, 800, pal["glow"], 0.2)
-        draw = ImageDraw.Draw(img)
-
-        f_title = self._font(80, bold=True)
-        draw.text((W // 2, 80), f"LEADERBOARD — {metric.upper().replace('_', ' ')}", fill=pal["accent"], font=f_title, anchor="mm")
-
-        sorted_players = sorted(players, key=lambda p: getattr(p, metric, 0), reverse=True)[:5]
-        row_h = 500
-        start_y = 250
-        f_rank = self._font(100, bold=True)
-        f_name = self._font(70, bold=True)
-        f_val = self._font(90, bold=True)
-        medals = ["🥇", "🥈", "🥉", "4.", "5."]
-
-        for i, p in enumerate(sorted_players):
-            y = start_y + i * row_h
-            draw.rounded_rectangle([MARGIN, y, W - MARGIN, y + row_h - 30], radius=30, fill=(30, 30, 30, 200), outline=(*pal["accent"], 100), width=2)
-            draw.text((MARGIN + 60, y + row_h // 2 - 30), medals[i], fill=pal["text"], font=f_rank)
-            draw.text((MARGIN + 200, y + row_h // 2 - 30), p.name, fill=pal["text"], font=f_name)
-            val = getattr(p, metric, 0)
-            if isinstance(val, float):
-                val = round(val, 1)
-            draw.text((W - MARGIN - 60, y + row_h // 2 - 30), str(val), fill=pal["accent"], font=f_val, anchor="rm")
-
-        f_foot = self._font(36)
-        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • PRO CLUBS TRACKER", fill=pal["text_dim"], font=f_foot, anchor="mm")
-
-        img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        buf.seek(0)
-        return buf
-
-    def generate_match_report(self, club, motm):
-        pal = PALETTES["gold"]
-        W, H = CARD_W, CARD_H
-        img = _gradient_bg(W, H, (5, 5, 5), (20, 15, 5)).convert("RGBA")
-        img = _glow_circle(img, W // 2, H // 3, 700, pal["glow"], 0.2)
-        draw = ImageDraw.Draw(img)
-
-        f_title = self._font(90, bold=True)
-        draw.text((W // 2, 100), club.club_name.upper(), fill=pal["accent"], font=f_title, anchor="mm")
-
-        f_sub = self._font(50)
-        draw.text((W // 2, 220), f"Division {club.division} • Skill {club.skill_rating}", fill=pal["text_dim"], font=f_sub, anchor="mm")
-        draw.text((W // 2, 300), f"{club.wins}W — {club.losses}L — {club.draws}D", fill=pal["text"], font=f_sub, anchor="mm")
-
-        motm_y = 420
-        f_motm = self._font(60, bold=True)
-        draw.text((W // 2, motm_y), "MAN OF THE MATCH", fill=pal["accent2"], font=f_motm, anchor="mm")
-        f_mname = self._font(120, bold=True)
-        draw.text((W // 2, motm_y + 120), motm.name.upper(), fill=pal["text"], font=f_mname, anchor="mm")
-        f_mstats = self._font(50)
-        draw.text((W // 2, motm_y + 260), f"Impact: {motm.impact_score} | Goals: {motm.goals} | Rating: {round(motm.rating_pg, 1)}", fill=pal["text_dim"], font=f_mstats, anchor="mm")
-
-        match_y = motm_y + 400
-        f_match = self._font(48, bold=True)
-        draw.text((W // 2, match_y), "RECENT MATCHES", fill=pal["accent"], font=f_match, anchor="mm")
-
-        f_mrow = self._font(42)
-        for i, m in enumerate(club.matches[:5]):
-            y = match_y + 80 + i * 90
-            color = (50, 255, 100) if m.result == "W" else (255, 50, 50) if m.result == "L" else (255, 255, 0)
-            draw.text((MARGIN + 40, y), f"{m.result}", fill=color, font=f_mrow)
-            draw.text((MARGIN + 200, y), f"{m.score_for} - {m.score_against} vs {m.opponent}", fill=pal["text"], font=f_mrow)
-            draw.text((W - MARGIN - 40, y), m.date.strftime("%d/%m/%Y"), fill=pal["text_dim"], font=f_mrow, anchor="rm")
-
-        f_foot = self._font(36)
-        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • MATCH REPORT", fill=pal["text_dim"], font=f_foot, anchor="mm")
-
-        img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        buf.seek(0)
-        return buf
-
-    def generate_daily_card(self, player, stat_name, stat_value, roast, is_bad=False, photo_path=None):
-        pal = PALETTES["red"] if is_bad else PALETTES["gold"]
-        W, H = CARD_W, CARD_H
-        img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
-        img = _glow_circle(img, W // 2, H // 3, 800, pal["glow"], 0.35)
-        draw = ImageDraw.Draw(img)
-
-        title = "📉 STAT OF THE DAY" if is_bad else "📈 STAT OF THE DAY"
-        f_title = self._font(70, bold=True)
-        draw.text((W // 2, 80), title, fill=pal["accent"], font=f_title, anchor="mm")
-
-        f_stat = self._font(60)
-        draw.text((W // 2, 180), f"{stat_name}: {stat_value}", fill=pal["text"], font=f_stat, anchor="mm")
-
-        photo = _load_player_photo(player.name, self.assets_dir, max_size=(1200, 1200), photo_path=photo_path, preserve_aspect=True)
-        if photo:
-            px = (W - photo.width) // 2
-            py = 320
-            shadow = Image.new("RGBA", (photo.width + 80, photo.height + 80), (0, 0, 0, 0))
-            s_draw = ImageDraw.Draw(shadow)
-            s_draw.rounded_rectangle([20, 20, photo.width + 60, photo.height + 60], radius=40, fill=(*pal["glow"], 100))
-            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=30))
-            img.paste(shadow, (px - 40, py - 40), shadow)
-            mask = Image.new("L", photo.size, 0)
-            ImageDraw.Draw(mask).rounded_rectangle([0, 0, photo.width, photo.height], radius=40, fill=255)
-            img.paste(photo, (px, py), mask)
-
-        nickname = getattr(player, "_squad_info", {}).get("nickname", player.name)
-        f_name = self._font(130, bold=True)
-        draw.text((W // 2, 1600), nickname.upper(), fill=pal["text"], font=f_name, anchor="mm")
-
-        roast_y = 1760
-        f_roast = self._font(50)
-        words = roast.split()
-        lines = []
-        line = ""
-        for w in words:
-            if len(line + " " + w) < 55:
-                line += " " + w if line else w
+def _load_player_photo(name, assets_dir, max_size=(1600, 1600), photo_path=None, preserve_aspect=True):
+    def _try_load(path):
+        if not path or not os.path.exists(path):
+            return None
+        try:
+            img = Image.open(path).convert("RGBA")
+            if preserve_aspect:
+                img.thumbnail(max_size, Image.LANCZOS)
             else:
-                lines.append(line)
-                line = w
-        if line:
-            lines.append(line)
-        text_h = len(lines) * 80 + 60
-        draw.rounded_rectangle([MARGIN, roast_y, W - MARGIN, roast_y + text_h], radius=30, fill=(20, 20, 20, 220), outline=pal["accent"], width=4)
-        for i, ln in enumerate(lines):
-            draw.text((W // 2, roast_y + 50 + i * 80), ln, fill=pal["text"], font=f_roast, anchor="mm")
+                img = img.resize(max_size, Image.LANCZOS)
+            return img
+        except Exception:
+            return None
 
-        stats = [
-            ("GOALS", getattr(player, "goals", 0)),
-            ("ASSISTS", getattr(player, "assists", 0)),
-            ("RATING", round(getattr(player, "rating_pg", 0), 1)),
-        ]
-        grid_y = roast_y + text_h + 80
-        box_w = (W - MARGIN * 4) // 3
-        box_h = 160
-        f_slab = self._font(36, bold=True)
-        f_sval = self._font(64, bold=True)
-        for i, (sl, sv) in enumerate(stats):
-            x = MARGIN + i * (box_w + MARGIN // 2)
-            y = grid_y
-            draw.rounded_rectangle([x, y, x + box_w, y + box_h], radius=20, fill=(25, 25, 25, 200), outline=(*pal["accent"], 120), width=3)
-            draw.text((x + 20, y + 10), sl, fill=pal["text_dim"], font=f_slab)
-            draw.text((x + 20, y + 60), str(sv), fill=pal["text"], font=f_sval)
+    img = _try_load(photo_path)
+    if img:
+        return img
 
-        f_foot = self._font(36)
-        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • DAILY STAT", fill=pal["text_dim"], font=f_foot, anchor="mm")
+    clean = name.replace(" ", "_").lower()
+    upper = name.upper()
+    title = name.title()
+    candidates = [
+        os.path.join(assets_dir, f"{name}.png"),
+        os.path.join(assets_dir, f"{name}.jpg"),
+        os.path.join(assets_dir, f"{name}.jpeg"),
+        os.path.join(assets_dir, f"{clean}.png"),
+        os.path.join(assets_dir, f"{clean}.jpg"),
+        os.path.join(assets_dir, f"{clean}.jpeg"),
+        os.path.join(assets_dir, f"{upper}.png"),
+        os.path.join(assets_dir, f"{upper}.jpg"),
+        os.path.join(assets_dir, f"{upper}.jpeg"),
+        os.path.join(assets_dir, f"{title}.png"),
+        os.path.join(assets_dir, f"{title}.jpg"),
+        os.path.join(assets_dir, f"{title}.jpeg"),
+    ]
+    for path in candidates:
+        img = _try_load(path)
+        if img:
+            return img
+    return None
 
-        img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        buf.seek(0)
-        return buf
 
-    def generate_form_card(self, player, matches_data, num_matches):
-        pal = PALETTES["blue"]
-        W, H = CARD_W, CARD_H
-        img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
-        img = _glow_circle(img, W // 2, H // 3, 800, pal["glow"], 0.3)
-        draw = ImageDraw.Draw(img)
+# ─────────────────────────────────────────────────────────────
+# MATCH POSTER
+# ─────────────────────────────────────────────────────────────
 
-        nickname = getattr(player, "_squad_info", {}).get("nickname", player.name)
-        f_title = self._font(90, bold=True)
-        draw.text((W // 2, 80), f"FORM — LAST {num_matches} MATCHES", fill=pal["accent"], font=f_title, anchor="mm")
+def generate_match_poster(assets_dir, poster_data: dict, photo_paths: dict = None):
+    """
+    Premium match poster after every match.
+    Shows: Score, MVP, Fraud, Ghost, Carry, Top Performer, Worst Performer
+    """
+    pal = {
+        "bg_top": (5, 5, 8), "bg_bot": (15, 12, 25),
+        "accent": (255, 215, 0), "accent2": (218, 165, 32),
+        "glow": (255, 200, 50), "text": (255, 248, 220),
+        "text_dim": (180, 170, 160), "badge": (255, 215, 0),
+        "red": (255, 50, 50), "green": (50, 255, 100),
+        "purple": (186, 85, 211), "blue": (0, 191, 255),
+    }
+    W, H = CARD_W, CARD_H
+    img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
+    img = _glow_circle(img, W // 2, H // 4, 900, pal["glow"], 0.15)
+    draw = ImageDraw.Draw(img)
 
-        f_name = self._font(110, bold=True)
-        draw.text((W // 2, 200), nickname.upper(), fill=pal["text"], font=f_name, anchor="mm")
+    photo_paths = photo_paths or {}
 
-        row_h = 280
-        start_y = 340
-        f_label = self._font(32, bold=True)
-        f_val = self._font(48, bold=True)
-        f_small = self._font(36)
+    # Match header
+    f_title = _load_font(100, bold=True)
+    result = poster_data.get("result", "D")
+    result_color = pal["green"] if result == "W" else pal["red"] if result == "L" else pal["badge"]
+    draw.text((W // 2, 80), f"MATCH RESULT", fill=pal["text_dim"], font=_load_font(50), anchor="mm")
+    draw.text((W // 2, 180), f"{poster_data['score']} vs {poster_data['opponent']}", fill=result_color, font=f_title, anchor="mm")
 
-        ratings = []
-        for i, md in enumerate(matches_data[:num_matches]):
-            y = start_y + i * row_h
-            draw.rounded_rectangle([MARGIN, y, W - MARGIN, y + row_h - 20], radius=20, fill=(25, 25, 25, 200), outline=(*pal["accent"], 80), width=2)
+    # Awards section
+    awards = []
+    if poster_data.get("mvp"):
+        awards.append(("🏆 MVP", poster_data["mvp"]["name"], pal["badge"], poster_data["mvp"]["player_obj"]))
+    if poster_data.get("fraud"):
+        awards.append(("🎭 FRAUD", poster_data["fraud"]["name"], pal["red"], poster_data["fraud"]["player_obj"]))
+    if poster_data.get("ghost") and poster_data["ghost"]["is_ghost"]:
+        awards.append(("👻 GHOST", poster_data["ghost"]["name"], pal["purple"], poster_data["ghost"]["player_obj"]))
+    if poster_data.get("carry"):
+        awards.append(("💪 CARRY", poster_data["carry"]["name"], pal["green"], poster_data["carry"]["player_obj"]))
+    if poster_data.get("top_performer"):
+        awards.append(("⭐ TOP", poster_data["top_performer"]["name"], pal["blue"], poster_data["top_performer"]["player_obj"]))
+    if poster_data.get("worst_performer"):
+        awards.append(("📉 WORST", poster_data["worst_performer"]["name"], pal["red"], poster_data["worst_performer"]["player_obj"]))
 
-            draw.text((MARGIN + 30, y + 15), f"{md['date']} vs {md['opponent']}", fill=pal["text_dim"], font=f_label)
+    # Layout: 2 columns of award cards
+    card_w = (W - MARGIN * 3) // 2
+    card_h = 320
+    start_y = 320
+    f_award = _load_font(36, bold=True)
+    f_name = _load_font(48, bold=True)
+    f_stat = _load_font(32)
 
-            stats = [
-                ("RATING", f"{md['rating']}"),
-                ("GOALS", str(md['goals'])),
-                ("ASSISTS", str(md['assists'])),
-                ("PASS %", f"{md['pass_acc']}%"),
-            ]
-            box_w = (W - MARGIN * 2 - 60) // 4
-            for j, (sl, sv) in enumerate(stats):
-                x = MARGIN + 30 + j * (box_w + 10)
-                sy = y + 70
-                draw.text((x, sy), sl, fill=pal["text_dim"], font=f_small)
-                draw.text((x, sy + 45), sv, fill=pal["text"], font=f_val)
+    for i, (label, name, color, player_obj) in enumerate(awards):
+        col = i % 2
+        row = i // 2
+        x = MARGIN + col * (card_w + MARGIN)
+        y = start_y + row * (card_h + 30)
 
-            ratings.append(md['rating'])
+        draw.rounded_rectangle([x, y, x + card_w, y + card_h], radius=25, fill=(25, 25, 30, 220), outline=(*color, 150), width=3)
+        draw.text((x + 30, y + 20), label, fill=color, font=f_award)
+        draw.text((x + 30, y + 80), name, fill=pal["text"], font=f_name)
 
-        if len(ratings) >= 2:
-            half = len(ratings) // 2
-            avg_first = sum(ratings[:half]) / max(half, 1)
-            avg_last = sum(ratings[half:]) / max(len(ratings) - half, 1)
-            if avg_last > avg_first + 0.3:
-                trend = "📈 IMPROVING"
-                trend_color = (50, 255, 100)
-            elif avg_last < avg_first - 0.3:
-                trend = "📉 DECLINING"
-                trend_color = (255, 50, 50)
-            else:
-                trend = "➡️ STABLE"
-                trend_color = (255, 255, 100)
-        else:
-            trend = "➡️ STABLE"
-            trend_color = (255, 255, 100)
+        # Load player photo small
+        if player_obj:
+            sq_info = getattr(player_obj, "_squad_info", {}) or {}
+            raw_img = sq_info.get("image")
+            ppath = photo_paths.get(name) or raw_img
+            photo = _load_player_photo(name, assets_dir, max_size=(200, 200), photo_path=ppath)
+            if photo:
+                px = x + card_w - 220
+                py = y + 20
+                img.paste(photo, (px, py), photo)
 
-        trend_y = start_y + num_matches * row_h + 40
-        f_trend = self._font(80, bold=True)
-        draw.text((W // 2, trend_y), trend, fill=trend_color, font=f_trend, anchor="mm")
+        # Stats line
+        if player_obj:
+            rating = round(player_obj.rating_pg, 1)
+            draw.text((x + 30, y + 160), f"Rating: {rating} | Impact: {player_obj.impact_score}", fill=pal["text_dim"], font=f_stat)
 
-        avg_rating = sum(ratings) / max(len(ratings), 1)
-        f_avg = self._font(60)
-        draw.text((W // 2, trend_y + 100), f"Avg Rating: {round(avg_rating, 1)}", fill=pal["text_dim"], font=f_avg, anchor="mm")
+    # Footer
+    f_foot = _load_font(36)
+    draw.text((W // 2, H - 60), "RACHAD L3ERGONI • MATCH POSTER", fill=pal["text_dim"], font=f_foot, anchor="mm")
 
-        f_foot = self._font(36)
-        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • FORM TRACKER", fill=pal["text_dim"], font=f_foot, anchor="mm")
+    img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf
 
-        img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        buf.seek(0)
-        return buf
 
-    def generate_records_card(self, club, records):
-        pal = PALETTES["gold"]
-        W, H = CARD_W, CARD_H
-        img = _gradient_bg(W, H, (8, 6, 2), (25, 18, 6)).convert("RGBA")
-        img = _glow_circle(img, W // 2, H // 3, 700, pal["glow"], 0.25)
-        draw = ImageDraw.Draw(img)
+# ─────────────────────────────────────────────────────────────
+# HALL OF SHAME CARD
+# ─────────────────────────────────────────────────────────────
 
-        f_title = self._font(100, bold=True)
-        draw.text((W // 2, 80), "🏆 CLUB RECORDS", fill=pal["accent"], font=f_title, anchor="mm")
+def generate_hall_of_shame_card(assets_dir, records: list, club_name: str):
+    """Premium Hall of Shame card with all worst records."""
+    pal = {
+        "bg_top": (18, 4, 4), "bg_bot": (45, 8, 8),
+        "accent": (255, 50, 50), "accent2": (200, 30, 30),
+        "glow": (255, 60, 60), "text": (255, 230, 230),
+        "text_dim": (210, 150, 150), "badge": (255, 50, 50),
+    }
+    W, H = CARD_W, CARD_H
+    img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
+    img = _glow_circle(img, W // 2, H // 3, 800, pal["glow"], 0.25)
+    draw = ImageDraw.Draw(img)
 
-        f_sub = self._font(50)
-        draw.text((W // 2, 180), club.club_name.upper(), fill=pal["text"], font=f_sub, anchor="mm")
+    f_title = _load_font(100, bold=True)
+    draw.text((W // 2, 80), "🏛️ HALL OF SHAME", fill=pal["accent"], font=f_title, anchor="mm")
+    f_sub = _load_font(48)
+    draw.text((W // 2, 180), club_name.upper(), fill=pal["text_dim"], font=f_sub, anchor="mm")
 
-        row_h = 200
-        start_y = 280
-        f_rec = self._font(40, bold=True)
-        f_val = self._font(56, bold=True)
+    row_h = 260
+    start_y = 280
+    f_cat = _load_font(36, bold=True)
+    f_desc = _load_font(40, bold=True)
+    f_date = _load_font(30)
 
-        for i, (label, value) in enumerate(records[:8]):
-            y = start_y + i * row_h
-            draw.rounded_rectangle([MARGIN, y, W - MARGIN, y + row_h - 20], radius=20, fill=(30, 25, 15, 200), outline=(*pal["accent"], 100), width=2)
-            draw.text((MARGIN + 40, y + row_h // 2 - 30), label, fill=pal["text_dim"], font=f_rec)
-            draw.text((W - MARGIN - 40, y + row_h // 2 - 30), str(value), fill=pal["accent"], font=f_val, anchor="rm")
+    emojis = {
+        "worst_rating_ever": "📉", "most_possession_lost_ever": "💀",
+        "biggest_fraud_performance": "🎭", "worst_pass_accuracy_ever": "🎯",
+        "most_missed_chances_ever": "❌", "biggest_ghost_performance": "👻",
+        "worst_carry_score_ever": "🎒",
+    }
+    labels = {
+        "worst_rating_ever": "Worst Rating Ever",
+        "most_possession_lost_ever": "Most Possession Lost Ever",
+        "biggest_fraud_performance": "Biggest Fraud Performance",
+        "worst_pass_accuracy_ever": "Worst Pass Accuracy Ever",
+        "most_missed_chances_ever": "Most Missed Chances Ever",
+        "biggest_ghost_performance": "Biggest Ghost Performance",
+        "worst_carry_score_ever": "Worst Carry Score Ever",
+    }
 
-        f_foot = self._font(36)
-        draw.text((W // 2, H - 80), "RACHAD L3ERGONI • RECORDS", fill=pal["text_dim"], font=f_foot, anchor="mm")
+    for i, rec in enumerate(records[:7]):
+        y = start_y + i * row_h
+        draw.rounded_rectangle([MARGIN, y, W - MARGIN, y + row_h - 20], radius=20, fill=(35, 10, 10, 200), outline=(*pal["accent"], 100), width=2)
+        emoji = emojis.get(rec.category, "🔥")
+        label = labels.get(rec.category, rec.category)
+        draw.text((MARGIN + 30, y + 20), f"{emoji} {label}", fill=pal["accent"], font=f_cat)
+        draw.text((MARGIN + 30, y + 80), f"{rec.player_name} — {rec.description}", fill=pal["text"], font=f_desc)
+        if rec.date:
+            draw.text((MARGIN + 30, y + 150), f"📅 {rec.date}", fill=pal["text_dim"], font=f_date)
 
-        img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        buf.seek(0)
-        return buf
+    f_foot = _load_font(36)
+    draw.text((W // 2, H - 60), "RACHAD L3ERGONI • SHAME ETERNAL", fill=pal["text_dim"], font=f_foot, anchor="mm")
+
+    img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf
+
+
+# ─────────────────────────────────────────────────────────────
+# HALL OF FAME CARD
+# ─────────────────────────────────────────────────────────────
+
+def generate_hall_of_fame_card(assets_dir, records: list, club_name: str):
+    """Premium Hall of Fame card with all best records."""
+    pal = {
+        "bg_top": (10, 8, 4), "bg_bot": (30, 22, 8),
+        "accent": (255, 215, 0), "accent2": (218, 165, 32),
+        "glow": (255, 200, 50), "text": (255, 248, 220),
+        "text_dim": (200, 180, 140), "badge": (255, 215, 0),
+    }
+    W, H = CARD_W, CARD_H
+    img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
+    img = _glow_circle(img, W // 2, H // 3, 800, pal["glow"], 0.25)
+    draw = ImageDraw.Draw(img)
+
+    f_title = _load_font(100, bold=True)
+    draw.text((W // 2, 80), "🏆 HALL OF FAME", fill=pal["accent"], font=f_title, anchor="mm")
+    f_sub = _load_font(48)
+    draw.text((W // 2, 180), club_name.upper(), fill=pal["text_dim"], font=f_sub, anchor="mm")
+
+    row_h = 260
+    start_y = 280
+    f_cat = _load_font(36, bold=True)
+    f_desc = _load_font(40, bold=True)
+    f_date = _load_font(30)
+
+    emojis = {
+        "highest_rating_ever": "⭐", "most_goals_in_match": "⚽",
+        "most_assists_in_match": "🅰️", "best_carry_performance": "💪",
+        "best_defender_performance": "🛡️", "most_mvps_season": "🏆",
+    }
+    labels = {
+        "highest_rating_ever": "Highest Rating Ever",
+        "most_goals_in_match": "Most Goals in One Match",
+        "most_assists_in_match": "Most Assists in One Match",
+        "best_carry_performance": "Best Carry Performance",
+        "best_defender_performance": "Best Defender Performance",
+        "most_mvps_season": "Most MVPs This Season",
+    }
+
+    for i, rec in enumerate(records[:7]):
+        y = start_y + i * row_h
+        draw.rounded_rectangle([MARGIN, y, W - MARGIN, y + row_h - 20], radius=20, fill=(30, 25, 10, 200), outline=(*pal["accent"], 100), width=2)
+        emoji = emojis.get(rec.category, "👑")
+        label = labels.get(rec.category, rec.category)
+        draw.text((MARGIN + 30, y + 20), f"{emoji} {label}", fill=pal["accent"], font=f_cat)
+        draw.text((MARGIN + 30, y + 80), f"{rec.player_name} — {rec.description}", fill=pal["text"], font=f_desc)
+        if rec.date:
+            draw.text((MARGIN + 30, y + 150), f"📅 {rec.date}", fill=pal["text_dim"], font=f_date)
+
+    f_foot = _load_font(36)
+    draw.text((W // 2, H - 60), "RACHAD L3ERGONI • LEGENDS NEVER DIE", fill=pal["text_dim"], font=f_foot, anchor="mm")
+
+    img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf
+
+
+# ─────────────────────────────────────────────────────────────
+# RIVALRY CARD
+# ─────────────────────────────────────────────────────────────
+
+def generate_rivalry_card(assets_dir, stats: dict, p1_photo=None, p2_photo=None):
+    """Premium 1v1 rivalry card."""
+    pal = {
+        "bg_top": (12, 4, 18), "bg_bot": (35, 10, 50),
+        "accent": (186, 85, 211), "accent2": (147, 51, 234),
+        "glow": (180, 60, 220), "text": (245, 230, 255),
+        "text_dim": (180, 150, 200), "badge": (186, 85, 211),
+        "red": (255, 50, 50), "green": (50, 255, 100),
+    }
+    W, H = CARD_W, CARD_H
+    img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
+    img = _glow_circle(img, W // 2, H // 3, 900, pal["glow"], 0.2)
+    draw = ImageDraw.Draw(img)
+
+    p1 = stats["p1_name"]
+    p2 = stats["p2_name"]
+    winner = stats["overall_winner"]
+
+    f_title = _load_font(90, bold=True)
+    draw.text((W // 2, 80), "⚔️ RIVALRY", fill=pal["accent"], font=f_title, anchor="mm")
+    f_names = _load_font(70, bold=True)
+    draw.text((W // 2, 180), f"{p1}  vs  {p2}", fill=pal["text"], font=f_names, anchor="mm")
+
+    # Photos side by side
+    photo_size = (500, 500)
+    p1_img = _load_player_photo(p1, assets_dir, max_size=photo_size, photo_path=p1_photo)
+    p2_img = _load_player_photo(p2, assets_dir, max_size=photo_size, photo_path=p2_photo)
+
+    if p1_img:
+        px = MARGIN + 50
+        py = 300
+        img.paste(p1_img, (px, py), p1_img)
+    if p2_img:
+        px = W - MARGIN - 50 - photo_size[0]
+        py = 300
+        img.paste(p2_img, (px, py), p2_img)
+
+    # VS badge
+    f_vs = _load_font(80, bold=True)
+    draw.text((W // 2, 550), "VS", fill=pal["accent"], font=f_vs, anchor="mm")
+
+    # Stats comparison table
+    start_y = 900
+    row_h = 110
+    f_stat = _load_font(38, bold=True)
+    f_val = _load_font(42, bold=True)
+
+    categories = [
+        ("Goals", "goals"), ("Assists", "assists"), ("Rating", "rating"),
+        ("Win %", "win_rate"), ("Possession Lost", "possession_lost"),
+        ("MOTM", "motm"), ("Impact", "impact"),
+    ]
+
+    for i, (label, key) in enumerate(categories):
+        y = start_y + i * row_h
+        draw.rounded_rectangle([MARGIN, y, W - MARGIN, y + row_h - 15], radius=15, fill=(25, 15, 35, 200), outline=(*pal["accent"], 80), width=2)
+
+        v1 = stats[key]["p1"]
+        v2 = stats[key]["p2"]
+        w = stats[key]["winner"]
+
+        c1 = pal["green"] if w == p1 else pal["text"]
+        c2 = pal["green"] if w == p2 else pal["text"]
+
+        draw.text((MARGIN + 40, y + 20), label, fill=pal["text_dim"], font=f_stat)
+        draw.text((MARGIN + 300, y + 20), str(v1), fill=c1, font=f_val)
+        draw.text((W // 2, y + 20), "—", fill=pal["text_dim"], font=f_val, anchor="mm")
+        draw.text((W - MARGIN - 300, y + 20), str(v2), fill=c2, font=f_val)
+
+    # Winner banner
+    if winner != "Tie":
+        banner_y = start_y + len(categories) * row_h + 40
+        f_win = _load_font(80, bold=True)
+        draw.rounded_rectangle([MARGIN, banner_y, W - MARGIN, banner_y + 140], radius=30, fill=(*pal["green"], 80), outline=pal["green"], width=4)
+        draw.text((W // 2, banner_y + 70), f"🏆 WINNER: {winner}", fill=pal["text"], font=f_win, anchor="mm")
+    else:
+        banner_y = start_y + len(categories) * row_h + 40
+        f_win = _load_font(80, bold=True)
+        draw.rounded_rectangle([MARGIN, banner_y, W - MARGIN, banner_y + 140], radius=30, fill=(*pal["accent"], 60), outline=pal["accent"], width=4)
+        draw.text((W // 2, banner_y + 70), "🤝 TIE", fill=pal["text"], font=f_win, anchor="mm")
+
+    f_foot = _load_font(36)
+    draw.text((W // 2, H - 60), "RACHAD L3ERGONI • RIVALRY CENTRAL", fill=pal["text_dim"], font=f_foot, anchor="mm")
+
+    img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf
+
+
+# ─────────────────────────────────────────────────────────────
+# MILESTONE CARD
+# ─────────────────────────────────────────────────────────────
+
+def generate_milestone_card(assets_dir, alert: dict, player_photo=None):
+    """Premium milestone alert card."""
+    pal = {
+        "bg_top": (4, 14, 6), "bg_bot": (8, 35, 14),
+        "accent": (50, 255, 100), "accent2": (30, 200, 70),
+        "glow": (60, 255, 120), "text": (230, 255, 235),
+        "text_dim": (150, 210, 170), "badge": (50, 255, 100),
+    }
+    W, H = CARD_W, CARD_H
+    img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
+    img = _glow_circle(img, W // 2, H // 3, 900, pal["glow"], 0.35)
+    draw = ImageDraw.Draw(img)
+
+    player = alert["player"]
+    stat = alert["stat"]
+    threshold = alert["threshold"]
+
+    emojis = {"goals": "⚽", "assists": "🅰️", "mvps": "🏆", "frauds": "🎭", "possession_losses": "💀", "games": "🎮", "tackles": "🛡️"}
+    emoji = emojis.get(stat, "🔥")
+
+    f_title = _load_font(80, bold=True)
+    draw.text((W // 2, 80), f"🚨 MILESTONE ALERT", fill=pal["accent"], font=f_title, anchor="mm")
+
+    f_player = _load_font(120, bold=True)
+    draw.text((W // 2, 250), player.upper(), fill=pal["text"], font=f_player, anchor="mm")
+
+    # Photo
+    photo = _load_player_photo(player, assets_dir, max_size=(1000, 1000), photo_path=player_photo)
+    if photo:
+        px = (W - photo.width) // 2
+        py = 420
+        shadow = Image.new("RGBA", (photo.width + 80, photo.height + 80), (0, 0, 0, 0))
+        s_draw = ImageDraw.Draw(shadow)
+        s_draw.rounded_rectangle([20, 20, photo.width + 60, photo.height + 60], radius=40, fill=(*pal["glow"], 100))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=30))
+        img.paste(shadow, (px - 40, py - 40), shadow)
+        mask = Image.new("L", photo.size, 0)
+        ImageDraw.Draw(mask).rounded_rectangle([0, 0, photo.width, photo.height], radius=40, fill=255)
+        img.paste(photo, (px, py), mask)
+
+    # Milestone text
+    f_milestone = _load_font(90, bold=True)
+    draw.text((W // 2, 1500), f"{emoji} {threshold} {stat.upper()}", fill=pal["accent"], font=f_milestone, anchor="mm")
+
+    f_sub = _load_font(50)
+    draw.text((W // 2, 1650), "التاريخ كيتكتب اليوم. التاريخ ما كينساش.", fill=pal["text_dim"], font=f_sub, anchor="mm")
+
+    f_foot = _load_font(36)
+    draw.text((W // 2, H - 60), "RACHAD L3ERGONI • MILESTONE TRACKER", fill=pal["text_dim"], font=f_foot, anchor="mm")
+
+    img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf
+
+
+# ─────────────────────────────────────────────────────────────
+# WEEKLY AWARDS CARD
+# ─────────────────────────────────────────────────────────────
+
+def generate_weekly_awards_card(assets_dir, winners: list, week_date: str):
+    """Premium weekly awards card."""
+    pal = {
+        "bg_top": (8, 8, 8), "bg_bot": (20, 20, 20),
+        "accent": (180, 180, 180), "accent2": (120, 120, 120),
+        "glow": (150, 150, 150), "text": (240, 240, 240),
+        "text_dim": (160, 160, 160), "badge": (200, 200, 200),
+        "red": (255, 50, 50), "green": (50, 255, 100),
+        "purple": (186, 85, 211), "gold": (255, 215, 0),
+    }
+    W, H = CARD_W, CARD_H
+    img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
+    img = _glow_circle(img, W // 2, H // 3, 800, pal["glow"], 0.2)
+    draw = ImageDraw.Draw(img)
+
+    f_title = _load_font(90, bold=True)
+    draw.text((W // 2, 80), "📅 WEEKLY AWARDS", fill=pal["gold"], font=f_title, anchor="mm")
+    f_date = _load_font(48)
+    draw.text((W // 2, 180), week_date, fill=pal["text_dim"], font=f_date, anchor="mm")
+
+    award_colors = {
+        "fraud_of_the_week": pal["red"],
+        "ghost_of_the_week": pal["purple"],
+        "mvp_of_the_week": pal["gold"],
+        "ball_loser_of_the_week": pal["red"],
+        "carry_of_the_week": pal["green"],
+    }
+
+    row_h = 320
+    start_y = 280
+    f_award = _load_font(40, bold=True)
+    f_desc = _load_font(36)
+    f_score = _load_font(50, bold=True)
+
+    for i, w in enumerate(winners):
+        y = start_y + i * row_h
+        color = award_colors.get(w["award"], pal["accent"])
+        draw.rounded_rectangle([MARGIN, y, W - MARGIN, y + row_h - 20], radius=25, fill=(30, 30, 30, 220), outline=(*color, 150), width=3)
+        draw.text((MARGIN + 30, y + 20), w["title"], fill=color, font=f_award)
+        draw.text((MARGIN + 30, y + 90), w["description"], fill=pal["text"], font=f_desc)
+        draw.text((W - MARGIN - 30, y + 90), str(w["score"]), fill=color, font=f_score, anchor="rm")
+
+    f_foot = _load_font(36)
+    draw.text((W // 2, H - 60), "RACHAD L3ERGONI • WEEKLY AWARDS", fill=pal["text_dim"], font=f_foot, anchor="mm")
+
+    img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf
