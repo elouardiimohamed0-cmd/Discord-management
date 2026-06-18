@@ -1,5 +1,5 @@
 """image_gen.py — EA FC Pro Clubs premium card generator.
-Resolution: 2160x3840 (UHD portrait)
+Resolution: 1440x2160 (portrait)
 Pure Pillow — no Groq, no AI, no randomness.
 """
 
@@ -13,20 +13,30 @@ from models import PlayerStats, ClubStats
 
 logger = logging.getLogger("rachad_bot.image_gen")
 
-# ─── PLAYER IMAGE LOADER ───
+# ─── PLAYER IMAGE LOADER — preserves aspect ratio ───
 
-def _load_player_photo(name: str, assets_dir: str, size=(1400, 1400), photo_path: Optional[str] = None):
-    """Load player photo with debug logging."""
-    print(f"[PHOTO DEBUG] Player: {name}, Asset path: {photo_path}, Assets dir: {assets_dir}")
+def _load_player_photo(name: str, assets_dir: str, max_size=(1600, 1600), photo_path: Optional[str] = None, preserve_aspect: bool = True):
+    """Load player photo. Uses thumbnail to preserve aspect ratio by default."""
 
-    if photo_path and os.path.exists(photo_path):
+    def _try_load(path):
+        if not path or not os.path.exists(path):
+            return None
         try:
-            img = Image.open(photo_path).convert("RGBA")
-            img = img.resize(size, Image.LANCZOS)
-            print(f"[PHOTO DEBUG] ✅ Loaded from explicit path: {photo_path}")
+            img = Image.open(path).convert("RGBA")
+            if preserve_aspect:
+                img.thumbnail(max_size, Image.LANCZOS)
+            else:
+                img = img.resize(max_size, Image.LANCZOS)
+            print(f"[PHOTO DEBUG] ✅ Loaded: {path} ({img.width}x{img.height})")
             return img
         except Exception as e:
-            print(f"[PHOTO DEBUG] ❌ Failed explicit path: {photo_path} — {e}")
+            print(f"[PHOTO DEBUG] ❌ Failed: {path} — {e}")
+            return None
+
+    # Try explicit path first
+    img = _try_load(photo_path)
+    if img:
+        return img
 
     # Search by name variations
     clean = name.replace(" ", "_").lower()
@@ -49,22 +59,17 @@ def _load_player_photo(name: str, assets_dir: str, size=(1400, 1400), photo_path
     ]
 
     for path in candidates:
-        if os.path.exists(path):
-            try:
-                img = Image.open(path).convert("RGBA")
-                img = img.resize(size, Image.LANCZOS)
-                print(f"[PHOTO DEBUG] ✅ Loaded from search: {path}")
-                return img
-            except Exception as e:
-                print(f"[PHOTO DEBUG] ❌ Failed search path: {path} — {e}")
+        img = _try_load(path)
+        if img:
+            return img
 
     print(f"[PHOTO DEBUG] ❌ No photo found for: {name}")
     return None
 
 
 # ─── CONSTANTS ───
-CARD_W, CARD_H = 2160, 3840
-MARGIN = 120
+CARD_W, CARD_H = 1440, 2160
+MARGIN = 80
 
 PALETTES = {
     "gold": {
@@ -119,15 +124,6 @@ def _load_font(size: int, bold=False):
                 pass
     return ImageFont.load_default()
 
-def _hexagon_points(cx, cy, radius):
-    points = []
-    for i in range(6):
-        angle = math.pi / 3 * i - math.pi / 6
-        x = cx + radius * math.cos(angle)
-        y = cy + radius * math.sin(angle)
-        points.append((x, y))
-    return points
-
 def _gradient_bg(w, h, c1, c2):
     img = Image.new("RGB", (w, h), c1)
     draw = ImageDraw.Draw(img)
@@ -160,121 +156,71 @@ class ImageGenerator:
         return self.fonts[key]
 
     # ───────────────────────────────────────────
-    # CORE EA FC PRO CARD BUILDER
+    # PHOTO-ONLY PLAYER CARD (main focus)
     # ───────────────────────────────────────────
-    def _build_fc_card(self, player, pos, palette_name, label, extra_stats=None, photo_override=None):
+    def generate_player_photo_card(self, player, pos, palette_name="gold", label="PLAYER", photo_path=None):
+        """Clean photo card. Photo is the main focus, preserving aspect ratio. No stat boxes."""
         pal = PALETTES.get(palette_name, PALETTES["gold"])
         W, H = CARD_W, CARD_H
 
-        # Base gradient
+        # Dark premium background
         img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
-
-        # Subtle glow
-        img = _glow_circle(img, W // 2, H // 3, 900, pal["glow"], 0.2)
-        img = _glow_circle(img, W // 2, H * 2 // 3, 700, pal["accent2"], 0.15)
+        img = _glow_circle(img, W // 2, H // 3, 700, pal["glow"], 0.2)
         draw = ImageDraw.Draw(img)
 
-        # ── TOP: Rating (left), Nickname (center), Position (right) ──
-        rating = round(getattr(player, "rating_pg", 7.0), 1)
-
-        # Rating hexagon (top-left)
-        hex_x = 280
-        hex_y = 280
-        hex_r = 140
-        hex_pts = _hexagon_points(hex_x, hex_y, hex_r)
-        for offset in [30, 20, 10]:
-            glow_pts = _hexagon_points(hex_x, hex_y, hex_r + offset)
-            alpha = int(60 - offset * 1.5)
-            draw.polygon(glow_pts, fill=(*pal["glow"], alpha))
-        draw.polygon(hex_pts, fill=(15, 15, 15, 240), outline=pal["accent"], width=4)
-        f_rating = self._font(180, bold=True)
-        draw.text((hex_x, hex_y), str(rating), fill=pal["badge"], font=f_rating, anchor="mm")
-        f_ovr = self._font(36, bold=True)
-        draw.text((hex_x, hex_y + 95), "OVR", fill=pal["text_dim"], font=f_ovr, anchor="mm")
-
-        # Nickname from squad.json (top-center)
+        # ── TOP: Nickname + Position ──
         nickname = getattr(player, "_squad_info", {}).get("nickname", player.name)
-        f_nick = self._font(120, bold=True)
-        draw.text((W // 2, 200), nickname.upper(), fill=pal["text"], font=f_nick, anchor="mm")
+        f_name = self._font(90, bold=True)
+        draw.text((W // 2, 70), nickname.upper(), fill=pal["text"], font=f_name, anchor="mm")
 
-        # Position badge (top-right)
-        pos_x = W - 280
-        pos_y = 280
-        f_pos = self._font(56, bold=True)
-        pw, ph = 200, 85
-        px = pos_x - pw // 2
-        draw.rounded_rectangle([px, pos_y - ph // 2, px + pw, pos_y + ph // 2], radius=18, fill=pal["accent"], outline=pal["accent2"], width=3)
-        draw.text((pos_x, pos_y), pos.upper(), fill=(10, 10, 10), font=f_pos, anchor="mm")
+        # Position badge
+        f_pos = self._font(40, bold=True)
+        pw, ph = 160, 70
+        px = W // 2 - pw // 2
+        draw.rounded_rectangle([px, 125, px + pw, 125 + ph], radius=15, fill=pal["accent"], outline=pal["accent2"], width=2)
+        draw.text((W // 2, 125 + ph // 2), pos.upper(), fill=(10, 10, 10), font=f_pos, anchor="mm")
 
-        # ── CENTER: Large player photo (main focus) ──
-        photo_y = 500
-        photo_size = (1400, 1400)
-        photo = _load_player_photo(player.name, self.assets_dir, photo_size, photo_path=photo_override)
+        # ── CENTER: Photo (preserve aspect ratio, max size, centered) ──
+        photo_max_w = W - 100
+        photo_max_h = H - 320  # space for header + footer
+        photo = _load_player_photo(
+            player.name, self.assets_dir,
+            max_size=(photo_max_w, photo_max_h),
+            photo_path=photo_path,
+            preserve_aspect=True
+        )
 
-        print(f"[CARD DEBUG] Player: {player.name}, Nickname: {nickname}, Asset path: {photo_override}, Exists: {photo is not None}")
+        print(f"[CARD DEBUG] Player: {player.name}, Nickname: {nickname}, Asset: {photo_path}, Loaded: {photo is not None}")
 
         if photo:
+            # Center the photo
             px = (W - photo.width) // 2
-            py = photo_y
-            # Large soft glow behind photo
-            shadow = Image.new("RGBA", (photo.width + 120, photo.height + 120), (0, 0, 0, 0))
+            py = 220 + (photo_max_h - photo.height) // 2
+
+            # Soft glow behind photo
+            shadow = Image.new("RGBA", (photo.width + 80, photo.height + 80), (0, 0, 0, 0))
             s_draw = ImageDraw.Draw(shadow)
-            s_draw.rounded_rectangle([30, 30, photo.width + 90, photo.height + 90], radius=50, fill=(*pal["glow"], 50))
-            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=50))
-            img.paste(shadow, (px - 60, py - 60), shadow)
-            # Photo with rounded mask
+            s_draw.rounded_rectangle([20, 20, photo.width + 60, photo.height + 60], radius=40, fill=(*pal["glow"], 60))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=40))
+            img.paste(shadow, (px - 40, py - 40), shadow)
+
+            # Paste photo (with rounded mask)
             mask = Image.new("L", photo.size, 0)
-            ImageDraw.Draw(mask).rounded_rectangle([0, 0, photo.width, photo.height], radius=40, fill=255)
+            ImageDraw.Draw(mask).rounded_rectangle([0, 0, photo.width, photo.height], radius=30, fill=255)
             img.paste(photo, (px, py), mask)
         else:
-            # Fallback silhouette
-            sil_y = photo_y + 300
-            draw.ellipse([W // 2 - 350, sil_y, W // 2 + 350, sil_y + 700], fill=(35, 35, 35, 200), outline=pal["accent"], width=4)
-            draw.ellipse([W // 2 - 140, sil_y - 180, W // 2 + 140, sil_y + 180], fill=(35, 35, 35, 200), outline=pal["accent"], width=4)
-            f_sil = self._font(70, bold=True)
-            draw.text((W // 2, sil_y + 400), player.name, fill=pal["text_dim"], font=f_sil, anchor="mm")
-
-        # ── BOTTOM: Stats grid (2×4) ──
-        stats = [
-            ("GOALS", getattr(player, "goals", 0)),
-            ("ASSISTS", getattr(player, "assists", 0)),
-            ("RATING", round(getattr(player, "rating_pg", 0), 1)),
-            ("PASS %", f"{round(getattr(player, 'pass_accuracy', 0), 1)}%"),
-            ("WIN %", f"{round(getattr(player, 'win_rate', 0), 1)}%"),
-            ("POSS LOST", getattr(player, "possession_losses", 0)),
-            ("IMPACT", round(getattr(player, "impact_score", 0), 1)),
-            ("MOTM", getattr(player, "motm", 0)),
-        ]
-        if extra_stats:
-            stats = extra_stats
-
-        grid_y = 2100
-        box_w = (W - MARGIN * 3) // 2
-        box_h = 180
-        gap_x = MARGIN
-        gap_y = 24
-        f_stat_label = self._font(34, bold=True)
-        f_stat_val = self._font(68, bold=True)
-
-        for i, (s_label, s_val) in enumerate(stats[:8]):
-            col = i % 2
-            row = i // 2
-            x = MARGIN + col * (box_w + gap_x)
-            y = grid_y + row * (box_h + gap_y)
-
-            # Clean dark box with thin accent border
-            draw.rounded_rectangle([x, y, x + box_w, y + box_h], radius=20, fill=(22, 22, 22, 180), outline=(*pal["accent"], 100), width=2)
-            draw.text((x + 30, y + 16), s_label, fill=pal["text_dim"], font=f_stat_label)
-            draw.text((x + 30, y + 70), str(s_val), fill=pal["text"], font=f_stat_val)
+            # Fallback: large silhouette text
+            f_err = self._font(60, bold=True)
+            draw.text((W // 2, H // 2), f"[NO PHOTO]\n{player.name}", fill=pal["text_dim"], font=f_err, anchor="mm")
 
         # ── FOOTER ──
-        f_foot = self._font(34)
-        draw.text((W // 2, H - 70), "RACHAD L3ERGONI • PRO CLUBS TRACKER", fill=pal["text_dim"], font=f_foot, anchor="mm")
+        f_foot = self._font(28)
+        draw.text((W // 2, H - 35), f"RACHAD L3ERGONI • {label}", fill=pal["text_dim"], font=f_foot, anchor="mm")
 
-        # Final composite and sharpen
+        # Final
         img = img.convert("RGB")
         enhancer = ImageEnhance.Sharpness(img)
-        img = enhancer.enhance(1.2)
+        img = enhancer.enhance(1.1)
 
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
@@ -282,53 +228,35 @@ class ImageGenerator:
         return buf
 
     # ───────────────────────────────────────────
-    # PUBLIC CARD METHODS
+    # LEGACY / SPECIAL CARDS
     # ───────────────────────────────────────────
 
     def generate_player_card(self, player, pos, division=6, photo_path=None):
-        return self._build_fc_card(player, pos, "gold", "PLAYER PROFILE", photo_override=photo_path)
+        return self.generate_player_photo_card(player, pos, "gold", "PLAYER PROFILE", photo_path=photo_path)
 
     def generate_mvp_card(self, player, pos, photo_path=None):
-        return self._build_fc_card(player, pos, "gold", "MAN OF THE MATCH", photo_override=photo_path)
+        return self.generate_player_photo_card(player, pos, "gold", "MAN OF THE MATCH", photo_path=photo_path)
 
     def generate_roast_card(self, player, roast_text, pos, photo_path=None):
-        # Roast card uses red theme with custom stats
-        stats = [
-            ("THROWING", round(getattr(player, "throwing_score", 0), 1)),
-            ("ERROR", round(getattr(player, "error_score", 0), 1)),
-            ("PASS %", f"{round(getattr(player, 'pass_accuracy', 0), 1)}%"),
-            ("IMPACT", round(getattr(player, "impact_score", 0), 1)),
-            ("POSS LOST", getattr(player, "possession_losses", 0)),
-            ("RATING", round(getattr(player, "rating_pg", 0), 1)),
-            ("GOALS", getattr(player, "goals", 0)),
-            ("ASSISTS", getattr(player, "assists", 0)),
-        ]
-        return self._build_fc_card(player, pos, "red", "FRAUD DETECTED", extra_stats=stats, photo_override=photo_path)
+        return self.generate_player_photo_card(player, pos, "red", "FRAUD DETECTED", photo_path=photo_path)
 
     def generate_anime_card(self, player, pos, style, label, photo_path=None):
-        return self._build_fc_card(player, pos, "purple", label, photo_override=photo_path)
+        return self.generate_player_photo_card(player, pos, "purple", "ANIME LEGEND", photo_path=photo_path)
 
     def generate_beast_card(self, player, pos, photo_path=None):
-        return self._build_fc_card(player, pos, "blue", "BEAST MODE", photo_override=photo_path)
+        return self.generate_player_photo_card(player, pos, "blue", "BEAST MODE", photo_path=photo_path)
 
     def generate_court_case(self, player, pos, evidence, photo_path=None):
-        stats = [
-            ("THROWING", round(getattr(player, "throwing_score", 0), 1)),
-            ("ERROR", round(getattr(player, "error_score", 0), 1)),
-            ("PASS %", f"{round(getattr(player, 'pass_accuracy', 0), 1)}%"),
-            ("IMPACT", round(getattr(player, "impact_score", 0), 1)),
-            ("POSS LOST", getattr(player, "possession_losses", 0)),
-            ("RATING", round(getattr(player, "rating_pg", 0), 1)),
-            ("GOALS", getattr(player, "goals", 0)),
-            ("ASSISTS", getattr(player, "assists", 0)),
-        ]
-        return self._build_fc_card(player, pos, "red", "COURT CASE", extra_stats=stats, photo_override=photo_path)
+        return self.generate_player_photo_card(player, pos, "red", "COURT CASE", photo_path=photo_path)
 
     def generate_playmaker_card(self, player, pos, photo_path=None):
-        return self._build_fc_card(player, pos, "green", "PLAYMAKER", photo_override=photo_path)
+        return self.generate_player_photo_card(player, pos, "green", "PLAYMAKER", photo_path=photo_path)
 
     def generate_sniper_card(self, player, pos, photo_path=None):
-        return self._build_fc_card(player, pos, "blue", "SNIPER", photo_override=photo_path)
+        return self.generate_player_photo_card(player, pos, "blue", "SNIPER", photo_path=photo_path)
+
+    def generate_legend_card(self, player, pos, photo_path=None):
+        return self.generate_player_photo_card(player, pos, "gold", "CLUB LEGEND", photo_path=photo_path)
 
     def generate_leaderboard(self, players, metric):
         pal = PALETTES["dark"]
@@ -424,7 +352,7 @@ class ImageGenerator:
         f_stat = self._font(60)
         draw.text((W // 2, 180), f"{stat_name}: {stat_value}", fill=pal["text"], font=f_stat, anchor="mm")
 
-        photo = _load_player_photo(player.name, self.assets_dir, (1200, 1200), photo_path=photo_path)
+        photo = _load_player_photo(player.name, self.assets_dir, max_size=(1200, 1200), photo_path=photo_path, preserve_aspect=True)
         if photo:
             px = (W - photo.width) // 2
             py = 320
@@ -605,10 +533,3 @@ class ImageGenerator:
         img.save(buf, format="PNG", optimize=True)
         buf.seek(0)
         return buf
-
-    # ───────────────────────────────────────────
-    # LEGEND CARD — Club Legend (MVP reframe)
-    # ───────────────────────────────────────────
-    def generate_legend_card(self, player, pos, photo_path=None):
-        """Legend card — same as MVP but with LEGEND label."""
-        return self._build_fc_card(player, pos, "gold", "CLUB LEGEND", photo_override=photo_path)
