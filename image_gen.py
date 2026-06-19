@@ -22,13 +22,13 @@ except ImportError:
     get_template = None
     TEMPLATE_GENERATORS = {}
 
-# ─── POLLINATIONS AI PHOTOS & VIDEOS ───
+# ─── FAL.AI IMAGES ───
 try:
-    from services.pollinations import PollinationsClient
-    POLLINATIONS_AVAILABLE = True
+    from services.fal import FalClient
+    FAL_AVAILABLE = True
 except ImportError:
-    POLLINATIONS_AVAILABLE = False
-    PollinationsClient = None
+    FAL_AVAILABLE = False
+    FalClient = None
     
 # ─── CONSTANTS ───
 CARD_W, CARD_H = 1440, 2160
@@ -129,9 +129,9 @@ class ImageGenerator:
     def __init__(self, assets_dir: str = "assets"):
         self.assets_dir = assets_dir
         self.fonts = {}
-        self._pollinations = None
-        self._media_cache = {}  # In-memory cache
-        self._cache_dir = "cache/pollinations"
+        self._fal = None
+        self._photo_cache = {}  # In-memory cache
+        self._cache_dir = "cache/fal"
         os.makedirs(self._cache_dir, exist_ok=True)
 
     def _font(self, size, bold=False):
@@ -140,14 +140,14 @@ class ImageGenerator:
             self.fonts[key] = _load_font(size, bold)
         return self.fonts[key]
 
-    def _get_pollinations(self):
-        """Lazy-init Pollinations client."""
-        if self._pollinations is None and POLLINATIONS_AVAILABLE:
-            self._pollinations = PollinationsClient()
-        return self._pollinations
+    def _get_fal(self):
+        """Lazy-init Fal client."""
+        if self._fal is None and FAL_AVAILABLE:
+            self._fal = FalClient()
+        return self._fal
 
     def _get_cached_photo_path(self, player_name: str, card_type: str) -> Optional[str]:
-        """Check if we have a cached AI photo on disk."""
+        """Check if we have a cached Fal photo on disk."""
         safe_name = player_name.replace(" ", "_").replace("/", "_")
         cache_path = os.path.join(self._cache_dir, f"{safe_name}_{card_type}.png")
         if os.path.exists(cache_path):
@@ -155,7 +155,7 @@ class ImageGenerator:
         return None
 
     def _save_photo_cache(self, player_name: str, card_type: str, img_bytes: bytes) -> str:
-        """Save AI photo to disk cache."""
+        """Save Fal photo to disk cache."""
         safe_name = player_name.replace(" ", "_").replace("/", "_")
         cache_path = os.path.join(self._cache_dir, f"{safe_name}_{card_type}.png")
         with open(cache_path, "wb") as f:
@@ -163,21 +163,21 @@ class ImageGenerator:
         return cache_path
 
     def _generate_ai_photo(self, player_name: str, card_type: str = "player") -> Optional[bytes]:
-        """Generate an AI player photo using Pollinations. Returns PNG bytes or None."""
-        if not POLLINATIONS_AVAILABLE:
-            logger.warning("[POLLINATIONS] Module not available")
+        """Generate an AI player photo using fal.ai. Returns PNG bytes or None."""
+        if not FAL_AVAILABLE:
+            logger.warning("[FAL] Module not available")
             return None
 
-        client = self._get_pollinations()
+        client = self._get_fal()
         if not client or not client.is_available():
-            logger.warning("[POLLINATIONS] API key not set — cannot generate AI photo for %s", player_name)
+            logger.warning("[FAL] API key not set — cannot generate AI photo for %s", player_name)
             return None
 
         # Check in-memory cache
-        cache_key = f"pollinations:{player_name}:{card_type}"
-        if cache_key in self._media_cache:
-            logger.info("[POLLINATIONS] Using in-memory cache for %s", player_name)
-            return self._media_cache[cache_key]
+        cache_key = f"fal:{player_name}:{card_type}"
+        if cache_key in self._photo_cache:
+            logger.info("[FAL] Using in-memory cache for %s", player_name)
+            return self._photo_cache[cache_key]
 
         # Check disk cache
         cached_path = self._get_cached_photo_path(player_name, card_type)
@@ -185,11 +185,11 @@ class ImageGenerator:
             try:
                 with open(cached_path, "rb") as f:
                     img_bytes = f.read()
-                self._media_cache[cache_key] = img_bytes
-                logger.info("[POLLINATIONS] Using disk cache for %s", player_name)
+                self._photo_cache[cache_key] = img_bytes
+                logger.info("[FAL] Using disk cache for %s", player_name)
                 return img_bytes
             except Exception as e:
-                logger.error("[POLLINATIONS] Disk cache read failed: %s", e)
+                logger.error("[FAL] Disk cache read failed: %s", e)
 
         # Generate new photo
         prompts = {
@@ -206,17 +206,17 @@ class ImageGenerator:
         prompt = prompts.get(card_type, prompts["player"])
 
         try:
-            logger.info("[POLLINATIONS] Generating AI photo for %s (type: %s)", player_name, card_type)
+            logger.info("[FAL] Generating AI photo for %s (type: %s)", player_name, card_type)
             img_bytes = client.generate_image(prompt, width=1024, height=1536)
 
             # Save to caches
-            self._media_cache[cache_key] = img_bytes
+            self._photo_cache[cache_key] = img_bytes
             self._save_photo_cache(player_name, card_type, img_bytes)
 
-            logger.info("[POLLINATIONS] Generated and cached AI photo for %s", player_name)
+            logger.info("[FAL] Generated and cached AI photo for %s", player_name)
             return img_bytes
         except Exception as e:
-            logger.error("[POLLINATIONS] Failed to generate photo for %s: %s", player_name, e)
+            logger.error("[FAL] Failed to generate photo for %s: %s", player_name, e)
             return None
 
     def _load_template_for_label(self, label: str):
@@ -238,10 +238,10 @@ class ImageGenerator:
         return None
 
     # ───────────────────────────────────────────
-    # PHOTO-ONLY PLAYER CARD (Pollinations AI primary)
+    # PHOTO-ONLY PLAYER CARD (Fal AI primary)
     # ───────────────────────────────────────────
     def generate_player_photo_card(self, player, pos, palette_name="gold", label="PLAYER", photo_path=None):
-        """Clean photo card. Pollinations AI photo is PRIMARY. No local file fallback."""
+        """Clean photo card. Fal AI photo is PRIMARY. No local file fallback."""
         pal = PALETTES.get(palette_name, PALETTES["gold"])
         W, H = CARD_W, CARD_H
 
@@ -268,24 +268,24 @@ class ImageGenerator:
         photo_max_w = W - 100
         photo_max_h = H - 320
 
-        # ─── POLLINATIONS AI PHOTO IS PRIMARY ───
+        # ─── FAL AI PHOTO IS PRIMARY ───
         card_type = LABEL_TO_TEMPLATE.get(label, "player")
         photo = None
 
-        # Try Pollinations first
+        # Try Fal first
         ai_bytes = self._generate_ai_photo(player.name, card_type)
         if ai_bytes:
             try:
                 ai_img = Image.open(io.BytesIO(ai_bytes)).convert("RGBA")
                 ai_img.thumbnail((photo_max_w, photo_max_h), Image.LANCZOS)
                 photo = ai_img
-                logger.info("[PHOTO] Using Pollinations AI photo for %s", player.name)
+                logger.info("[PHOTO] Using Fal AI photo for %s", player.name)
             except Exception as e:
-                logger.error("[PHOTO] Failed to load Pollinations image: %s", e)
+                logger.error("[PHOTO] Failed to load Fal image: %s", e)
 
-        # If Pollinations fails, show placeholder with player name
+        # If Fal fails, show placeholder with player name
         if photo is None:
-            logger.warning("[PHOTO] No AI photo available for %s — showing placeholder", player.name)
+            logger.warning("[PHOTO] No Fal photo available for %s — showing placeholder", player.name)
 
         if photo:
             px = (W - photo.width) // 2
@@ -301,7 +301,7 @@ class ImageGenerator:
             ImageDraw.Draw(mask).rounded_rectangle([0, 0, photo.width, photo.height], radius=30, fill=255)
             img.paste(photo, (px, py), mask)
         else:
-            # Placeholder when Pollinations fails
+            # Placeholder when Fal fails
             f_err = self._font(50, bold=True)
             draw.text((W // 2, H // 2 - 50), f"{player.name}", fill=pal["text"], font=f_err, anchor="mm")
             f_sub = self._font(30)
@@ -443,7 +443,7 @@ class ImageGenerator:
         f_stat = self._font(60)
         draw.text((W // 2, 180), f"{stat_name}: {stat_value}", fill=pal["text"], font=f_stat, anchor="mm")
 
-        # Pollinations AI photo for daily card
+        # Fal AI photo for daily card
         card_type = "mvp" if not is_bad else "fraud"
         ai_bytes = self._generate_ai_photo(player.name, card_type)
         if ai_bytes:
@@ -461,7 +461,7 @@ class ImageGenerator:
                 ImageDraw.Draw(mask).rounded_rectangle([0, 0, photo.width, photo.height], radius=40, fill=255)
                 img.paste(photo, (px, py), mask)
             except Exception as e:
-                logger.error("[PHOTO] Daily card Pollinations failed: %s", e)
+                logger.error("[PHOTO] Daily card Fal failed: %s", e)
 
         nickname = getattr(player, "_squad_info", {}).get("nickname", player.name)
         f_name = self._font(130, bold=True)
