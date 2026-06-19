@@ -22,14 +22,14 @@ except ImportError:
     get_template = None
     TEMPLATE_GENERATORS = {}
 
-# ─── LEONARDO AI PHOTOS ───
+# ─── POLLINATIONS AI PHOTOS & VIDEOS ───
 try:
-    from services.leonardo import LeonardoClient
-    LEONARDO_AVAILABLE = True
+    from services.pollinations import PollinationsClient
+    POLLINATIONS_AVAILABLE = True
 except ImportError:
-    LEONARDO_AVAILABLE = False
-    LeonardoClient = None
-
+    POLLINATIONS_AVAILABLE = False
+    PollinationsClient = None
+    
 # ─── CONSTANTS ───
 CARD_W, CARD_H = 1440, 2160
 MARGIN = 80
