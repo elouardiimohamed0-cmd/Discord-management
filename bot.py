@@ -985,15 +985,41 @@ async def _maybe_send_video(channel, player, video_type, match_id=None):
     name = getattr(player, 'name', 'Player') if player else 'Player'
     prompt = prompts.get(video_type, prompts["mvp"]).format(name=name)
     
+    # ─── VIDEO CACHE ───
+    cache_dir = "cache/videos"
+    os.makedirs(cache_dir, exist_ok=True)
+    safe_name = name.replace(" ", "_").replace("/", "_")
+    cache_key = hashlib.md5(f"{safe_name}:{video_type}:{match_id or 'none'}".encode()).hexdigest()
+    cache_path = os.path.join(cache_dir, f"{cache_key}.mp4")
+    
+    # Check cache first
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "rb") as f:
+                video_bytes = f.read()
+            file = discord.File(io.BytesIO(video_bytes), filename=f"{safe_name}_{video_type}.mp4")
+            await channel.send(file=file)
+            logger.info("[VIDEO] Sent cached %s video for %s", video_type, name)
+            return
+        except Exception as e:
+            logger.warning("[VIDEO] Cache read failed, regenerating: %s", e)
+    
+    # Generate new video
     try:
         logger.info("[VIDEO] Generating %s video for %s via Pika...", video_type, name)
         video_bytes = pika.generate_video(prompt, duration=3, motion=2)
-        file = discord.File(io.BytesIO(video_bytes), filename=f"{name}_{video_type}.mp4")
+        
+        # Save to cache
+        with open(cache_path, "wb") as f:
+            f.write(video_bytes)
+        
+        # Send
+        file = discord.File(io.BytesIO(video_bytes), filename=f"{safe_name}_{video_type}.mp4")
         await channel.send(file=file)
         logger.info("[VIDEO] Sent %s video for %s", video_type, name)
+        
     except Exception as e:
-        logger.error("[VIDEO] Failed: %s", e)
-
+        logger.error("[VIDEO] Failed to generate/send video: %s", e)
     cache_dir = "cache/videos"
     os.makedirs(cache_dir, exist_ok=True)
     name = getattr(player, "name", "match") if player else "match"
