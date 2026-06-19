@@ -1504,8 +1504,6 @@ async def cmd_hall_of_shame(ctx):
 
 @bot.command(name="match_report")
 @commands.cooldown(1, 10, commands.BucketType.user)
-@bot.command(name="match_report")
-@commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_match_report(ctx):
     if not await ensure_data(ctx): return
     if not current_club.matches:
@@ -1896,7 +1894,7 @@ async def slash_worst(interaction: discord.Interaction):
         roast = darija.roast(worst, pos)
         embed = discord.Embed(title=f"🗑️ WORST PLAYER — {worst.name}", description=roast, color=0x8b0000)
         await rl.interaction_send(interaction, embed=embed)
-        asyncio.create_task(_maybe_send_video(interaction.channel, target, "fraud"))
+        asyncio.create_task(_maybe_send_video(interaction.channel, worst, "fraud"))
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -1912,7 +1910,7 @@ async def slash_who_sold(interaction: discord.Interaction):
         roast = darija.fraud(fraud)
         embed = discord.Embed(title=f"🎭 FRAUD DETECTED — {fraud.name}", description=roast, color=0xff4500)
         await rl.interaction_send(interaction, embed=embed)
-        asyncio.create_task(_maybe_send_video(interaction.channel, target, "fraud"))
+        asyncio.create_task(_maybe_send_video(interaction.channel, fraud, "fraud"))
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
@@ -2019,10 +2017,10 @@ async def slash_ball_loser(interaction: discord.Interaction):
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
-@bot.tree.command(name="playmaker", description="Best creator")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 @bot.tree.command(name="playmaker", description="Best playmaker")
+@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_playmaker(interaction: discord.Interaction):
+    await interaction.response.defer()
     if not await ensure_data_interaction(interaction): return
     try:
         pm = max(current_club.players, key=lambda p: p.assists * 2 + p.pass_accuracy)
@@ -2044,7 +2042,9 @@ async def slash_playmaker(interaction: discord.Interaction):
 @bot.tree.command(name="form", description="Player form over last N matches")
 @app_commands.describe(player="Player name", matches="Number of matches")
 @app_commands.choices(matches=[app_commands.Choice(name=str(i), value=i) for i in [3,5,10,15,20]])
+@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_form(interaction: discord.Interaction, player: str, matches: app_commands.Choice[int]):
+    await interaction.response.defer()
     if not await ensure_data_interaction(interaction): return
     target = find_player(player)
     if not target:
@@ -2088,7 +2088,9 @@ async def slash_form(interaction: discord.Interaction, player: str, matches: app
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
 @bot.tree.command(name="records", description="Club records")
+@app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
 async def slash_records(interaction: discord.Interaction):
+    await interaction.response.defer()
     if not await ensure_data_interaction(interaction): return
     if not current_club.matches:
         await rl.interaction_send(interaction, "ما لقيتش match history.")
@@ -2135,6 +2137,7 @@ async def slash_records(interaction: discord.Interaction):
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
+@bot.tree.command(name="legend", description="Club legend")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_legend(interaction: discord.Interaction):
     await interaction.response.defer()
@@ -2195,6 +2198,7 @@ async def slash_match_report(interaction: discord.Interaction):
 @bot.tree.command(name="help", description="Show all commands")
 @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
 async def slash_help(interaction: discord.Interaction):
+    await interaction.response.defer()
     try:
         embed = discord.Embed(
             title="Rachad L3ERGONI Bot",
@@ -2410,77 +2414,6 @@ if PHASE4_AVAILABLE:
             traceback.print_exc()
             await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
-# ─────────────────────────────────────────────────────────────
-# MAIN ENTRY
-# ─────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    backoff = load_backoff_state() if 'load_backoff_state' in globals() else {"consecutive_429s": 0, "last_429_time": 0}
-    consecutive_429s = backoff.get("consecutive_429s", 0)
-    last_429_time = backoff.get("last_429_time", 0)
-
-    time_since_last_429 = time.time() - last_429_time
-    if consecutive_429s > 0 and time_since_last_429 < 7200:
-        initial_delay = min(300 * (2 ** min(consecutive_429s, 5)), 3600)
-        logger.info("[STARTUP] Recent 429 history (%d). Waiting %ds...", consecutive_429s, initial_delay)
-        for i in range(initial_delay):
-            time.sleep(1)
-            if i % 60 == 0 and i > 0:
-                logger.info("[STARTUP] Still waiting... %d/%d", i, initial_delay)
-        consecutive_429s = 0
-        save_backoff_state(0, 0) if 'save_backoff_state' in globals() else None
-
-    startup_delay = int(os.getenv("DISCORD_STARTUP_DELAY", "15"))
-    if startup_delay > 0:
-        logger.info("[STARTUP] Waiting %ds before Discord login...", startup_delay)
-        time.sleep(startup_delay)
-
-    try:
-        logger.info("[STARTUP] Connecting to Discord...")
-        bot.run(Config.DISCORD_TOKEN, reconnect=True)
-        logger.info("[SHUTDOWN] Bot disconnected normally.")
-    except discord.HTTPException as e:
-        is_cloudflare = "cloudflare" in str(e).lower() or "1015" in str(e)
-        is_429 = e.status == 429
-        if is_429 or is_cloudflare:
-            new_consecutive = consecutive_429s + 1
-            delay = min(300 * (2 ** min(new_consecutive, 6)), 3600)
-            if is_cloudflare:
-                logger.error("[FATAL] Cloudflare 1015. Sleeping %ds then exit for fresh restart...", delay)
-            else:
-                logger.error("[FATAL] Discord 429. Sleeping %ds then exit for fresh restart...", delay)
-            save_backoff_state(new_consecutive, time.time()) if 'save_backoff_state' in globals() else None
-            for i in range(delay):
-                time.sleep(1)
-                if i % 60 == 0 and i > 0:
-                    logger.info("[BACKOFF] Waiting... %d/%d", i, delay)
-            logger.info("[BACKOFF] Sleep complete. Exiting for fresh process.")
-            sys.exit(0)
-        else:
-            logger.error("[FATAL] Discord HTTP %d: %s", e.status, e)
-            sys.exit(0)
-    except Exception as e:
-        logger.error("[FATAL] Unexpected error: %s", e)
-        traceback.print_exc()
-@app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
-async def slash_match_report(interaction: discord.Interaction):
-    await interaction.response.defer()
-    if not await ensure_data_interaction(interaction): return
-    if not current_club.matches:
-        await rl.interaction_send(interaction, "ما لقيتش match history.")
-        return
-    try:
-        last = current_club.matches[0]
-        result = f"{last.score_for}-{last.score_against}"
-        match_players = get_match_players(current_club, last)
-        report = darija.match_report(result, match_players)
-        color = 0x00ff00 if last.result == "W" else 0xff0000 if last.result == "L" else 0xffff00
-        embed = discord.Embed(title=f"⚽ Match Report: {last.opponent} {result}", description=report, color=color)
-        await rl.interaction_send(interaction, embed=embed)
-        asyncio.create_task(_maybe_send_video(interaction.channel, None, "match"))
-    except Exception as e:
-        traceback.print_exc()
-        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
 @bot.tree.command(name="court_case", description="Court case for a player")
 @app_commands.describe(player="Player name")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
@@ -2513,6 +2446,9 @@ async def slash_court_case(interaction: discord.Interaction, player: str):
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
+# ─────────────────────────────────────────────────────────────
+# MAIN ENTRY
+# ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     backoff = load_backoff_state() if 'load_backoff_state' in globals() else {"consecutive_429s": 0, "last_429_time": 0}
     consecutive_429s = backoff.get("consecutive_429s", 0)
