@@ -966,14 +966,9 @@ async def _maybe_send_video(channel, player, video_type, match_id=None):
         return
     
     try:
-        from services.pika import PikaClient
-        pika = PikaClient()
-        if not pika.is_available():
-            logger.info("[VIDEO] Pika API key not set, skipping video")
-            return
-    except ImportError:
-        logger.info("[VIDEO] Pika service not available")
-        return
+from services.pollinations import PollinationsClient
+pollinations = PollinationsClient()
+pollinations.generate_video(prompt, duration=5)
     
     prompts = {
         "mvp": "Cinematic golden MVP celebration, {name} spotlight, epic slow motion, crowd cheering, 3 seconds",
