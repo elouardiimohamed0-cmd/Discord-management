@@ -961,14 +961,14 @@ async def cmd_bio(ctx, *, player: str):
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
 async def _maybe_send_video(channel, player, video_type, match_id=None):
-    """Send a Pollinations-generated video to the channel if API is available."""
+    """Send a JSON2Video-generated video to the channel if API is available."""
     if not channel:
         return
 
-    from services.pollinations import PollinationsClient
-    pollinations = PollinationsClient()
-    if not pollinations.is_available():
-        logger.info("[VIDEO] Pollinations API key not set, skipping video")
+    from services.json2video import JSON2VideoClient
+    json2video = JSON2VideoClient()
+    if not json2video.is_available():
+        logger.info("[VIDEO] JSON2Video API key not set, skipping video")
         return
 
     prompts = {
@@ -1004,8 +1004,8 @@ async def _maybe_send_video(channel, player, video_type, match_id=None):
 
     # Generate new video
     try:
-        logger.info("[VIDEO] Generating %s video for %s via Pollinations...", video_type, name)
-        video_bytes = await asyncio.to_thread(pollinations.generate_video, prompt, duration=5)
+        logger.info("[VIDEO] Generating %s video for %s via JSON2Video...", video_type, name)
+        video_bytes = await asyncio.to_thread(json2video.generate_video, prompt, duration=5)
 
         # Save to cache
         with open(cache_path, "wb") as f:
