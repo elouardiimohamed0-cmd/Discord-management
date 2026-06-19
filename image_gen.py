@@ -1,5 +1,6 @@
 """image_gen.py — EA FC Pro Clubs premium card generator.
-Pillow-based with auto-generated templates and Leonardo AI photo fallback.
+Pillow-based with auto-generated templates and Leonardo AI photo PRIMARY.
+NO local photo fallback — Leonardo is the main source.
 """
 
 import io
@@ -86,57 +87,7 @@ PALETTES = {
     },
 }
 
-# ─── PLAYER IMAGE LOADER ───
-
-def _load_player_photo(name: str, assets_dir: str, max_size=(1600, 1600), photo_path: Optional[str] = None, preserve_aspect: bool = True):
-    """Load player photo. Uses thumbnail to preserve aspect ratio by default."""
-
-    def _try_load(path):
-        if not path or not os.path.exists(path):
-            return None
-        try:
-            img = Image.open(path).convert("RGBA")
-            if preserve_aspect:
-                img.thumbnail(max_size, Image.LANCZOS)
-            else:
-                img = img.resize(max_size, Image.LANCZOS)
-            print(f"[PHOTO DEBUG] Loaded: {path} ({img.width}x{img.height})")
-            return img
-        except Exception as e:
-            print(f"[PHOTO DEBUG] Failed: {path} — {e}")
-            return None
-
-    img = _try_load(photo_path)
-    if img:
-        return img
-
-    clean = name.replace(" ", "_").lower()
-    upper = name.upper()
-    title = name.title()
-
-    candidates = [
-        os.path.join(assets_dir, f"{name}.png"),
-        os.path.join(assets_dir, f"{name}.jpg"),
-        os.path.join(assets_dir, f"{name}.jpeg"),
-        os.path.join(assets_dir, f"{clean}.png"),
-        os.path.join(assets_dir, f"{clean}.jpg"),
-        os.path.join(assets_dir, f"{clean}.jpeg"),
-        os.path.join(assets_dir, f"{upper}.png"),
-        os.path.join(assets_dir, f"{upper}.jpg"),
-        os.path.join(assets_dir, f"{upper}.jpeg"),
-        os.path.join(assets_dir, f"{title}.png"),
-        os.path.join(assets_dir, f"{title}.jpg"),
-        os.path.join(assets_dir, f"{title}.jpeg"),
-    ]
-
-    for path in candidates:
-        img = _try_load(path)
-        if img:
-            return img
-
-    print(f"[PHOTO DEBUG] No photo found for: {name}")
-    return None
-
+# ─── FONT LOADER ───
 
 def _load_font(size: int, bold=False):
     candidates = [
@@ -179,7 +130,9 @@ class ImageGenerator:
         self.assets_dir = assets_dir
         self.fonts = {}
         self._leonardo = None
-        self._photo_cache = {}
+        self._photo_cache = {}  # In-memory cache
+        self._cache_dir = "cache/leonardo"
+        os.makedirs(self._cache_dir, exist_ok=True)
 
     def _font(self, size, bold=False):
         key = (size, bold)
@@ -193,38 +146,74 @@ class ImageGenerator:
             self._leonardo = LeonardoClient()
         return self._leonardo
 
+    def _get_cached_photo_path(self, player_name: str, card_type: str) -> Optional[str]:
+        """Check if we have a cached Leonardo photo on disk."""
+        safe_name = player_name.replace(" ", "_").replace("/", "_")
+        cache_path = os.path.join(self._cache_dir, f"{safe_name}_{card_type}.png")
+        if os.path.exists(cache_path):
+            return cache_path
+        return None
+
+    def _save_photo_cache(self, player_name: str, card_type: str, img_bytes: bytes) -> str:
+        """Save Leonardo photo to disk cache."""
+        safe_name = player_name.replace(" ", "_").replace("/", "_")
+        cache_path = os.path.join(self._cache_dir, f"{safe_name}_{card_type}.png")
+        with open(cache_path, "wb") as f:
+            f.write(img_bytes)
+        return cache_path
+
     def _generate_ai_photo(self, player_name: str, card_type: str = "player") -> Optional[bytes]:
         """Generate an AI player photo using Leonardo. Returns PNG bytes or None."""
         if not LEONARDO_AVAILABLE:
+            logger.warning("[LEONARDO] Module not available")
             return None
 
         leo = self._get_leonardo()
         if not leo or not leo.is_available():
-            logger.warning("[LEONARDO] Not available — skipping AI photo for %s", player_name)
+            logger.warning("[LEONARDO] API key not set — cannot generate AI photo for %s", player_name)
             return None
 
-        # Check cache
+        # Check in-memory cache
         cache_key = f"leonardo:{player_name}:{card_type}"
         if cache_key in self._photo_cache:
+            logger.info("[LEONARDO] Using in-memory cache for %s", player_name)
             return self._photo_cache[cache_key]
 
+        # Check disk cache
+        cached_path = self._get_cached_photo_path(player_name, card_type)
+        if cached_path:
+            try:
+                with open(cached_path, "rb") as f:
+                    img_bytes = f.read()
+                self._photo_cache[cache_key] = img_bytes
+                logger.info("[LEONARDO] Using disk cache for %s", player_name)
+                return img_bytes
+            except Exception as e:
+                logger.error("[LEONARDO] Disk cache read failed: %s", e)
+
+        # Generate new photo
         prompts = {
-            "mvp": f"Professional football player portrait, {player_name}, golden lighting, stadium background, heroic pose, photorealistic, 4K, sports photography",
-            "fraud": f"Football player portrait, {player_name}, dramatic red lighting, disappointed expression, dark moody stadium, photorealistic, 4K",
-            "ghost": f"Football player portrait, {player_name}, ethereal purple lighting, fading ghostly effect, mysterious atmosphere, photorealistic, 4K",
-            "carry": f"Football player portrait, {player_name}, heroic blue lighting, powerful stance, energy aura, photorealistic, 4K",
-            "court": f"Football player portrait, {player_name}, courtroom lighting, serious expression, dramatic shadows, photorealistic, 4K",
-            "playmaker": f"Football player portrait, {player_name}, green field lighting, creative pose, ball control, photorealistic, 4K",
-            "sniper": f"Football player portrait, {player_name}, focused expression, target crosshair overlay, precision pose, photorealistic, 4K",
-            "ball_loser": f"Football player portrait, {player_name}, dark grey lighting, embarrassed expression, broken ball nearby, photorealistic, 4K",
-            "player": f"Professional football player portrait, {player_name}, neutral stadium lighting, confident pose, photorealistic, 4K, sports photography",
+            "mvp": f"Professional football player portrait, {player_name}, golden lighting, stadium background, heroic pose, photorealistic, 4K, sports photography, wearing orange jersey",
+            "fraud": f"Football player portrait, {player_name}, dramatic red lighting, disappointed expression, dark moody stadium, photorealistic, 4K, wearing orange jersey",
+            "ghost": f"Football player portrait, {player_name}, ethereal purple lighting, fading ghostly effect, mysterious atmosphere, photorealistic, 4K, wearing orange jersey",
+            "carry": f"Football player portrait, {player_name}, heroic blue lighting, powerful stance, energy aura, photorealistic, 4K, wearing orange jersey",
+            "court": f"Football player portrait, {player_name}, courtroom lighting, serious expression, dramatic shadows, photorealistic, 4K, wearing orange jersey",
+            "playmaker": f"Football player portrait, {player_name}, green field lighting, creative pose, ball control, photorealistic, 4K, wearing orange jersey",
+            "sniper": f"Football player portrait, {player_name}, focused expression, target crosshair overlay, precision pose, photorealistic, 4K, wearing orange jersey",
+            "ball_loser": f"Football player portrait, {player_name}, dark grey lighting, embarrassed expression, broken ball nearby, photorealistic, 4K, wearing orange jersey",
+            "player": f"Professional football player portrait, {player_name}, neutral stadium lighting, confident pose, photorealistic, 4K, sports photography, wearing orange jersey",
         }
         prompt = prompts.get(card_type, prompts["player"])
 
         try:
             logger.info("[LEONARDO] Generating AI photo for %s (type: %s)", player_name, card_type)
             img_bytes = leo.generate_image(prompt, width=1024, height=1536)
+
+            # Save to caches
             self._photo_cache[cache_key] = img_bytes
+            self._save_photo_cache(player_name, card_type, img_bytes)
+
+            logger.info("[LEONARDO] Generated and cached AI photo for %s", player_name)
             return img_bytes
         except Exception as e:
             logger.error("[LEONARDO] Failed to generate photo for %s: %s", player_name, e)
@@ -249,10 +238,10 @@ class ImageGenerator:
         return None
 
     # ───────────────────────────────────────────
-    # PHOTO-ONLY PLAYER CARD (main focus)
+    # PHOTO-ONLY PLAYER CARD (Leonardo AI primary)
     # ───────────────────────────────────────────
     def generate_player_photo_card(self, player, pos, palette_name="gold", label="PLAYER", photo_path=None):
-        """Clean photo card. Photo is the main focus, preserving aspect ratio. No stat boxes."""
+        """Clean photo card. Leonardo AI photo is PRIMARY. No local file fallback."""
         pal = PALETTES.get(palette_name, PALETTES["gold"])
         W, H = CARD_W, CARD_H
 
@@ -265,7 +254,6 @@ class ImageGenerator:
             img = _gradient_bg(W, H, pal["bg_top"], pal["bg_bot"]).convert("RGBA")
             img = _glow_circle(img, W // 2, H // 3, 700, pal["glow"], 0.2)
             draw = ImageDraw.Draw(img)
-        # ─── END TEMPLATE CHECK ───
 
         nickname = getattr(player, "_squad_info", {}).get("nickname", player.name)
         f_name = self._font(90, bold=True)
@@ -280,28 +268,24 @@ class ImageGenerator:
         photo_max_w = W - 100
         photo_max_h = H - 320
 
-        # Try to load photo from file/squad.json first
-        photo = _load_player_photo(
-            player.name, self.assets_dir,
-            max_size=(photo_max_w, photo_max_h),
-            photo_path=photo_path,
-            preserve_aspect=True
-        )
-
-        # If no photo found, try Leonardo AI
+        # ─── LEONARDO AI PHOTO IS PRIMARY ───
         card_type = LABEL_TO_TEMPLATE.get(label, "player")
-        if photo is None and LEONARDO_AVAILABLE:
-            ai_bytes = self._generate_ai_photo(player.name, card_type)
-            if ai_bytes:
-                try:
-                    ai_img = Image.open(io.BytesIO(ai_bytes)).convert("RGBA")
-                    ai_img.thumbnail((photo_max_w, photo_max_h), Image.LANCZOS)
-                    photo = ai_img
-                    logger.info("[PHOTO] Using Leonardo AI photo for %s", player.name)
-                except Exception as e:
-                    logger.error("[PHOTO] Failed to load Leonardo image: %s", e)
+        photo = None
 
-        print(f"[CARD DEBUG] Player: {player.name}, Nickname: {nickname}, Asset: {photo_path}, Loaded: {photo is not None}")
+        # Try Leonardo first
+        ai_bytes = self._generate_ai_photo(player.name, card_type)
+        if ai_bytes:
+            try:
+                ai_img = Image.open(io.BytesIO(ai_bytes)).convert("RGBA")
+                ai_img.thumbnail((photo_max_w, photo_max_h), Image.LANCZOS)
+                photo = ai_img
+                logger.info("[PHOTO] Using Leonardo AI photo for %s", player.name)
+            except Exception as e:
+                logger.error("[PHOTO] Failed to load Leonardo image: %s", e)
+
+        # If Leonardo fails, show placeholder with player name
+        if photo is None:
+            logger.warning("[PHOTO] No Leonardo photo available for %s — showing placeholder", player.name)
 
         if photo:
             px = (W - photo.width) // 2
@@ -317,8 +301,13 @@ class ImageGenerator:
             ImageDraw.Draw(mask).rounded_rectangle([0, 0, photo.width, photo.height], radius=30, fill=255)
             img.paste(photo, (px, py), mask)
         else:
-            f_err = self._font(60, bold=True)
-            draw.text((W // 2, H // 2), f"[NO PHOTO]\n{player.name}", fill=pal["text_dim"], font=f_err, anchor="mm")
+            # Placeholder when Leonardo fails
+            f_err = self._font(50, bold=True)
+            draw.text((W // 2, H // 2 - 50), f"{player.name}", fill=pal["text"], font=f_err, anchor="mm")
+            f_sub = self._font(30)
+            draw.text((W // 2, H // 2 + 20), "AI Photo Generation Failed", fill=pal["text_dim"], font=f_sub, anchor="mm")
+            f_sub2 = self._font(24)
+            draw.text((W // 2, H // 2 + 60), "Check LEONARDO_API_KEY", fill=pal["text_dim"], font=f_sub2, anchor="mm")
 
         f_foot = self._font(28)
         draw.text((W // 2, H - 35), f"RACHAD L3ERGONI • {label}", fill=pal["text_dim"], font=f_foot, anchor="mm")
@@ -454,18 +443,25 @@ class ImageGenerator:
         f_stat = self._font(60)
         draw.text((W // 2, 180), f"{stat_name}: {stat_value}", fill=pal["text"], font=f_stat, anchor="mm")
 
-        photo = _load_player_photo(player.name, self.assets_dir, max_size=(1200, 1200), photo_path=photo_path, preserve_aspect=True)
-        if photo:
-            px = (W - photo.width) // 2
-            py = 320
-            shadow = Image.new("RGBA", (photo.width + 80, photo.height + 80), (0, 0, 0, 0))
-            s_draw = ImageDraw.Draw(shadow)
-            s_draw.rounded_rectangle([20, 20, photo.width + 60, photo.height + 60], radius=40, fill=(*pal["glow"], 100))
-            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=30))
-            img.paste(shadow, (px - 40, py - 40), shadow)
-            mask = Image.new("L", photo.size, 0)
-            ImageDraw.Draw(mask).rounded_rectangle([0, 0, photo.width, photo.height], radius=40, fill=255)
-            img.paste(photo, (px, py), mask)
+        # Leonardo AI photo for daily card
+        card_type = "mvp" if not is_bad else "fraud"
+        ai_bytes = self._generate_ai_photo(player.name, card_type)
+        if ai_bytes:
+            try:
+                photo = Image.open(io.BytesIO(ai_bytes)).convert("RGBA")
+                photo.thumbnail((1200, 1200), Image.LANCZOS)
+                px = (W - photo.width) // 2
+                py = 320
+                shadow = Image.new("RGBA", (photo.width + 80, photo.height + 80), (0, 0, 0, 0))
+                s_draw = ImageDraw.Draw(shadow)
+                s_draw.rounded_rectangle([20, 20, photo.width + 60, photo.height + 60], radius=40, fill=(*pal["glow"], 100))
+                shadow = shadow.filter(ImageFilter.GaussianBlur(radius=30))
+                img.paste(shadow, (px - 40, py - 40), shadow)
+                mask = Image.new("L", photo.size, 0)
+                ImageDraw.Draw(mask).rounded_rectangle([0, 0, photo.width, photo.height], radius=40, fill=255)
+                img.paste(photo, (px, py), mask)
+            except Exception as e:
+                logger.error("[PHOTO] Daily card Leonardo failed: %s", e)
 
         nickname = getattr(player, "_squad_info", {}).get("nickname", player.name)
         f_name = self._font(130, bold=True)
