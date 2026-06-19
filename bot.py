@@ -3,14 +3,16 @@ try:
     AUTO_TEMPLATES_AVAILABLE = True
 except ImportError:
     AUTO_TEMPLATES_AVAILABLE = False
+
 import os
+import io          # ✅ needed for io.BytesIO in _maybe_send_video
 import sys
 import asyncio
 import logging
 import traceback
 import time
 import json
-import hashlib
+import hashlib     # ✅ needed for video cache
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from http.server import HTTPServer, BaseHTTPRequestHandler
