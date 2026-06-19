@@ -1106,6 +1106,9 @@ async def cmd_ballon(ctx):
                 embed.add_field(name=f"{medal} {p.name}", value=f"Impact: {p.impact_score} | Goals: {p.goals} | Rating: {round(p.rating_pg, 1)} | Win%: {round(p.win_rate, 1)}%", inline=False)
             await rl.ctx_send(ctx, embed=embed)
         except Exception as e:
+            traceback.print_exc()
+            await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
+
 @bot.command(name="ghost")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_ghost(ctx):
@@ -1120,8 +1123,6 @@ async def cmd_ghost(ctx):
             asyncio.create_task(_maybe_send_video(ctx.channel, ghost, "ghost"))
         except Exception as e:
             traceback.print_exc()
-            await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
-
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
 @bot.command(name="pass")
@@ -1503,19 +1504,6 @@ async def cmd_hall_of_shame(ctx):
 
 @bot.command(name="match_report")
 @commands.cooldown(1, 10, commands.BucketType.user)
-async def cmd_match_report(ctx):
-    if not await ensure_data(ctx): return
-    if not current_club.matches:
-        await rl.ctx_send(ctx, "ما لقيتش match history.")
-        return
-    try:
-        last = current_club.matches[0]
-        result = f"{last.score_for}-{last.score_against}"
-        match_players = get_match_players(current_club, last)
-        report = darija.match_report(result, match_players)
-        color = 0x00ff00 if last.result == "W" else 0xff0000 if last.result == "L" else 0xffff00
-        embed = discord.Embed(title=f"⚽ Match Report: {last.opponent} {result}", description=report, color=color)
-        await rl.ctx_send(ctx, embed=embed)
 @bot.command(name="match_report")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_match_report(ctx):
@@ -1523,16 +1511,17 @@ async def cmd_match_report(ctx):
     if not current_club.matches:
         await rl.ctx_send(ctx, "ما لقيتش match history.")
         return
-    try:
-        last = current_club.matches[0]
-        result = f"{last.score_for}-{last.score_against}"
-        match_players = get_match_players(current_club, last)
-        report = darija.match_report(result, match_players)
-        color = 0x00ff00 if last.result == "W" else 0xff0000 if last.result == "L" else 0xffff00
-        embed = discord.Embed(title=f"⚽ Match Report: {last.opponent} {result}", description=report, color=color)
-        await rl.ctx_send(ctx, embed=embed)
-        asyncio.create_task(_maybe_send_video(ctx.channel, None, "match"))
-    except Exception as e:
+    async with ctx.typing():
+        try:
+            latest = current_club.matches[0]
+            color = 0x00ff00 if latest.result == "W" else 0xff0000 if latest.result == "L" else 0xffff00
+            embed = discord.Embed(title=f"📋 Match Report: {latest.opponent} {latest.score_for}-{latest.score_against}", description=f"Date: {latest.date.strftime('%d/%m/%Y')}", color=color)
+            await rl.ctx_send(ctx, embed=embed)
+            asyncio.create_task(_maybe_send_video(ctx.channel, None, "match", latest.match_id))
+        except Exception as e:
+            traceback.print_exc()
+            await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
+
         traceback.print_exc()
         await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
@@ -2032,154 +2021,30 @@ async def slash_ball_loser(interaction: discord.Interaction):
 
 @bot.tree.command(name="playmaker", description="Best creator")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
+@bot.tree.command(name="playmaker", description="Best playmaker")
 async def slash_playmaker(interaction: discord.Interaction):
-    await interaction.response.defer()
     if not await ensure_data_interaction(interaction): return
     try:
         pm = max(current_club.players, key=lambda p: p.assists * 2 + p.pass_accuracy)
-@bot.tree.command(name="mvp", description="MVP of the season")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_mvp(interaction: discord.Interaction):
-    await interaction.response.defer()
-    if not await ensure_data_interaction(interaction): return
-    try:
-        mvp = StatsEngine.get_mvp(current_club.players)
-        sq_info = getattr(mvp, "_squad_info", {}) or {}
-        pos = sq_info.get("position", "CM")
-        raw_img = sq_info.get("image")
-        img_path = resolve_image_path(raw_img)
-        display_name = mvp.name
-        card = imgen.generate_player_photo_card(mvp, pos, "gold", "MAN OF THE MATCH", photo_path=img_path)
-        file = discord.File(card, filename="mvp.png")
-        embed = discord.Embed(title=f"🏆 MAN OF THE MATCH — {display_name}", color=0xffd700)
-        embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
-        embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
-        embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
-        embed.add_field(name="Impact", value=str(mvp.impact_score), inline=True)
-        embed.add_field(name="Win %", value=f"{round(mvp.win_rate, 1)}%", inline=True)
+        pos = get_squad_map().get(pm.name, {}).get("position", "CM")
+        text = darija.playmaker(pm)
+        img_path = get_squad_map().get(pm.name, {}).get("image")
+        img_path = resolve_image_path(img_path)
+        card = imgen.generate_player_photo_card(pm, pos, "green", "PLAYMAKER", photo_path=img_path)
+        file = discord.File(card, filename=f"{pm.name}.png")
+        embed = discord.Embed(title=f"🎨 PLAYMAKER — {pm.name}", description=text, color=0x00ff00)
+        embed.add_field(name="Assists", value=str(pm.assists), inline=True)
+        embed.add_field(name="Pass %", value=f"{round(pm.pass_accuracy, 1)}%", inline=True)
+        embed.add_field(name="Rating", value=str(round(pm.rating_pg, 1)), inline=True)
         await rl.interaction_send(interaction, file=file, embed=embed)
-        asyncio.create_task(_maybe_send_video(interaction.channel, mvp, "mvp"))
-    except Exception as e:
-        traceback.print_exc()
-        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="worst", description="Worst player of the week")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_worst(interaction: discord.Interaction):
-    await interaction.response.defer()
-    if not await ensure_data_interaction(interaction): return
-    try:
-        worst = StatsEngine.get_worst(current_club.players)
-        pos = get_squad_map().get(worst.name, {}).get("position", "CM")
-        roast = darija.roast(worst, pos)
-        embed = discord.Embed(title=f"🗑️ WORST PLAYER — {worst.name}", description=roast, color=0x8b0000)
-        await rl.interaction_send(interaction, embed=embed)
-        asyncio.create_task(_maybe_send_video(interaction.channel, worst, "fraud"))
-    except Exception as e:
-        traceback.print_exc()
-        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="who_sold", description="Who sold the match")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_who_sold(interaction: discord.Interaction):
-    await interaction.response.defer()
-    if not await ensure_data_interaction(interaction): return
-    try:
-        fraud = StatsEngine.get_fraud(current_club.players)
-        pos = get_squad_map().get(fraud.name, {}).get("position", "CM")
-        roast = darija.fraud(fraud)
-        embed = discord.Embed(title=f"🎭 FRAUD DETECTED — {fraud.name}", description=roast, color=0xff4500)
-        await rl.interaction_send(interaction, embed=embed)
-        asyncio.create_task(_maybe_send_video(interaction.channel, fraud, "fraud"))
-    except Exception as e:
-        traceback.print_exc()
-        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="carry_detector", description="Who is carrying the team")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_carry(interaction: discord.Interaction):
-    await interaction.response.defer()
-    if not await ensure_data_interaction(interaction): return
-    try:
-        carry = StatsEngine.get_carry(current_club.players)
-        pos = get_squad_map().get(carry.name, {}).get("position", "CM")
-        praise = darija.carry(carry)
-        embed = discord.Embed(title=f"💪 CARRY DETECTED — {carry.name}", description=praise, color=0x00ff00)
-        await rl.interaction_send(interaction, embed=embed)
-        asyncio.create_task(_maybe_send_video(interaction.channel, carry, "carry"))
-    except Exception as e:
-        traceback.print_exc()
-        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="clubinfo", description="Club overview + match report card")
-@app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
-async def slash_clubinfo(interaction: discord.Interaction):
-    await interaction.response.defer()
-    if not await ensure_data_interaction(interaction): return
-    try:
-        motm = StatsEngine.get_mvp(current_club.players)
-        card = imgen.generate_match_report(current_club, motm)
-        file = discord.File(card, filename="club_report.png")
-        embed = discord.Embed(title=f"🏟️ {current_club.club_name}", description=f"Division {current_club.division} • Skill {current_club.skill_rating}", color=0x00ff00)
-        await rl.interaction_send(interaction, embed=embed, file=file)
-    except Exception as e:
-        traceback.print_exc()
-        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="rankings", description="All rankings")
-@app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
-async def slash_rankings(interaction: discord.Interaction):
-    await interaction.response.defer()
-    if not await ensure_data_interaction(interaction): return
-    try:
-        embed = discord.Embed(title="📊 ALL RANKINGS", color=0x1e90ff)
-        mvp = StatsEngine.get_mvp(current_club.players)
-        worst = StatsEngine.get_worst(current_club.players)
-        fraud = StatsEngine.get_fraud(current_club.players)
-        carry = StatsEngine.get_carry(current_club.players)
-        ghost = StatsEngine.get_ghost(current_club.players)
-        embed.add_field(name="🏆 MVP", value=f"{mvp.name} (Impact: {mvp.impact_score} | Win%: {round(mvp.win_rate, 1)}%)", inline=False)
-        embed.add_field(name="🗑️ Worst", value=f"{worst.name} (Impact: {worst.impact_score} | Win%: {round(worst.win_rate, 1)}%)", inline=False)
-        embed.add_field(name="🎭 Fraud", value=f"{fraud.name} (Throwing: {fraud.throwing_score} | Win%: {round(fraud.win_rate, 1)}%)", inline=False)
-        embed.add_field(name="💪 Carry", value=f"{carry.name} (Impact: {carry.impact_score} | Win%: {round(carry.win_rate, 1)}%)", inline=False)
-        embed.add_field(name="👻 Ghost", value=f"{ghost.name} ({ghost.minutes_played}min | Win%: {round(ghost.win_rate, 1)}%)", inline=False)
-        await rl.interaction_send(interaction, embed=embed)
-    except Exception as e:
-        traceback.print_exc()
-        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="awards", description="Season awards")
-@app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
-async def slash_awards(interaction: discord.Interaction):
-    await interaction.response.defer()
-    if not await ensure_data_interaction(interaction): return
-    try:
-        embed = discord.Embed(title="🏅 SEASON AWARDS", color=0xffd700)
-        mvp = StatsEngine.get_mvp(current_club.players)
-        top_scorer = max(current_club.players, key=lambda p: p.goals)
-        top_assist = max(current_club.players, key=lambda p: p.assists)
-        fraud = StatsEngine.get_fraud(current_club.players)
-        embed.add_field(name="🥇 Ballon d'Or", value=f"{mvp.name} (Win%: {round(mvp.win_rate, 1)}%)", inline=False)
-        embed.add_field(name="⚽ Golden Boot", value=f"{top_scorer.name} ({top_scorer.goals} goals)", inline=False)
-        embed.add_field(name="🅰️ Playmaker Award", value=f"{top_assist.name} ({top_assist.assists} assists)", inline=False)
-        embed.add_field(name="🤡 Fraud of the Season", value=f"{fraud.name} ({fraud.throwing_score} throwing)", inline=False)
-        await rl.interaction_send(interaction, embed=embed)
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
 @bot.tree.command(name="form", description="Player form over last N matches")
 @app_commands.describe(player="Player name", matches="Number of matches")
-@app_commands.choices(matches=[
-    app_commands.Choice(name="5", value=5),
-    app_commands.Choice(name="10", value=10),
-    app_commands.Choice(name="20", value=20),
-])
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
+@app_commands.choices(matches=[app_commands.Choice(name=str(i), value=i) for i in [3,5,10,15,20]])
 async def slash_form(interaction: discord.Interaction, player: str, matches: app_commands.Choice[int]):
-    await interaction.response.defer()
     if not await ensure_data_interaction(interaction): return
     target = find_player(player)
     if not target:
@@ -2188,8 +2053,8 @@ async def slash_form(interaction: discord.Interaction, player: str, matches: app
     if not current_club.matches:
         await rl.interaction_send(interaction, "ما لقيتش match history.")
         return
-    num = matches.value
     raw_psn = getattr(target, "_raw_psn", target.name)
+    num = matches.value
     matches_data = []
     for m in current_club.matches[:num]:
         ps = m.player_stats.get(raw_psn, {})
@@ -2205,22 +2070,46 @@ async def slash_form(interaction: discord.Interaction, player: str, matches: app
             matches_data.append({
                 "date": m.date.strftime("%d/%m"),
                 "opponent": m.opponent,
-@bot.tree.command(name="ghost_detector", description="Detect inactive players")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_ghost(interaction: discord.Interaction):
-    await interaction.response.defer()
-    if not await ensure_data_interaction(interaction): return
+                "rating": round(ps.get("rating", 0), 1),
+                "goals": ps.get("goals", 0),
+                "assists": ps.get("assists", 0),
+                "pass_acc": pass_acc,
+            })
+    if not matches_data:
+        await rl.interaction_send(interaction, f"ما لقيتش match history لـ {target.name}.")
+        return
     try:
-        ghost = StatsEngine.get_ghost(current_club.players)
-        pos = get_squad_map().get(ghost.name, {}).get("position", "CM")
-        roast = darija.ghost(ghost)
-        embed = discord.Embed(title=f"👻 GHOST DETECTED — {ghost.name}", description=roast, color=0x9370db)
-        await rl.interaction_send(interaction, embed=embed)
-        asyncio.create_task(_maybe_send_video(interaction.channel, ghost, "ghost"))
+        card = imgen.generate_form_card(target, matches_data, len(matches_data))
+        file = discord.File(card, filename="form.png")
+        embed = discord.Embed(title=f"📈 Form — {target.name} (Last {len(matches_data)})", color=0x00bfff)
+        await rl.interaction_send(interaction, embed=embed, file=file)
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
+@bot.tree.command(name="records", description="Club records")
+async def slash_records(interaction: discord.Interaction):
+    if not await ensure_data_interaction(interaction): return
+    if not current_club.matches:
+        await rl.interaction_send(interaction, "ما لقيتش match history.")
+        return
+    matches = current_club.matches
+    biggest_win = max(matches, key=lambda m: m.score_for - m.score_against)
+    biggest_loss = min(matches, key=lambda m: m.score_for - m.score_against)
+    most_goals_match = max(matches, key=lambda m: m.score_for)
+    best_rating = 0.0
+    best_rating_player = "None"
+    for m in matches:
+        for psn, ps in m.player_stats.items():
+            r = ps.get("rating", 0)
+            if r > best_rating:
+                best_rating = r
+                best_rating_player = psn
+    streak = 0
+    best_streak = 0
+    for m in reversed(matches):
+        if m.result == "W":
+            streak += 1
             best_streak = max(best_streak, streak)
         else:
             streak = 0
@@ -2246,7 +2135,6 @@ async def slash_ghost(interaction: discord.Interaction):
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
-@bot.tree.command(name="legend", description="Club legend — best all-time player")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_legend(interaction: discord.Interaction):
     await interaction.response.defer()
@@ -2573,7 +2461,6 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error("[FATAL] Unexpected error: %s", e)
         traceback.print_exc()
-        sys.exit(0)@bot.tree.command(name="match_report", description="Full report of latest match")
 @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
 async def slash_match_report(interaction: discord.Interaction):
     await interaction.response.defer()
@@ -2626,198 +2513,6 @@ async def slash_court_case(interaction: discord.Interaction, player: str):
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
-# ─── PHASE 4 SLASH COMMANDS (conditional) ───
-
-if PHASE4_AVAILABLE:
-    @bot.tree.command(name="hall_of_fame", description="Best performances ever recorded")
-    @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
-    async def slash_hall_of_fame(interaction: discord.Interaction):
-        await interaction.response.defer()
-        if not await ensure_data_interaction(interaction): return
-        if not current_club.matches:
-            await rl.interaction_send(interaction, "ما لقيتش match history.")
-            return
-        try:
-            records = HallOfFame.scan_matches(current_club.matches, current_club.players)
-            if not records:
-                await rl.interaction_send(interaction, "🏆 **Hall of Fame**\n\nما كاين حتى شي record لحد الآن.")
-                return
-            card = generate_hall_of_fame_card(Config.ASSETS_DIR, records, current_club.club_name)
-            file = discord.File(card, filename="hall_of_fame.png")
-            text = HallOfFame.get_records_text(records)
-            embed = discord.Embed(title="🏆 Hall of Fame", description=text, color=0xffd700)
-            await rl.interaction_send(interaction, embed=embed, file=file)
-        except Exception as e:
-            traceback.print_exc()
-            await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-    @bot.tree.command(name="rivalry", description="1v1 player rivalry with roast")
-    @app_commands.describe(player1="First player", player2="Second player")
-    @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-    async def slash_rivalry(interaction: discord.Interaction, player1: str, player2: str):
-        await interaction.response.defer()
-        if not await ensure_data_interaction(interaction): return
-        p1 = find_player(player1)
-        p2 = find_player(player2)
-        if not p1 or not p2:
-            await rl.interaction_send(interaction, "ما لقيتش players.")
-            return
-        try:
-            stats = RivalrySystem.compare(p1, p2, current_club.matches)
-            text = RivalrySystem.format_text(stats)
-            sq1 = getattr(p1, "_squad_info", {}) or {}
-            sq2 = getattr(p2, "_squad_info", {}) or {}
-            p1_photo = resolve_image_path(sq1.get("image"))
-            p2_photo = resolve_image_path(sq2.get("image"))
-            card = generate_rivalry_card(Config.ASSETS_DIR, stats, p1_photo, p2_photo)
-            file = discord.File(card, filename="rivalry.png")
-            embed = discord.Embed(title=f"⚔️ Rivalry: {p1.name} vs {p2.name}", description=text, color=0xff4500)
-            await rl.interaction_send(interaction, embed=embed, file=file)
-            memory.record_rivalry_result(p1.name, p2.name, stats["overall_winner"])
-        except Exception as e:
-            traceback.print_exc()
-            await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-    @bot.tree.command(name="fraud_score", description="Real fraud score 0-100")
-    @app_commands.describe(player="Player name")
-    @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-    async def slash_fraud_score(interaction: discord.Interaction, player: str):
-        await interaction.response.defer()
-        if not await ensure_data_interaction(interaction): return
-        target = find_player(player)
-        if not target:
-            await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
-            return
-        try:
-            fraud = FraudScoreSystem.compute(target)
-            sq_info = getattr(target, "_squad_info", {}) or {}
-            pos = sq_info.get("position", "CM")
-            raw_img = sq_info.get("image")
-            img_path = resolve_image_path(raw_img)
-            color_map = {"Safe": 0x00ff00, "Suspicious": 0xffa500, "Fraud": 0xff4500, "Criminal": 0xff0000}
-            color = color_map.get(fraud["classification"], 0xff0000)
-            card = imgen.generate_player_photo_card(target, pos, "red" if fraud["score"] > 60 else "gold", f"FRAUD: {fraud['classification']}", photo_path=img_path)
-            file = discord.File(card, filename=f"{target.name}_fraud.png")
-            embed = discord.Embed(title=f"🎭 Fraud Score — {target.name}", color=color)
-            embed.add_field(name="Score", value=f"{fraud['score']}/100", inline=True)
-            embed.add_field(name="Classification", value=fraud["classification"], inline=True)
-            breakdown_text = "\n".join([f"• {desc}: +{pts}" for desc, pts in fraud["breakdown"]])
-            embed.add_field(name="Breakdown", value=breakdown_text or "Clean sheet", inline=False)
-            await rl.interaction_send(interaction, file=file, embed=embed)
-        except Exception as e:
-            traceback.print_exc()
-            await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-    @bot.tree.command(name="carry_score", description="Real carry score")
-    @app_commands.describe(player="Player name")
-    @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-    async def slash_carry_score(interaction: discord.Interaction, player: str):
-        await interaction.response.defer()
-        if not await ensure_data_interaction(interaction): return
-        target = find_player(player)
-        if not target:
-            await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
-            return
-        try:
-            carry = CarryScoreSystem.compute(target)
-            sq_info = getattr(target, "_squad_info", {}) or {}
-            pos = sq_info.get("position", "CM")
-            raw_img = sq_info.get("image")
-            img_path = resolve_image_path(raw_img)
-            card = imgen.generate_player_photo_card(target, pos, "blue", f"CARRY: {carry['classification']}", photo_path=img_path)
-            file = discord.File(card, filename=f"{target.name}_carry.png")
-            embed = discord.Embed(title=f"💪 Carry Score — {target.name}", color=0x00bfff)
-            embed.add_field(name="Total Score", value=str(carry["total_score"]), inline=True)
-            embed.add_field(name="Per Game", value=str(carry["score_per_game"]), inline=True)
-            embed.add_field(name="Classification", value=carry["classification"], inline=True)
-            bd = carry["breakdown"]
-            bd_text = f"Goals: {bd['goals']} | Assists: {bd['assists']} | Tackles: {bd['tackles']}\n"
-            bd_text += f"Interceptions: {bd['interceptions']} | Pass Acc: {bd['pass_accuracy']} | MOTM: {bd['motm']} | Rating: {bd['rating']}"
-            embed.add_field(name="Breakdown", value=bd_text, inline=False)
-            await rl.interaction_send(interaction, file=file, embed=embed)
-        except Exception as e:
-            traceback.print_exc()
-            await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-    @bot.tree.command(name="ghost_score", description="Real ghost score")
-    @app_commands.describe(player="Player name")
-    @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-    async def slash_ghost_score(interaction: discord.Interaction, player: str):
-        await interaction.response.defer()
-        if not await ensure_data_interaction(interaction): return
-        target = find_player(player)
-        if not target:
-            await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
-            return
-        try:
-            ghost = GhostScoreSystem.compute(target)
-            sq_info = getattr(target, "_squad_info", {}) or {}
-            pos = sq_info.get("position", "CM")
-            raw_img = sq_info.get("image")
-            img_path = resolve_image_path(raw_img)
-            color = 0x9370db if ghost["is_ghost"] else 0x00ff00
-            card = imgen.generate_player_photo_card(target, pos, "purple", f"GHOST: {ghost['severity']}", photo_path=img_path)
-            file = discord.File(card, filename=f"{target.name}_ghost.png")
-            embed = discord.Embed(title=f"👻 Ghost Score — {target.name}", color=color)
-            embed.add_field(name="Ghost Points", value=str(ghost["ghost_points"]), inline=True)
-            embed.add_field(name="Severity", value=ghost["severity"], inline=True)
-            embed.add_field(name="Is Ghost?", value="Yes" if ghost["is_ghost"] else "No", inline=True)
-            reasons = "\n".join([f"• {r}" for r in ghost["reasons"]])
-            embed.add_field(name="Reasons", value=reasons or "No ghost signs detected", inline=False)
-            await rl.interaction_send(interaction, file=file, embed=embed)
-        except Exception as e:
-            traceback.print_exc()
-            await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-    @bot.tree.command(name="excuses", description="Generate fake excuses for bad performance")
-    @app_commands.describe(player="Player name")
-    @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-    async def slash_excuses(interaction: discord.Interaction, player: str):
-        await interaction.response.defer()
-        if not await ensure_data_interaction(interaction): return
-        target = find_player(player)
-        if not target:
-            await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
-            return
-        try:
-            text = darija.excuses(target)
-            embed = discord.Embed(title=f"📝 Excuses — {target.name}", description=text, color=0x1e90ff)
-            await rl.interaction_send(interaction, embed=embed)
-        except Exception as e:
-            traceback.print_exc()
-            await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-    @bot.tree.command(name="match_poster", description="Generate premium match poster for last match")
-    @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
-    async def slash_match_poster(interaction: discord.Interaction):
-        await interaction.response.defer()
-        if not await ensure_data_interaction(interaction): return
-        if not current_club.matches:
-            await rl.interaction_send(interaction, "ما لقيتش match history.")
-            return
-        try:
-            last = current_club.matches[0]
-            poster_data = MatchPosterEngine.build_poster_data(last, current_club.players)
-            if not poster_data:
-                await rl.interaction_send(interaction, "ما قدرتش نبني poster.")
-                return
-            photo_paths = {}
-            for mp in poster_data.get("all_players", []):
-                pobj = mp.get("player_obj")
-                if pobj:
-                    sq = getattr(pobj, "_squad_info", {}) or {}
-                    photo_paths[mp["name"]] = resolve_image_path(sq.get("image"))
-            card = generate_match_poster(Config.ASSETS_DIR, poster_data, photo_paths)
-            file = discord.File(card, filename="match_poster.png")
-            embed = discord.Embed(title=f"🎨 Match Poster: {poster_data['opponent']} {poster_data['score']}", color=0xffd700)
-            await rl.interaction_send(interaction, embed=embed, file=file)
-        except Exception as e:
-            traceback.print_exc()
-            await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-# ─────────────────────────────────────────────────────────────
-# MAIN ENTRY
-# ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     backoff = load_backoff_state() if 'load_backoff_state' in globals() else {"consecutive_429s": 0, "last_429_time": 0}
     consecutive_429s = backoff.get("consecutive_429s", 0)
