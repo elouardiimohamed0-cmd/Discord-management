@@ -5,12 +5,11 @@ import time
 
 logger = logging.getLogger("rachad_bot.pika")
 
-PIKA_API_KEY = os.getenv("PIKA_API_KEY")
 PIKA_URL = "https://api.pika.art/v1/generations"
 
 class PikaClient:
     def __init__(self):
-        self.api_key = PIKA_API_KEY
+        self.api_key = os.getenv("PIKA_API_KEY")  # ← Read at runtime, not import
 
     def is_available(self):
         return bool(self.api_key)
