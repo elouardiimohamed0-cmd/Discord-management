@@ -1018,38 +1018,6 @@ async def _maybe_send_video(channel, player, video_type, match_id=None):
 
     except Exception as e:
         logger.error("[VIDEO] Failed to generate/send video: %s", e)
-    cache_dir = "cache/videos"
-    os.makedirs(cache_dir, exist_ok=True)
-    name = getattr(player, "name", "match") if player else "match"
-    key = hashlib.md5(f"{name}:{card_type}:{match_id}".encode()).hexdigest() + ".mp4"
-    path = os.path.join(cache_dir, key)
-
-    # Send cached video immediately
-    if os.path.exists(path):
-        try:
-            await channel.send(file=discord.File(path, filename=f"{card_type}_reveal.mp4"))
-        except Exception as e:
-            logger.error("Failed to send cached video: %s", e)
-        return
-
-    # Generate in background
-    prompts = {
-        "mvp": f"Cinematic golden MVP celebration, {name} spotlight, epic slow motion, crowd cheering, 3 seconds",
-        "fraud": f"Dramatic red fraud exposure, {name} spotlight, comedic shame walk, 3 seconds",
-        "ghost": f"Ghostly disappearance, {name} fading into purple mist, empty pitch, 3 seconds",
-        "carry": f"Epic superhuman carry, {name} lifting team, blue energy, cinematic, 3 seconds",
-        "court": f"Courtroom drama gavel slam, {name} on trial, dramatic lighting, 3 seconds",
-        "match": f"Epic stadium match intro, floodlights, crowd roar, green pitch, cinematic, 3 seconds",
-    }
-    prompt = prompts.get(card_type, f"Cinematic sports moment featuring {name}")
-
-    try:
-        video_bytes = await asyncio.to_thread(pollinations.generate_video, prompt, duration=5)
-        with open(path, "wb") as f:
-            f.write(video_bytes)
-        await channel.send(file=discord.File(path, filename=f"{card_type}_reveal.mp4"))
-    except Exception as e:
-        logger.error("Video generation failed: %s", e)
 
 @bot.command(name="mvp")
 @commands.cooldown(1, 5, commands.BucketType.user)
