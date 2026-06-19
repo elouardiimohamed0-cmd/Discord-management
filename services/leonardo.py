@@ -4,12 +4,11 @@ import logging
 
 logger = logging.getLogger("rachad_bot.leonardo")
 
-LEONARDO_API_KEY = os.getenv("LEONARDO_API_KEY")
 LEONARDO_URL = "https://cloud.leonardo.ai/api/rest/v1/generations"
 
 class LeonardoClient:
     def __init__(self):
-        self.api_key = LEONARDO_API_KEY
+        self.api_key = os.getenv("LEONARDO_API_KEY")  # ← Read at runtime, not import
 
     def is_available(self):
         return bool(self.api_key)
