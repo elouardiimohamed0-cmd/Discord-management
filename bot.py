@@ -1849,7 +1849,7 @@ async def slash_stats(interaction: discord.Interaction, player: str):
         embed.add_field(name="Win %", value=f"{round(target.win_rate, 1)}%", inline=True)
         embed.add_field(name="Tackles", value=str(target.tackles), inline=True)
         await rl.interaction_send(interaction, file=file, embed=embed)
-        asyncio.create_task(_maybe_send_video(interaction.channel, mvp, "mvp"))
+        asyncio.create_task(_maybe_send_video(interaction.channel, target, "mvp"))
     except Exception as e:
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
