@@ -1,5 +1,5 @@
 """image_gen.py — EA FC Pro Clubs premium card generator.
-Pure Pillow — no Groq, no AI, no randomness.
+Pillow-based with auto-generated templates and Leonardo AI photo fallback.
 """
 
 import io
@@ -12,57 +12,22 @@ from models import PlayerStats, ClubStats
 
 logger = logging.getLogger("rachad_bot.image_gen")
 
-# ─── PLAYER IMAGE LOADER — preserves aspect ratio ───
+# ─── AUTO TEMPLATES ───
+try:
+    from auto_templates import get_template, TEMPLATE_GENERATORS
+    AUTO_TEMPLATES_AVAILABLE = True
+except ImportError:
+    AUTO_TEMPLATES_AVAILABLE = False
+    get_template = None
+    TEMPLATE_GENERATORS = {}
 
-def _load_player_photo(name: str, assets_dir: str, max_size=(1600, 1600), photo_path: Optional[str] = None, preserve_aspect: bool = True):
-    """Load player photo. Uses thumbnail to preserve aspect ratio by default."""
-
-    def _try_load(path):
-        if not path or not os.path.exists(path):
-            return None
-        try:
-            img = Image.open(path).convert("RGBA")
-            if preserve_aspect:
-                img.thumbnail(max_size, Image.LANCZOS)
-            else:
-                img = img.resize(max_size, Image.LANCZOS)
-            print(f"[PHOTO DEBUG] ✅ Loaded: {path} ({img.width}x{img.height})")
-            return img
-        except Exception as e:
-            print(f"[PHOTO DEBUG] ❌ Failed: {path} — {e}")
-            return None
-
-    img = _try_load(photo_path)
-    if img:
-        return img
-
-    clean = name.replace(" ", "_").lower()
-    upper = name.upper()
-    title = name.title()
-
-    candidates = [
-        os.path.join(assets_dir, f"{name}.png"),
-        os.path.join(assets_dir, f"{name}.jpg"),
-        os.path.join(assets_dir, f"{name}.jpeg"),
-        os.path.join(assets_dir, f"{clean}.png"),
-        os.path.join(assets_dir, f"{clean}.jpg"),
-        os.path.join(assets_dir, f"{clean}.jpeg"),
-        os.path.join(assets_dir, f"{upper}.png"),
-        os.path.join(assets_dir, f"{upper}.jpg"),
-        os.path.join(assets_dir, f"{upper}.jpeg"),
-        os.path.join(assets_dir, f"{title}.png"),
-        os.path.join(assets_dir, f"{title}.jpg"),
-        os.path.join(assets_dir, f"{title}.jpeg"),
-    ]
-
-    for path in candidates:
-        img = _try_load(path)
-        if img:
-            return img
-
-    print(f"[PHOTO DEBUG] ❌ No photo found for: {name}")
-    return None
-
+# ─── LEONARDO AI PHOTOS ───
+try:
+    from services.leonardo import LeonardoClient
+    LEONARDO_AVAILABLE = True
+except ImportError:
+    LEONARDO_AVAILABLE = False
+    LeonardoClient = None
 
 # ─── CONSTANTS ───
 CARD_W, CARD_H = 1440, 2160
@@ -121,6 +86,58 @@ PALETTES = {
     },
 }
 
+# ─── PLAYER IMAGE LOADER ───
+
+def _load_player_photo(name: str, assets_dir: str, max_size=(1600, 1600), photo_path: Optional[str] = None, preserve_aspect: bool = True):
+    """Load player photo. Uses thumbnail to preserve aspect ratio by default."""
+
+    def _try_load(path):
+        if not path or not os.path.exists(path):
+            return None
+        try:
+            img = Image.open(path).convert("RGBA")
+            if preserve_aspect:
+                img.thumbnail(max_size, Image.LANCZOS)
+            else:
+                img = img.resize(max_size, Image.LANCZOS)
+            print(f"[PHOTO DEBUG] Loaded: {path} ({img.width}x{img.height})")
+            return img
+        except Exception as e:
+            print(f"[PHOTO DEBUG] Failed: {path} — {e}")
+            return None
+
+    img = _try_load(photo_path)
+    if img:
+        return img
+
+    clean = name.replace(" ", "_").lower()
+    upper = name.upper()
+    title = name.title()
+
+    candidates = [
+        os.path.join(assets_dir, f"{name}.png"),
+        os.path.join(assets_dir, f"{name}.jpg"),
+        os.path.join(assets_dir, f"{name}.jpeg"),
+        os.path.join(assets_dir, f"{clean}.png"),
+        os.path.join(assets_dir, f"{clean}.jpg"),
+        os.path.join(assets_dir, f"{clean}.jpeg"),
+        os.path.join(assets_dir, f"{upper}.png"),
+        os.path.join(assets_dir, f"{upper}.jpg"),
+        os.path.join(assets_dir, f"{upper}.jpeg"),
+        os.path.join(assets_dir, f"{title}.png"),
+        os.path.join(assets_dir, f"{title}.jpg"),
+        os.path.join(assets_dir, f"{title}.jpeg"),
+    ]
+
+    for path in candidates:
+        img = _try_load(path)
+        if img:
+            return img
+
+    print(f"[PHOTO DEBUG] No photo found for: {name}")
+    return None
+
+
 def _load_font(size: int, bold=False):
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -135,6 +152,7 @@ def _load_font(size: int, bold=False):
                 pass
     return ImageFont.load_default()
 
+
 def _gradient_bg(w, h, c1, c2):
     img = Image.new("RGB", (w, h), c1)
     draw = ImageDraw.Draw(img)
@@ -145,6 +163,7 @@ def _gradient_bg(w, h, c1, c2):
         b = int(c1[2] + (c2[2] - c1[2]) * ratio)
         draw.line([(0, y), (w, y)], fill=(r, g, b))
     return img
+
 
 def _glow_circle(img, cx, cy, radius, color, intensity=0.35):
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
@@ -159,12 +178,75 @@ class ImageGenerator:
     def __init__(self, assets_dir: str = "assets"):
         self.assets_dir = assets_dir
         self.fonts = {}
+        self._leonardo = None
+        self._photo_cache = {}
 
     def _font(self, size, bold=False):
         key = (size, bold)
         if key not in self.fonts:
             self.fonts[key] = _load_font(size, bold)
         return self.fonts[key]
+
+    def _get_leonardo(self):
+        """Lazy-init Leonardo client."""
+        if self._leonardo is None and LEONARDO_AVAILABLE:
+            self._leonardo = LeonardoClient()
+        return self._leonardo
+
+    def _generate_ai_photo(self, player_name: str, card_type: str = "player") -> Optional[bytes]:
+        """Generate an AI player photo using Leonardo. Returns PNG bytes or None."""
+        if not LEONARDO_AVAILABLE:
+            return None
+
+        leo = self._get_leonardo()
+        if not leo or not leo.is_available():
+            logger.warning("[LEONARDO] Not available — skipping AI photo for %s", player_name)
+            return None
+
+        # Check cache
+        cache_key = f"leonardo:{player_name}:{card_type}"
+        if cache_key in self._photo_cache:
+            return self._photo_cache[cache_key]
+
+        prompts = {
+            "mvp": f"Professional football player portrait, {player_name}, golden lighting, stadium background, heroic pose, photorealistic, 4K, sports photography",
+            "fraud": f"Football player portrait, {player_name}, dramatic red lighting, disappointed expression, dark moody stadium, photorealistic, 4K",
+            "ghost": f"Football player portrait, {player_name}, ethereal purple lighting, fading ghostly effect, mysterious atmosphere, photorealistic, 4K",
+            "carry": f"Football player portrait, {player_name}, heroic blue lighting, powerful stance, energy aura, photorealistic, 4K",
+            "court": f"Football player portrait, {player_name}, courtroom lighting, serious expression, dramatic shadows, photorealistic, 4K",
+            "playmaker": f"Football player portrait, {player_name}, green field lighting, creative pose, ball control, photorealistic, 4K",
+            "sniper": f"Football player portrait, {player_name}, focused expression, target crosshair overlay, precision pose, photorealistic, 4K",
+            "ball_loser": f"Football player portrait, {player_name}, dark grey lighting, embarrassed expression, broken ball nearby, photorealistic, 4K",
+            "player": f"Professional football player portrait, {player_name}, neutral stadium lighting, confident pose, photorealistic, 4K, sports photography",
+        }
+        prompt = prompts.get(card_type, prompts["player"])
+
+        try:
+            logger.info("[LEONARDO] Generating AI photo for %s (type: %s)", player_name, card_type)
+            img_bytes = leo.generate_image(prompt, width=1024, height=1536)
+            self._photo_cache[cache_key] = img_bytes
+            return img_bytes
+        except Exception as e:
+            logger.error("[LEONARDO] Failed to generate photo for %s: %s", player_name, e)
+            return None
+
+    def _load_template_for_label(self, label: str):
+        """Check assets/templates/ first, then auto-generate if not found."""
+        card_type = LABEL_TO_TEMPLATE.get(label)
+        if not card_type:
+            return None
+
+        # 1. Try file-based template
+        path = os.path.join(self.assets_dir, "templates", f"{card_type}.png")
+        if os.path.exists(path):
+            return Image.open(path)
+
+        # 2. Auto-generate template
+        if AUTO_TEMPLATES_AVAILABLE and get_template:
+            logger.info("[TEMPLATE] Auto-generating %s template for label: %s", card_type, label)
+            return get_template(card_type)
+
+        return None
 
     # ───────────────────────────────────────────
     # PHOTO-ONLY PLAYER CARD (main focus)
@@ -197,12 +279,27 @@ class ImageGenerator:
 
         photo_max_w = W - 100
         photo_max_h = H - 320
+
+        # Try to load photo from file/squad.json first
         photo = _load_player_photo(
             player.name, self.assets_dir,
             max_size=(photo_max_w, photo_max_h),
             photo_path=photo_path,
             preserve_aspect=True
         )
+
+        # If no photo found, try Leonardo AI
+        card_type = LABEL_TO_TEMPLATE.get(label, "player")
+        if photo is None and LEONARDO_AVAILABLE:
+            ai_bytes = self._generate_ai_photo(player.name, card_type)
+            if ai_bytes:
+                try:
+                    ai_img = Image.open(io.BytesIO(ai_bytes)).convert("RGBA")
+                    ai_img.thumbnail((photo_max_w, photo_max_h), Image.LANCZOS)
+                    photo = ai_img
+                    logger.info("[PHOTO] Using Leonardo AI photo for %s", player.name)
+                except Exception as e:
+                    logger.error("[PHOTO] Failed to load Leonardo image: %s", e)
 
         print(f"[CARD DEBUG] Player: {player.name}, Nickname: {nickname}, Asset: {photo_path}, Loaded: {photo is not None}")
 
@@ -234,16 +331,6 @@ class ImageGenerator:
         img.save(buf, format="PNG", optimize=True)
         buf.seek(0)
         return buf
-
-    def _load_template_for_label(self, label: str):
-        """Check assets/templates/ for a premium background matching this label."""
-        card_type = LABEL_TO_TEMPLATE.get(label)
-        if not card_type:
-            return None
-        path = os.path.join(self.assets_dir, "templates", f"{card_type}.png")
-        if os.path.exists(path):
-            return Image.open(path)
-        return None
 
     # ─── FIXED: all wrappers pass photo_path= (not photo_override=) ───
     def generate_player_card(self, player, pos, division=6, photo_path=None):
