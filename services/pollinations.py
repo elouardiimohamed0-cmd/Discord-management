@@ -5,13 +5,13 @@ from urllib.parse import quote
 
 logger = logging.getLogger("rachad_bot.pollinations")
 
-# FREE endpoint — no API key required for basic use!
+# FREE Pollinations endpoints — no API key required for basic use!
 IMAGE_URL = "https://image.pollinations.ai/prompt/"
 VIDEO_URL = "https://video.pollinations.ai/"
 
 class PollinationsClient:
     def __init__(self):
-        # Optional: use key for higher rate limits, but NOT required
+        # Optional: API key for higher rate limits, but NOT required
         self.api_key = os.getenv("POLLINATIONS_API_KEY") or os.getenv("LEONARDO_API_KEY")
         if self.api_key:
             logger.info("[POLLINATIONS] API key found (optional, using for higher limits)")
@@ -19,7 +19,7 @@ class PollinationsClient:
             logger.info("[POLLINATIONS] No API key — using FREE tier (no key required)")
 
     def is_available(self):
-        # Always available since free tier doesn't need a key!
+        # Always available — free tier doesn't need a key!
         return True
 
     def generate_image(self, prompt: str, width: int = 1024, height: int = 1536) -> bytes:
@@ -33,10 +33,16 @@ class PollinationsClient:
             "nologo": "true",
         }
         if self.api_key:
-            params["key"] = self.api_key  # Optional: for higher rate limits
+            params["key"] = self.api_key
 
         logger.info("[POLLINATIONS] Generating image (FREE): %s (%dx%d)", prompt[:60], width, height)
         resp = requests.get(url, params=params, timeout=120)
+        logger.info("[POLLINATIONS] Response status: %d", resp.status_code)
+
+        if resp.status_code == 429:
+            logger.warning("[POLLINATIONS] Rate limited — add POLLINATIONS_API_KEY for higher limits")
+            raise RuntimeError("Pollinations rate limited. Add API key for higher limits.")
+
         resp.raise_for_status()
         logger.info("[POLLINATIONS] Image generated: %d bytes", len(resp.content))
         return resp.content
@@ -54,10 +60,16 @@ class PollinationsClient:
             "seed": -1,
         }
         if self.api_key:
-            params["key"] = self.api_key  # Optional: for higher rate limits
+            params["key"] = self.api_key
 
         logger.info("[POLLINATIONS] Generating video (FREE): %s (%ds, %s)", prompt[:60], duration, aspect)
         resp = requests.get(url, params=params, timeout=180)
+        logger.info("[POLLINATIONS] Response status: %d", resp.status_code)
+
+        if resp.status_code == 429:
+            logger.warning("[POLLINATIONS] Rate limited — add POLLINATIONS_API_KEY for higher limits")
+            raise RuntimeError("Pollinations rate limited. Add API key for higher limits.")
+
         resp.raise_for_status()
         logger.info("[POLLINATIONS] Video generated: %d bytes", len(resp.content))
         return resp.content
