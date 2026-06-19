@@ -307,7 +307,7 @@ class ImageGenerator:
             f_sub = self._font(30)
             draw.text((W // 2, H // 2 + 20), "AI Photo Generation Failed", fill=pal["text_dim"], font=f_sub, anchor="mm")
             f_sub2 = self._font(24)
-            draw.text((W // 2, H // 2 + 60), "Check LEONARDO_API_KEY (Pollinations)", fill=pal["text_dim"], font=f_sub2, anchor="mm")
+            draw.text((W // 2, H // 2 + 60), "Check POLLINATIONS_API_KEY", fill=pal["text_dim"], font=f_sub2, anchor="mm")
 
         f_foot = self._font(28)
         draw.text((W // 2, H - 35), f"RACHAD L3ERGONI • {label}", fill=pal["text_dim"], font=f_foot, anchor="mm")
