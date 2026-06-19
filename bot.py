@@ -1,3 +1,8 @@
+try:
+    import auto_templates
+    AUTO_TEMPLATES_AVAILABLE = True
+except ImportError:
+    AUTO_TEMPLATES_AVAILABLE = False
 import os
 import sys
 import asyncio
@@ -953,12 +958,41 @@ async def cmd_bio(ctx, *, player: str):
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-async def _maybe_send_video(channel, player, card_type: str, match_id: str = ""):
-    """Fire-and-forget video generation. Posts to channel when ready."""
-    from services.pika import PikaClient
-    pika = PikaClient()
-    if not pika.is_available():
+async def _maybe_send_video(channel, player, video_type, match_id=None):
+    """Send a Pika-generated video to the channel if API is available."""
+    if not channel:
         return
+    
+    try:
+        from services.pika import PikaClient
+        pika = PikaClient()
+        if not pika.is_available():
+            logger.info("[VIDEO] Pika API key not set, skipping video")
+            return
+    except ImportError:
+        logger.info("[VIDEO] Pika service not available")
+        return
+    
+    prompts = {
+        "mvp": "Cinematic golden MVP celebration, {name} spotlight, epic slow motion, crowd cheering, 3 seconds",
+        "fraud": "Dramatic red fraud exposure, {name} spotlight, comedic shame walk, 3 seconds",
+        "ghost": "Ghostly disappearance, {name} fading into purple mist, empty pitch, 3 seconds",
+        "carry": "Epic superhuman carry, {name} lifting team, blue energy, cinematic, 3 seconds",
+        "court": "Courtroom drama gavel slam, {name} on trial, dramatic lighting, 3 seconds",
+        "match": "Epic stadium match intro, floodlights, crowd roar, green pitch, cinematic, 3 seconds",
+    }
+    
+    name = getattr(player, 'name', 'Player') if player else 'Player'
+    prompt = prompts.get(video_type, prompts["mvp"]).format(name=name)
+    
+    try:
+        logger.info("[VIDEO] Generating %s video for %s via Pika...", video_type, name)
+        video_bytes = pika.generate_video(prompt, duration=3, motion=2)
+        file = discord.File(io.BytesIO(video_bytes), filename=f"{name}_{video_type}.mp4")
+        await channel.send(file=file)
+        logger.info("[VIDEO] Sent %s video for %s", video_type, name)
+    except Exception as e:
+        logger.error("[VIDEO] Failed: %s", e)
 
     cache_dir = "cache/videos"
     os.makedirs(cache_dir, exist_ok=True)
