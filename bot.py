@@ -961,7 +961,7 @@ async def cmd_bio(ctx, *, player: str):
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
 async def _maybe_send_video(channel, player, video_type, match_id=None):
-    """Send a Pika-generated video to the channel if API is available."""
+    """Send a Pollinations-generated video to the channel if API is available."""
     if not channel:
         return
     
@@ -1003,8 +1003,8 @@ pollinations.generate_video(prompt, duration=5)
     
     # Generate new video
     try:
-        logger.info("[VIDEO] Generating %s video for %s via Pika...", video_type, name)
-        video_bytes = pika.generate_video(prompt, duration=3, motion=2)
+        logger.info("[VIDEO] Generating %s video for %s via Pollinations...", video_type, name)
+        video_bytes = pollinations.generate_video(prompt, duration=5)
         
         # Save to cache
         with open(cache_path, "wb") as f:
@@ -1043,7 +1043,7 @@ pollinations.generate_video(prompt, duration=5)
     prompt = prompts.get(card_type, f"Cinematic sports moment featuring {name}")
 
     try:
-        video_bytes = await asyncio.to_thread(pika.generate_video, prompt, duration=3, motion=2)
+        video_bytes = await asyncio.to_thread(pollinations.generate_video, prompt, duration=5)
         with open(path, "wb") as f:
             f.write(video_bytes)
         await channel.send(file=discord.File(path, filename=f"{card_type}_reveal.mp4"))
