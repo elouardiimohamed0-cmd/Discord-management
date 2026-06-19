@@ -1520,9 +1520,6 @@ async def cmd_match_report(ctx):
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-        traceback.print_exc()
-        await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
-
 # ─── PHASE 4 PREFIX COMMANDS (conditional) ───
 
 if PHASE4_AVAILABLE:
