@@ -7,6 +7,7 @@ load_dotenv()
 class Config:
     DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "")
     LEONARDO_API_KEY = os.environ.get("LEONARDO_API_KEY", "")
+    POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY", "")
     DISCORD_GUILD_ID = int(os.environ.get("DISCORD_GUILD_ID", "0"))
     GENERAL_CHANNEL_ID = int(os.environ.get("GENERAL_CHANNEL_ID", "0"))
     MATCH_CHANNEL_ID = int(os.environ.get("MATCH_CHANNEL_ID", "0"))
