@@ -18,26 +18,144 @@ class StatsEngine:
     }
 
     @classmethod
-    def compute_per_game(cls, player: PlayerStats) -> PlayerStats:
-        g = max(player.games, 1)
-        player.goals_pg = round(player.goals / g, 2)
-        player.assists_pg = round(player.assists / g, 2)
+@classmethod
+def compute_advanced(cls, player: PlayerStats, position: str = "CM") -> PlayerStats:
+ """
+ Stable advanced stats.
 
-        # PCT rating is usually already an average (1-10). If it's cumulative, divide it.
-        if player.rating > 10 and player.games > 1:
-            player.rating_pg = round(player.rating / g, 2)
-        else:
-            player.rating_pg = round(player.rating, 2)
+ Uses reliable PCT fields:
+ - rating
+ - goals
+ - assists
+ - pass accuracy
+ - passes made
+ - tackles
+ - clean sheets
+ - possession losses
+ - cards
+ - win rate
 
-        # Only recompute win_rate when wins/losses/draws are actually populated.
-        # The scraper delivers win_rate directly from PCT in most cases and leaves
-        # W/L/D at 0 — recomputing in that case would clobber a correct value to 0.
-        wld_total = player.wins + player.losses + player.draws
-        if wld_total > 0:
-            player.win_rate = round(player.wins / wld_total * 100, 1)
-        # else: keep whatever the scraper set (including 0.0 if no data at all)
+ Avoids unreliable/missing fields:
+ - shots_on_target
+ - key_passes
+ - fouls
+ - interceptions
+ """
+ weights = cls.POSITION_WEIGHTS.get(position, cls.POSITION_WEIGHTS["CM"])
+ g = max(getattr(player, "games", 0), 1)
 
-        return player
+ goals = getattr(player, "goals", 0) or 0
+ assists = getattr(player, "assists", 0) or 0
+ rating_pg = getattr(player, "rating_pg", 0) or 0
+ tackles = getattr(player, "tackles", 0) or 0
+ clean_sheets = getattr(player, "clean_sheets", 0) or 0
+ passes_made = getattr(player, "passes_made", 0) or 0
+ pass_accuracy = getattr(player, "pass_accuracy", 0) or 0
+ possession_losses = getattr(player, "possession_losses", 0) or 0
+ cards = getattr(player, "cards", 0) or 0
+ win_rate = getattr(player, "win_rate", 0) or 0
+
+ goals_pg = goals / g
+ assists_pg = assists / g
+ tackles_pg = tackles / g
+ passes_pg = passes_made / g
+ losses_pg = possession_losses / g
+ cards_pg = cards / g
+ clean_sheet_rate = clean_sheets / g
+
+ # Rating is the most stable PCT value.
+ rating_score = rating_pg * 10
+
+ # Attack score: goals + assists, weighted by position.
+ off_contrib = (
+  goals_pg * 25 +
+  assists_pg * 18 +
+  rating_pg * 2
+ ) * weights["off"]
+
+ # Defense score: tackles + clean sheets, weighted by position.
+ def_contrib = (
+  tackles_pg * 4 +
+  clean_sheet_rate * 12 +
+  rating_pg
+ ) * weights["def"]
+
+ # Passing score: accuracy + volume, weighted by position.
+ safe_pass_accuracy = max(0, min(pass_accuracy, 100))
+ safe_passes_pg = max(0, min(passes_pg, 80))
+ pass_contrib = (
+  safe_pass_accuracy * 0.20 +
+  safe_passes_pg * 0.20
+ ) * weights["pass"]
+
+ # Small win bonus. Do not let win rate dominate individual stats.
+ win_bonus = max(0, min(win_rate, 100)) * 0.10
+
+ # Error penalty.
+ error_penalty = (
+  losses_pg * 1.5 +
+  cards_pg * 8
+ )
+
+ player.offensive_contribution = round(max(0, off_contrib), 2)
+ player.defensive_contribution = round(max(0, def_contrib), 2)
+ player.passing_influence = round(max(0, pass_contrib), 2)
+
+ player.impact_score = round(
+  max(
+   0,
+   rating_score +
+   player.offensive_contribution +
+   player.defensive_contribution +
+   player.passing_influence +
+   win_bonus -
+   error_penalty
+  ),
+  2
+ )
+
+ # Carry = good impact + goals/assists + win rate.
+ player.clutch_score = round(
+  max(
+   0,
+   player.impact_score * 0.45 +
+   goals_pg * 20 +
+   assists_pg * 14 +
+   win_bonus
+  ),
+  2
+ )
+
+ # Fraud/error = low rating + possession loss + cards + bad passing.
+ low_rating_penalty = max(0, 6.5 - rating_pg) * 5
+ bad_pass_penalty = max(0, 75 - pass_accuracy) * 0.15 if pass_accuracy > 0 else 2
+ loss_penalty = losses_pg * 2
+ card_penalty = cards_pg * 10
+
+ player.error_score = round(
+  max(
+   0,
+   low_rating_penalty +
+   bad_pass_penalty +
+   loss_penalty +
+   card_penalty
+  ),
+  2
+ )
+
+ player.throwing_score = round(
+  max(
+   0,
+   player.error_score +
+   max(0, 6.0 - rating_pg) * 2
+  ),
+  2
+ )
+
+ # 6.5 is a better "average" than 5.0 for FC ratings.
+ player.form_index = round(rating_pg - 6.5, 2)
+
+ return player
 
     @classmethod
     def compute_advanced(cls, player: PlayerStats, position: str = "CM") -> PlayerStats:
