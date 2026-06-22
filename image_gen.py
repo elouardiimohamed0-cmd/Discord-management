@@ -29,7 +29,7 @@ try:
 except ImportError:
     FAL_AVAILABLE = False
     FalClient = None
-
+    
 # ─── CONSTANTS ───
 CARD_W, CARD_H = 1440, 2160
 MARGIN = 80
@@ -103,6 +103,7 @@ def _load_font(size: int, bold=False):
                 pass
     return ImageFont.load_default()
 
+
 def _gradient_bg(w, h, c1, c2):
     img = Image.new("RGB", (w, h), c1)
     draw = ImageDraw.Draw(img)
@@ -114,6 +115,7 @@ def _gradient_bg(w, h, c1, c2):
         draw.line([(0, y), (w, y)], fill=(r, g, b))
     return img
 
+
 def _glow_circle(img, cx, cy, radius, color, intensity=0.35):
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -121,6 +123,7 @@ def _glow_circle(img, cx, cy, radius, color, intensity=0.35):
         alpha = int(200 * intensity * (r / radius))
         draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*color, max(0, alpha // 4)))
     return Image.alpha_composite(img.convert("RGBA"), overlay)
+
 
 class ImageGenerator:
     def __init__(self, assets_dir: str = "assets"):
@@ -190,15 +193,15 @@ class ImageGenerator:
 
         # Generate new photo
         prompts = {
-            "mvp":        f"Professional football player portrait, {player_name}, golden lighting, stadium background, heroic pose, photorealistic, 4K, sports photography, wearing orange jersey",
-            "fraud":      f"Football player portrait, {player_name}, dramatic red lighting, disappointed expression, dark moody stadium, photorealistic, 4K, wearing orange jersey",
-            "ghost":      f"Football player portrait, {player_name}, ethereal purple lighting, fading ghostly effect, mysterious atmosphere, photorealistic, 4K, wearing orange jersey",
-            "carry":      f"Football player portrait, {player_name}, heroic blue lighting, powerful stance, energy aura, photorealistic, 4K, wearing orange jersey",
-            "court":      f"Football player portrait, {player_name}, courtroom lighting, serious expression, dramatic shadows, photorealistic, 4K, wearing orange jersey",
-            "playmaker":  f"Football player portrait, {player_name}, green field lighting, creative pose, ball control, photorealistic, 4K, wearing orange jersey",
-            "sniper":     f"Football player portrait, {player_name}, focused expression, target crosshair overlay, precision pose, photorealistic, 4K, wearing orange jersey",
+            "mvp": f"Professional football player portrait, {player_name}, golden lighting, stadium background, heroic pose, photorealistic, 4K, sports photography, wearing orange jersey",
+            "fraud": f"Football player portrait, {player_name}, dramatic red lighting, disappointed expression, dark moody stadium, photorealistic, 4K, wearing orange jersey",
+            "ghost": f"Football player portrait, {player_name}, ethereal purple lighting, fading ghostly effect, mysterious atmosphere, photorealistic, 4K, wearing orange jersey",
+            "carry": f"Football player portrait, {player_name}, heroic blue lighting, powerful stance, energy aura, photorealistic, 4K, wearing orange jersey",
+            "court": f"Football player portrait, {player_name}, courtroom lighting, serious expression, dramatic shadows, photorealistic, 4K, wearing orange jersey",
+            "playmaker": f"Football player portrait, {player_name}, green field lighting, creative pose, ball control, photorealistic, 4K, wearing orange jersey",
+            "sniper": f"Football player portrait, {player_name}, focused expression, target crosshair overlay, precision pose, photorealistic, 4K, wearing orange jersey",
             "ball_loser": f"Football player portrait, {player_name}, dark grey lighting, embarrassed expression, broken ball nearby, photorealistic, 4K, wearing orange jersey",
-            "player":     f"Professional football player portrait, {player_name}, neutral stadium lighting, confident pose, photorealistic, 4K, sports photography, wearing orange jersey",
+            "player": f"Professional football player portrait, {player_name}, neutral stadium lighting, confident pose, photorealistic, 4K, sports photography, wearing orange jersey",
         }
         prompt = prompts.get(card_type, prompts["player"])
 
@@ -235,20 +238,10 @@ class ImageGenerator:
         return None
 
     # ───────────────────────────────────────────
-    # PHOTO PLAYER CARD (local asset PRIMARY, Fal AI FALLBACK)
+    # PHOTO-ONLY PLAYER CARD (Fal AI primary)
     # ───────────────────────────────────────────
     def generate_player_photo_card(self, player, pos, palette_name="gold", label="PLAYER", photo_path=None):
-        """Premium photo card.
-
-        Photo source priority:
-          1. Local asset at `photo_path` (passed in by bot.py from squad.json → assets/...).
-          2. Fal AI generated photo (fallback only).
-          3. Text placeholder if both fail.
-
-        This honors `photo_path` (previously ignored) so squad members show their real
-        face instead of a Fal-generated lookalike. Fal is still used for players
-        without an asset, but the squad's 10 players will use local files exclusively.
-        """
+        """Clean photo card. Fal AI photo is PRIMARY. No local file fallback."""
         pal = PALETTES.get(palette_name, PALETTES["gold"])
         W, H = CARD_W, CARD_H
 
@@ -275,35 +268,24 @@ class ImageGenerator:
         photo_max_w = W - 100
         photo_max_h = H - 320
 
-        # ─── PHOTO RESOLUTION (local asset PRIMARY, Fal AI FALLBACK) ───
+        # ─── FAL AI PHOTO IS PRIMARY ───
         card_type = LABEL_TO_TEMPLATE.get(label, "player")
         photo = None
 
-        # 1) Local asset from squad.json → assets/<file>
-        if photo_path and os.path.exists(photo_path):
+        # Try Fal first
+        ai_bytes = self._generate_ai_photo(player.name, card_type)
+        if ai_bytes:
             try:
-                local_img = Image.open(photo_path).convert("RGBA")
-                local_img.thumbnail((photo_max_w, photo_max_h), Image.LANCZOS)
-                photo = local_img
-                logger.info("[PHOTO] Using local asset for %s: %s", player.name, photo_path)
+                ai_img = Image.open(io.BytesIO(ai_bytes)).convert("RGBA")
+                ai_img.thumbnail((photo_max_w, photo_max_h), Image.LANCZOS)
+                photo = ai_img
+                logger.info("[PHOTO] Using Fal AI photo for %s", player.name)
             except Exception as e:
-                logger.error("[PHOTO] Failed to load local asset %s: %s", photo_path, e)
+                logger.error("[PHOTO] Failed to load Fal image: %s", e)
 
-        # 2) Fal AI fallback (only when no local asset is available)
+        # If Fal fails, show placeholder with player name
         if photo is None:
-            ai_bytes = self._generate_ai_photo(player.name, card_type)
-            if ai_bytes:
-                try:
-                    ai_img = Image.open(io.BytesIO(ai_bytes)).convert("RGBA")
-                    ai_img.thumbnail((photo_max_w, photo_max_h), Image.LANCZOS)
-                    photo = ai_img
-                    logger.info("[PHOTO] Using Fal AI photo for %s", player.name)
-                except Exception as e:
-                    logger.error("[PHOTO] Failed to load Fal image: %s", e)
-
-        # 3) Final placeholder if both fail
-        if photo is None:
-            logger.warning("[PHOTO] No photo available for %s — showing placeholder", player.name)
+            logger.warning("[PHOTO] No Fal photo available for %s — showing placeholder", player.name)
 
         if photo:
             px = (W - photo.width) // 2
@@ -319,13 +301,13 @@ class ImageGenerator:
             ImageDraw.Draw(mask).rounded_rectangle([0, 0, photo.width, photo.height], radius=30, fill=255)
             img.paste(photo, (px, py), mask)
         else:
-            # Placeholder when both local and Fal fail
+            # Placeholder when Fal fails
             f_err = self._font(50, bold=True)
             draw.text((W // 2, H // 2 - 50), f"{player.name}", fill=pal["text"], font=f_err, anchor="mm")
             f_sub = self._font(30)
-            draw.text((W // 2, H // 2 + 20), "Photo unavailable", fill=pal["text_dim"], font=f_sub, anchor="mm")
+            draw.text((W // 2, H // 2 + 20), "AI Photo Generation Failed", fill=pal["text_dim"], font=f_sub, anchor="mm")
             f_sub2 = self._font(24)
-            draw.text((W // 2, H // 2 + 60), "Add a file to assets/ or configure Fal", fill=pal["text_dim"], font=f_sub2, anchor="mm")
+            draw.text((W // 2, H // 2 + 60), "Check Fly logs for error", fill=pal["text_dim"], font=f_sub2, anchor="mm")
 
         f_foot = self._font(28)
         draw.text((W // 2, H - 35), f"RACHAD L3ERGONI • {label}", fill=pal["text_dim"], font=f_foot, anchor="mm")
@@ -461,30 +443,13 @@ class ImageGenerator:
         f_stat = self._font(60)
         draw.text((W // 2, 180), f"{stat_name}: {stat_value}", fill=pal["text"], font=f_stat, anchor="mm")
 
-        # ─── PHOTO RESOLUTION (local asset PRIMARY, Fal AI FALLBACK) ───
+        # Fal AI photo for daily card
         card_type = "mvp" if not is_bad else "fraud"
-        photo = None
-
-        if photo_path and os.path.exists(photo_path):
+        ai_bytes = self._generate_ai_photo(player.name, card_type)
+        if ai_bytes:
             try:
-                photo = Image.open(photo_path).convert("RGBA")
+                photo = Image.open(io.BytesIO(ai_bytes)).convert("RGBA")
                 photo.thumbnail((1200, 1200), Image.LANCZOS)
-                logger.info("[PHOTO] Daily card using local asset for %s", player.name)
-            except Exception as e:
-                logger.error("[PHOTO] Daily card local asset failed: %s", e)
-
-        if photo is None:
-            ai_bytes = self._generate_ai_photo(player.name, card_type)
-            if ai_bytes:
-                try:
-                    photo = Image.open(io.BytesIO(ai_bytes)).convert("RGBA")
-                    photo.thumbnail((1200, 1200), Image.LANCZOS)
-                    logger.info("[PHOTO] Daily card using Fal AI for %s", player.name)
-                except Exception as e:
-                    logger.error("[PHOTO] Daily card Fal failed: %s", e)
-
-        if photo is not None:
-            try:
                 px = (W - photo.width) // 2
                 py = 320
                 shadow = Image.new("RGBA", (photo.width + 80, photo.height + 80), (0, 0, 0, 0))
@@ -496,7 +461,7 @@ class ImageGenerator:
                 ImageDraw.Draw(mask).rounded_rectangle([0, 0, photo.width, photo.height], radius=40, fill=255)
                 img.paste(photo, (px, py), mask)
             except Exception as e:
-                logger.error("[PHOTO] Daily card paste failed: %s", e)
+                logger.error("[PHOTO] Daily card Fal failed: %s", e)
 
         nickname = getattr(player, "_squad_info", {}).get("nickname", player.name)
         f_name = self._font(130, bold=True)
