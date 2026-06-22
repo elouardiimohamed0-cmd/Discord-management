@@ -150,25 +150,15 @@ class DiscordRateLimiter:
         logger.info("[SEND] ctx.send #%s by %s", getattr(ctx.channel, "name", "?"), ctx.author.name)
         return await self._send(ctx.send, *args, **kwargs)
 
-async def interaction_send(self, interaction, *args, **kwargs):
-    logger.info("[SEND] interaction by %s", interaction.user.name)
+    async def interaction_send(self, interaction, *args, **kwargs):
+        logger.info("[SEND] interaction by %s", interaction.user.name)
+        if interaction.response.is_done():
+            return await self._send(interaction.followup.send, *args, **kwargs)
+        return await self._send(interaction.response.send_message, *args, **kwargs)
 
-    # If the interaction was already deferred or answered,
-    # always use followup.send.
-    if interaction.response.is_done():
-        return await self._send(interaction.followup.send, *args, **kwargs)
-        async def interaction_defer(self, interaction, thinking=True):
-    """
-    Acknowledge slash command fast to prevent:
-    'L’application ne répond plus'
-    """
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(thinking=thinking)
-            return True
-    except Exception as e:
-        logger.warning("Interaction defer failed: %s", e)
-    return False
+    async def channel_send(self, channel, *args, **kwargs):
+        logger.info("[SEND] channel.send #%s", getattr(channel, "name", "?"))
+        return await self._send(channel.send, *args, **kwargs)
 
 rl = DiscordRateLimiter()
 
@@ -555,58 +545,13 @@ async def ensure_data(ctx: commands.Context):
     return False
 
 async def ensure_data_interaction(interaction: discord.Interaction):
-    """
-    Ensures data exists for slash commands.
-
-    Also defers the interaction immediately, because Discord slash commands
-    must be acknowledged within about 3 seconds.
-    """
-    await rl.interaction_defer(interaction, thinking=True)
-
     if _is_data_fresh():
         return True
-
     if current_club and current_club.players:
-        valid_players = [
-            p for p in current_club.players
-            if getattr(p, "name", None)
-            and isinstance(p.name, str)
-            and p.name.strip()
-        ]
+        valid_players = [p for p in current_club.players if getattr(p, "name", None) and isinstance(p.name, str) and p.name.strip()]
         if len(valid_players) > 0:
             return True
-
-    await rl.interaction_send(
-        interaction,
-        "⏳ Data not loaded yet. Run `!sync` first, then try again."
-    )
-    return False
-    """
-    Slash command safety:
-    Discord requires an acknowledgement within ~3 seconds.
-    This defer prevents: "L'application ne répond plus".
-    """
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(thinking=True)
-    except Exception as e:
-        logger.warning("Interaction defer failed: %s", e)
-
-    if _is_data_fresh():
-        return True
-
-    if current_club and current_club.players:
-        valid_players = [
-            p for p in current_club.players
-            if getattr(p, "name", None) and isinstance(p.name, str) and p.name.strip()
-        ]
-        if len(valid_players) > 0:
-            return True
-
-    await rl.interaction_send(
-        interaction,
-        "⏳ Data not loaded yet. Background sync in progress. Try again in a few minutes."
-    )
+    await rl.interaction_send(interaction, "⏳ Data not loaded yet. Background sync in progress. Try again in a few minutes.")
     return False
 
 # ─────────────────────────────────────────────────────────────
@@ -691,19 +636,13 @@ async def on_command_error(ctx, error):
 async def on_app_command_error(interaction, error):
     logger.error("Slash error: %s", error)
     traceback.print_exc()
-
     msg = f"Error: {str(error)[:500]}"
-
-    if isinstance(error, app_commands.CommandOnCooldown):
-        msg = f"⏳ Cooldown: wait {error.retry_after:.1f}s."
-
     try:
-        if not interaction.response.is_done():
-            await interaction.response.send_message(msg, ephemeral=True)
-        else:
-            await interaction.followup.send(msg, ephemeral=True)
-    except Exception as e:
-        logger.error("Failed to send slash error response: %s", e)
+        if isinstance(error, app_commands.CommandOnCooldown):
+            msg = f"⏳ Cooldown: wait {error.retry_after:.1f}s."
+            await rl.interaction_send(interaction, msg)
+    except Exception:
+        pass
 
 @bot.before_invoke
 async def log_command(ctx):
@@ -1114,6 +1053,7 @@ async def cmd_worst(ctx):
         try:
             worst = StatsEngine.get_worst(current_club.players)
             pos = get_squad_map().get(worst.name, {}).get("position", "CM")
+            roast = darija.roast(worst, pos)
             embed = discord.Embed(title=f"🗑️ WORST PLAYER — {worst.name}", description=roast, color=0x8b0000)
             await rl.ctx_send(ctx, embed=embed)
             asyncio.create_task(_maybe_send_video(ctx.channel, worst, "fraud"))
@@ -1973,7 +1913,8 @@ async def slash_worst(interaction: discord.Interaction):
     if not await ensure_data_interaction(interaction): return
     try:
         worst = StatsEngine.get_worst(current_club.players)
-        roast = darija.roast(worst, "fraud")
+        pos = get_squad_map().get(worst.name, {}).get("position", "CM")
+        roast = darija.roast(worst, pos)
         embed = discord.Embed(title=f"🗑️ WORST PLAYER — {worst.name}", description=roast, color=0x8b0000)
         await rl.interaction_send(interaction, embed=embed)
         asyncio.create_task(_maybe_send_video(interaction.channel, worst, "fraud"))
