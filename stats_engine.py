@@ -17,7 +17,6 @@ class StatsEngine:
         "CF":  {"def": 0.5, "off": 1.4, "pass": 1.0},
     }
 
-    @classmethod
 @classmethod
 def compute_advanced(cls, player: PlayerStats, position: str = "CM") -> PlayerStats:
  """
@@ -218,9 +217,33 @@ def compute_advanced(cls, player: PlayerStats, position: str = "CM") -> PlayerSt
         scored = [(p.impact_score + p.clutch_score, p) for p in players]
         return max(scored, key=lambda x: x[0])[1]
 
-    @classmethod
-    def get_ghost(cls, players: List[PlayerStats]) -> PlayerStats:
-        return min(players, key=lambda p: p.minutes_played / max(p.games, 1))
+@classmethod
+def get_ghost(cls, players: List[PlayerStats]) -> PlayerStats:
+ """
+ Ghost should not depend only on minutes_played.
+ PCT recent match minutes can be incomplete.
+
+ A ghost is:
+ - low rating
+ - low goals
+ - low assists
+ - low passing volume
+ """
+ def ghost_score(p):
+  g = max(getattr(p, "games", 0), 1)
+  rating = getattr(p, "rating_pg", 0) or 0
+  goals_pg = (getattr(p, "goals", 0) or 0) / g
+  assists_pg = (getattr(p, "assists", 0) or 0) / g
+  passes_pg = (getattr(p, "passes_made", 0) or 0) / g
+
+  return (
+   max(0, 7.0 - rating) * 5 +
+   max(0, 0.25 - goals_pg) * 8 +
+   max(0, 0.25 - assists_pg) * 6 +
+   max(0, 15 - passes_pg) * 0.25
+  )
+
+ return max(players, key=ghost_score)
 
     @classmethod
     def get_ball_hog(cls, players: List[PlayerStats]) -> PlayerStats:
