@@ -545,13 +545,32 @@ async def ensure_data(ctx: commands.Context):
     return False
 
 async def ensure_data_interaction(interaction: discord.Interaction):
+    """
+    Slash command safety:
+    Discord requires an acknowledgement within ~3 seconds.
+    This defer prevents: "L'application ne répond plus".
+    """
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(thinking=True)
+    except Exception as e:
+        logger.warning("Interaction defer failed: %s", e)
+
     if _is_data_fresh():
         return True
+
     if current_club and current_club.players:
-        valid_players = [p for p in current_club.players if getattr(p, "name", None) and isinstance(p.name, str) and p.name.strip()]
+        valid_players = [
+            p for p in current_club.players
+            if getattr(p, "name", None) and isinstance(p.name, str) and p.name.strip()
+        ]
         if len(valid_players) > 0:
             return True
-    await rl.interaction_send(interaction, "⏳ Data not loaded yet. Background sync in progress. Try again in a few minutes.")
+
+    await rl.interaction_send(
+        interaction,
+        "⏳ Data not loaded yet. Background sync in progress. Try again in a few minutes."
+    )
     return False
 
 # ─────────────────────────────────────────────────────────────
@@ -1053,7 +1072,6 @@ async def cmd_worst(ctx):
         try:
             worst = StatsEngine.get_worst(current_club.players)
             pos = get_squad_map().get(worst.name, {}).get("position", "CM")
-            roast = darija.roast(worst, pos)
             embed = discord.Embed(title=f"🗑️ WORST PLAYER — {worst.name}", description=roast, color=0x8b0000)
             await rl.ctx_send(ctx, embed=embed)
             asyncio.create_task(_maybe_send_video(ctx.channel, worst, "fraud"))
@@ -1913,8 +1931,7 @@ async def slash_worst(interaction: discord.Interaction):
     if not await ensure_data_interaction(interaction): return
     try:
         worst = StatsEngine.get_worst(current_club.players)
-        pos = get_squad_map().get(worst.name, {}).get("position", "CM")
-        roast = darija.roast(worst, pos)
+        roast = darija.roast(worst, "fraud")
         embed = discord.Embed(title=f"🗑️ WORST PLAYER — {worst.name}", description=roast, color=0x8b0000)
         await rl.interaction_send(interaction, embed=embed)
         asyncio.create_task(_maybe_send_video(interaction.channel, worst, "fraud"))
