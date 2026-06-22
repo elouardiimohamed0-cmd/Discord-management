@@ -128,12 +128,19 @@ class SquadMemory:
         rating = stats.get('rating', 0)
 
         if not row:
+            # New player: INSERT base row, then seed historic high/low from the first rating
+            # so we don't carry the schema defaults (high=0, low=10) forever.
             c.execute('''INSERT INTO player_memories
                 (player_name, total_games, total_goals, total_assists, total_possession_losses,
-                last_rating, best_rating, worst_rating, updated_at)
+                 last_rating, best_rating, worst_rating, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (name, stats.get('games', 0), stats.get('goals', 0), stats.get('assists', 0),
-                stats.get('possession_losses', 0), rating, rating, rating, datetime.now()))
+                 stats.get('possession_losses', 0), rating, rating, rating, datetime.now()))
+            c.execute(
+                "UPDATE player_memories SET historic_high_rating = ?, historic_low_rating = ? "
+                "WHERE player_name = ?",
+                (rating, rating, name),
+            )
         else:
             c.execute('''UPDATE player_memories SET
                 total_games = ?,
@@ -144,23 +151,48 @@ class SquadMemory:
                 updated_at = ?
                 WHERE player_name = ?''',
                 (stats.get('games', 0), stats.get('goals', 0), stats.get('assists', 0),
-                stats.get('possession_losses', 0), rating, datetime.now(), name))
+                 stats.get('possession_losses', 0), rating, datetime.now(), name))
 
-            if rating > row[7]:
-                c.execute("UPDATE player_memories SET best_rating = ? WHERE player_name = ?", (rating, name))
-            if rating < row[8]:
-                c.execute("UPDATE player_memories SET worst_rating = ? WHERE player_name = ?", (rating, name))
-            if rating > row[13]:
-                c.execute("UPDATE player_memories SET historic_high_rating = ? WHERE player_name = ?", (rating, name))
-            if rating < row[14]:
-                c.execute("UPDATE player_memories SET historic_low_rating = ? WHERE player_name = ?", (rating, name))
+            # Column indices (match _init_db schema order):
+            #   7 = last_rating, 8 = best_rating, 9 = worst_rating,
+            #   13 = historic_low_rating, 14 = historic_high_rating
+            best_rating = row[8]
+            worst_rating = row[9]
+            historic_low = row[13]
+            historic_high = row[14]
 
-            if rating < 5.5:
-                c.execute("UPDATE player_memories SET consecutive_bad_games = consecutive_bad_games + 1, consecutive_good_games = 0 WHERE player_name = ?", (name,))
-            elif rating > 7.5:
-                c.execute("UPDATE player_memories SET consecutive_good_games = consecutive_good_games + 1, consecutive_bad_games = 0 WHERE player_name = ?", (name,))
-            else:
-                c.execute("UPDATE player_memories SET consecutive_bad_games = 0, consecutive_good_games = 0 WHERE player_name = ?", (name,))
+            if rating > best_rating:
+                c.execute("UPDATE player_memories SET best_rating = ? WHERE player_name = ?",
+                          (rating, name))
+            if rating < worst_rating:
+                c.execute("UPDATE player_memories SET worst_rating = ? WHERE player_name = ?",
+                          (rating, name))
+            if rating > historic_high:
+                c.execute("UPDATE player_memories SET historic_high_rating = ? WHERE player_name = ?",
+                          (rating, name))
+            if rating < historic_low:
+                c.execute("UPDATE player_memories SET historic_low_rating = ? WHERE player_name = ?",
+                          (rating, name))
+
+        # Streak tracking applies to both new and existing rows.
+        if rating < 5.5:
+            c.execute(
+                "UPDATE player_memories SET consecutive_bad_games = consecutive_bad_games + 1, "
+                "consecutive_good_games = 0 WHERE player_name = ?",
+                (name,),
+            )
+        elif rating > 7.5:
+            c.execute(
+                "UPDATE player_memories SET consecutive_good_games = consecutive_good_games + 1, "
+                "consecutive_bad_games = 0 WHERE player_name = ?",
+                (name,),
+            )
+        else:
+            c.execute(
+                "UPDATE player_memories SET consecutive_bad_games = 0, "
+                "consecutive_good_games = 0 WHERE player_name = ?",
+                (name,),
+            )
 
         conn.commit()
         conn.close()
@@ -340,10 +372,10 @@ class SquadMemory:
         c.execute('''INSERT INTO rivalry_history (player1, player2, p1_wins, p2_wins, ties, last_match_date)
             VALUES (?, ?, 0, 0, 0, ?)
             ON CONFLICT(player1, player2) DO UPDATE SET
-            p1_wins = p1_wins + CASE WHEN ? = player1 THEN 1 ELSE 0 END,
-            p2_wins = p2_wins + CASE WHEN ? = player2 THEN 1 ELSE 0 END,
-            ties = ties + CASE WHEN ? = 'Tie' THEN 1 ELSE 0 END,
-            last_match_date = ?''',
+                p1_wins = p1_wins + CASE WHEN ? = player1 THEN 1 ELSE 0 END,
+                p2_wins = p2_wins + CASE WHEN ? = player2 THEN 1 ELSE 0 END,
+                ties = ties + CASE WHEN ? = 'Tie' THEN 1 ELSE 0 END,
+                last_match_date = ?''',
             (a, b, datetime.now().strftime("%Y-%m-%d"), winner, winner, winner, datetime.now().strftime("%Y-%m-%d")))
         conn.commit()
         conn.close()
