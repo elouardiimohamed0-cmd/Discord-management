@@ -156,6 +156,8 @@ def compute_advanced(cls, player: PlayerStats, position: str = "CM") -> PlayerSt
 
  return player
 
+ return player
+
     @classmethod
     def compute_advanced(cls, player: PlayerStats, position: str = "CM") -> PlayerStats:
         weights = cls.POSITION_WEIGHTS.get(position, cls.POSITION_WEIGHTS["CM"])
@@ -219,6 +221,31 @@ def compute_advanced(cls, player: PlayerStats, position: str = "CM") -> PlayerSt
 
 @classmethod
 def get_ghost(cls, players: List[PlayerStats]) -> PlayerStats:
+ """
+ Ghost should not depend only on minutes_played.
+ PCT recent match minutes can be incomplete.
+
+ A ghost is:
+ - low rating
+ - low goals
+ - low assists
+ - low passing volume
+ """
+ def ghost_score(p):
+  g = max(getattr(p, "games", 0), 1)
+  rating = getattr(p, "rating_pg", 0) or 0
+  goals_pg = (getattr(p, "goals", 0) or 0) / g
+  assists_pg = (getattr(p, "assists", 0) or 0) / g
+  passes_pg = (getattr(p, "passes_made", 0) or 0) / g
+
+  return (
+   max(0, 7.0 - rating) * 5 +
+   max(0, 0.25 - goals_pg) * 8 +
+   max(0, 0.25 - assists_pg) * 6 +
+   max(0, 15 - passes_pg) * 0.25
+  )
+
+ return max(players, key=ghost_score)
  """
  Ghost should not depend only on minutes_played.
  PCT recent match minutes can be incomplete.
