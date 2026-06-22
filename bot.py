@@ -1040,7 +1040,7 @@ async def cmd_mvp(ctx):
             embed.add_field(name="Impact", value=str(mvp.impact_score), inline=True)
             embed.add_field(name="Win %", value=f"{round(mvp.win_rate, 1)}%", inline=True)
             await rl.ctx_send(ctx, file=file, embed=embed)
-            asyncio.create_task(_maybe_send_video(ctx.channel, mvp, "mvp"))
+            #asyncio.create_task(_maybe_send_video(ctx.channel, mvp, "mvp"))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1056,7 +1056,7 @@ async def cmd_worst(ctx):
             roast = darija.roast(worst, pos)
             embed = discord.Embed(title=f"🗑️ WORST PLAYER — {worst.name}", description=roast, color=0x8b0000)
             await rl.ctx_send(ctx, embed=embed)
-            asyncio.create_task(_maybe_send_video(ctx.channel, worst, "fraud"))
+            #asyncio.create_task(_maybe_send_video(ctx.channel, worst, "fraud"))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1072,7 +1072,7 @@ async def cmd_who_sold(ctx):
             roast = darija.fraud(fraud)
             embed = discord.Embed(title=f"🎭 FRAUD DETECTED — {fraud.name}", description=roast, color=0xff4500)
             await rl.ctx_send(ctx, embed=embed)
-            asyncio.create_task(_maybe_send_video(ctx.channel, fraud, "fraud"))
+            #asyncio.create_task(_maybe_send_video(ctx.channel, fraud, "fraud"))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1089,7 +1089,7 @@ async def cmd_carry(ctx):
             praise = darija.carry(carry)
             embed = discord.Embed(title=f"💪 CARRY DETECTED — {carry.name}", description=praise, color=0x00ff00)
             await rl.ctx_send(ctx, embed=embed)
-            asyncio.create_task(_maybe_send_video(ctx.channel, carry, "carry"))
+            #asyncio.create_task(_maybe_send_video(ctx.channel, carry, "carry"))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1146,7 +1146,7 @@ async def cmd_ghost(ctx):
             roast = darija.ghost(ghost)
             embed = discord.Embed(title=f"👻 GHOST DETECTED — {ghost.name}", description=roast, color=0x9370db)
             await rl.ctx_send(ctx, embed=embed)
-            asyncio.create_task(_maybe_send_video(ctx.channel, ghost, "ghost"))
+            #asyncio.create_task(_maybe_send_video(ctx.channel, ghost, "ghost"))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1259,7 +1259,7 @@ async def cmd_court_case(ctx, *, player: str):
             embed.add_field(name="Rating", value=str(round(target.rating_pg, 1)), inline=True)
             embed.add_field(name="Win %", value=f"{round(target.win_rate, 1)}%", inline=True)
             await rl.ctx_send(ctx, file=file, embed=embed)
-            asyncio.create_task(_maybe_send_video(ctx.channel, target, "court"))
+            #asyncio.create_task(_maybe_send_video(ctx.channel, target, "court"))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1275,7 +1275,7 @@ async def cmd_ball_loser(ctx):
             roast = darija.ball_loser(loser)
             embed = discord.Embed(title=f"💀 BALL LOSER — {loser.name}", description=roast, color=0x8b0000)
             await rl.ctx_send(ctx, embed=embed)
-            asyncio.create_task(_maybe_send_video(ctx.channel, None, "match"))
+            #asyncio.create_task(_maybe_send_video(ctx.channel, None, "match"))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1541,7 +1541,8 @@ async def cmd_match_report(ctx):
             color = 0x00ff00 if latest.result == "W" else 0xff0000 if latest.result == "L" else 0xffff00
             embed = discord.Embed(title=f"📋 Match Report: {latest.opponent} {latest.score_for}-{latest.score_against}", description=f"Date: {latest.date.strftime('%d/%m/%Y')}", color=color)
             await rl.ctx_send(ctx, embed=embed)
-            asyncio.create_task(_maybe_send_video(ctx.channel, None, "match", latest.match_id))
+            #
+        #asyncio.create_task(_maybe_send_video(ctx.channel, None, "match", latest.match_id))
         except Exception as e:
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
