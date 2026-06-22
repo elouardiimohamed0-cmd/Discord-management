@@ -887,7 +887,11 @@ async def cmd_stats(ctx, *, player: str):
         try:
             card = imgen.generate_player_photo_card(target, pos, "gold", "PLAYER PROFILE", photo_path=img_path)
             file = discord.File(card, filename=f"{display_name}.png")
-            embed = discord.Embed(title=f"📊 {display_name} — {pos}", color=0x1e90ff)
+embed = discord.Embed(
+    title=f"📊 {display_name} — {pos}",
+    description="Season totals from PCT. Recent-match commands may only show the latest matches available from PCT.",
+    color=0x1e90ff
+)
             embed.add_field(name="Games", value=str(target.games), inline=True)
             embed.add_field(name="Goals", value=str(target.goals), inline=True)
             embed.add_field(name="Assists", value=str(target.assists), inline=True)
@@ -920,7 +924,11 @@ async def cmd_player(ctx, *, player: str):
         try:
             card = imgen.generate_player_photo_card(target, pos, "purple", "PLAYER PROFILE", photo_path=img_path)
             file = discord.File(card, filename=f"{display_name}.png")
-            embed = discord.Embed(title=f"👤 {display_name} — {pos}", color=0x1e90ff)
+           embed = discord.Embed(
+    title=f"👤 {display_name} — {pos}",
+    description="Season totals from PCT. Recent-match commands may only show the latest matches available from PCT.",
+    color=0x1e90ff
+)
             embed.add_field(name="Games", value=str(target.games), inline=True)
             embed.add_field(name="Goals", value=str(target.goals), inline=True)
             embed.add_field(name="Assists", value=str(target.assists), inline=True)
@@ -1033,7 +1041,11 @@ async def cmd_mvp(ctx):
             display_name = mvp.name
             card = imgen.generate_player_photo_card(mvp, pos, "gold", "MAN OF THE MATCH", photo_path=img_path)
             file = discord.File(card, filename="mvp.png")
-            embed = discord.Embed(title=f"🏆 MAN OF THE MATCH — {display_name}", color=0xffd700)
+            embed = discord.Embed(
+    title=f"🏆 SEASON MVP — {display_name}",
+    description="Based on current PCT season totals and bot impact score.",
+    color=0xffd700
+)
             embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
             embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
             embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
@@ -1054,7 +1066,11 @@ async def cmd_worst(ctx):
             worst = StatsEngine.get_worst(current_club.players)
             pos = get_squad_map().get(worst.name, {}).get("position", "CM")
             roast = darija.roast(worst, pos)
-            embed = discord.Embed(title=f"🗑️ WORST PLAYER — {worst.name}", description=roast, color=0x8b0000)
+           embed = discord.Embed(
+    title=f"🗑️ SEASON LOWEST IMPACT — {worst.name}",
+    description=roast,
+    color=0x8b0000
+)
             await rl.ctx_send(ctx, embed=embed)
             #asyncio.create_task(_maybe_send_video(ctx.channel, worst, "fraud"))
         except Exception as e:
@@ -1087,7 +1103,11 @@ async def cmd_carry(ctx):
             carry = StatsEngine.get_carry(current_club.players)
             pos = get_squad_map().get(carry.name, {}).get("position", "CM")
             praise = darija.carry(carry)
-            embed = discord.Embed(title=f"💪 CARRY DETECTED — {carry.name}", description=praise, color=0x00ff00)
+           embed = discord.Embed(
+    title=f"💪 SEASON CARRY — {carry.name}",
+    description=praise,
+    color=0x00ff00
+)
             await rl.ctx_send(ctx, embed=embed)
             #asyncio.create_task(_maybe_send_video(ctx.channel, carry, "carry"))
         except Exception as e:
@@ -1144,7 +1164,11 @@ async def cmd_ghost(ctx):
             ghost = StatsEngine.get_ghost(current_club.players)
             pos = get_squad_map().get(ghost.name, {}).get("position", "CM")
             roast = darija.ghost(ghost)
-            embed = discord.Embed(title=f"👻 GHOST DETECTED — {ghost.name}", description=roast, color=0x9370db)
+            embed = discord.Embed(
+    title=f"👻 LOWEST RECENT INVOLVEMENT — {ghost.name}",
+    description=roast,
+    color=0x9370db
+)
             await rl.ctx_send(ctx, embed=embed)
             #asyncio.create_task(_maybe_send_video(ctx.channel, ghost, "ghost"))
         except Exception as e:
@@ -1176,7 +1200,11 @@ async def cmd_leaderboard(ctx, metric: str = "impact"):
         try:
             card = imgen.generate_leaderboard(current_club.players, metric_value)
             file = discord.File(card, filename="leaderboard.png")
-            embed = discord.Embed(title=f"📊 Leaderboard — {metric.capitalize()}", color=0x1e90ff)
+            embed = discord.Embed(
+    title=f"📊 Season Leaderboard — {metric.capitalize()}",
+    description="Based on PCT season/player totals, not only the latest match list.",
+    color=0x1e90ff
+)
             await rl.ctx_send(ctx, embed=embed, file=file)
         except Exception as e:
             traceback.print_exc()
