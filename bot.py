@@ -2897,7 +2897,7 @@ if __name__ == "__main__":
    sys.exit(0)
   else:
    logger.error("[FATAL] Discord HTTP %d: %s", e.status, e)
-   sys.exit(0)-
+   sys.exit(0)
  except Exception as e:
   logger.error("[FATAL] Unexpected error: %s", e)
   traceback.print_exc()
