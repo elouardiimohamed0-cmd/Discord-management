@@ -836,7 +836,7 @@ async def cmd_help(ctx):
         "**Player Cards:** `!stats [player]` `!player [player]` `!bio [player]`\n\n"
         "**Rankings:** `!mvp` `!worst` `!carry` `!ballon` `!ghost` `!ball_loser` `!playmaker` `!sniper` `!keeper`\n\n"
         "**Roast Engine:** `!fraud [player]` `!who_sold` `!pass` `!court_case [player]` `!hall_of_shame`\n\n"
-        "**Compare:** `!compare p1 p2` `!lastmatch` `!club` `!leaderboard [metric]`\n\n"
+        "**Compare:** `!compare p1 p2` `!lastmatch` `!recent [1-10]` `!club` `!leaderboard [metric]`\n\n"
         "**Form & Records:** `!form [player] [N]` `!records` `!legend` `!match_report`\n\n"
         "**History:** `!rankings` `!awards`\n\n"
     )
