@@ -64,7 +64,7 @@ THEMES = {
 },
 }
 def lerp(a: int, b: int, t: float) -> int:
-return int(a + (b - a) * t)
+    return int(a + (b - a) * t)
 def gradient(size: Tuple[int, int], top: Tuple[int, int, int], bottom: Tuple[int, int, int]) -> Image.Image:
 w, h = size
 img = Image.new("RGBA", size)
