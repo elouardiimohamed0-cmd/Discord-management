@@ -1218,6 +1218,54 @@ async def cmd_lastmatch(ctx):
         traceback.print_exc()
         await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
+@bot.command(name="recent")
+@commands.cooldown(1, 10, commands.BucketType.user)
+async def cmd_recent(ctx, limit: int = 5):
+    if not await ensure_data(ctx):
+        return
+
+    try:
+        limit = max(1, min(int(limit), 10))
+    except Exception:
+        limit = 5
+
+    matches = getattr(current_club, "matches", []) or []
+
+    if not matches:
+        await rl.ctx_send(
+            ctx,
+            "No recent matches loaded. Run `!sync` first, then try again."
+        )
+        return
+
+    recent = matches[:limit]
+
+    embed = discord.Embed(
+        title=f"Recent Matches — latest {len(recent)} available",
+        description=(
+            "This uses the recent match list currently available from PCT. "
+            "Season player stats may include more than these matches."
+        ),
+        color=0x1e90ff,
+    )
+
+    for i, match in enumerate(recent, 1):
+        opponent = getattr(match, "opponent", "Unknown")
+        score_for = getattr(match, "score_for", "?")
+        score_against = getattr(match, "score_against", "?")
+        result = getattr(match, "result", "D")
+        date = getattr(match, "date", "")
+
+        emoji = "✅" if result == "W" else "❌" if result == "L" else "🤝"
+
+        embed.add_field(
+            name=f"{i}. {emoji} vs {opponent}",
+            value=f"Score: {score_for}-{score_against}\nDate: {date}",
+            inline=False,
+        )
+
+    await rl.ctx_send(ctx, embed=embed)
+
 @bot.command(name="club")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_club(ctx):
