@@ -77,6 +77,55 @@ logging.basicConfig(
  handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger("rachad_bot")
+ # ─────────────────────────────────────────────────────────────
+# MATCH POST DEDUPE (prevents reposting same match repeatedly)
+# ─────────────────────────────────────────────────────────────
+_LAST_POST_FP_PATH = os.getenv("LAST_MATCH_FP_PATH", "/tmp/rachad_last_match_fp.json")
+
+def _match_fingerprint(m: MatchResult) -> str:
+    """
+    Stable fingerprint for a match, so we don't repost the same one forever.
+    """
+    if not m:
+        return ""
+    try:
+        opp = str(getattr(m, "opponent", "") or "")
+        sf = int(getattr(m, "score_for", 0) or 0)
+        sa = int(getattr(m, "score_against", 0) or 0)
+        res = str(getattr(m, "result", "") or "")
+
+        dt = getattr(m, "date", None)
+        if isinstance(dt, datetime):
+            dt_key = dt.replace(second=0, microsecond=0).isoformat()
+        else:
+            dt_key = str(dt or "")
+
+        ps = getattr(m, "player_stats", None) or {}
+        ps_count = len(ps) if isinstance(ps, dict) else 0
+
+        raw = f"{opp}|{sf}|{sa}|{res}|{dt_key}|{ps_count}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    except Exception:
+        return ""
+
+def _load_last_posted_fp() -> str:
+    try:
+        if not os.path.exists(_LAST_POST_FP_PATH):
+            return ""
+        with open(_LAST_POST_FP_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return str(data.get("fp", "") or "")
+    except Exception:
+        return ""
+
+def _save_last_posted_fp(fp: str) -> None:
+    try:
+        with open(_LAST_POST_FP_PATH, "w", encoding="utf-8") as f:
+            json.dump({"fp": fp, "saved_at": datetime.now().isoformat()}, f)
+    except Exception:
+        pass
+
+_last_posted_match_fp = _load_last_posted_fp()
 
 # ─────────────────────────────────────────────────────────────
 # INSTANCE LOCK
@@ -693,52 +742,62 @@ async def log_command(ctx):
 # ─────────────────────────────────────────────────────────────
 @tasks.loop(minutes=10)
 async def match_monitor():
- global current_club
- try:
-  data = await scraper.get_club_data(force=False, source="background")
-  if not data:
-   logger.warning("Match monitor: no data from scraper")
-   return
+    global current_club, _last_posted_match_fp
+    try:
+        data = await scraper.get_club_data(force=False, source="background")
+        if not data:
+            logger.warning("Match monitor: no data from scraper")
+            return
 
-  club = _dict_to_club(data)
-  if not club or not club.matches:
-   return
+        club = _dict_to_club(data)
+        if not club or not club.matches:
+            return
 
-  latest = club.matches[0]
-  match_id = getattr(latest, "match_id", None) or f"{latest.date}_{latest.opponent}"
+        latest = club.matches[0]
+        fp = _match_fingerprint(latest)
 
-  if current_club and current_club.matches:
-   last_id = getattr(current_club.matches[0], "match_id", "")
-   if match_id == last_id:
-    logger.info("Match monitor: no new match")
-    return
+        # Update in-memory state (always)
+        current_club = club
+        current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
+        normalize_club_players(current_club)
 
-  current_club = club
-  current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
-  normalize_club_players(current_club)
+        # If we've already posted this exact match, don't repost
+        if fp and fp == _last_posted_match_fp:
+            logger.info("Match monitor: same latest match fingerprint — skipping post")
+            return
 
-  result = f"{latest.score_for}-{latest.score_against}"
-  match_players = get_match_players(current_club, latest)
-  report = darija.match_report(result, match_players)
+        result = f"{latest.score_for}-{latest.score_against}"
+        match_players = get_match_players(current_club, latest)
+        report = darija.match_report(result, match_players)
 
-  match_ch = getattr(Config, "MATCH_CHANNEL_ID", 0)
-  if match_ch:
-   ch = bot.get_channel(match_ch)
-   if ch:
-    await rl.channel_send(ch, report)
+        match_ch = getattr(Config, "MATCH_CHANNEL_ID", 0)
+        if match_ch:
+            ch = bot.get_channel(match_ch)
+            if ch:
+                await rl.channel_send(ch, report)
 
-  lb_ch = getattr(Config, "LEADERBORD_CHANNEL_ID", 0)
-  if lb_ch:
-   ch = bot.get_channel(lb_ch)
-   if ch:
-    color = 0x00ff00 if latest.result == "W" else 0xff0000 if latest.result == "L" else 0xffff00
-    embed = discord.Embed(title=f"Match Report: {latest.opponent} {result}", description=report, color=color)
-    await rl.channel_send(ch, embed)
+        lb_ch = getattr(Config, "LEADERBORD_CHANNEL_ID", 0)
+        if lb_ch:
+            ch = bot.get_channel(lb_ch)
+            if ch:
+                color = 0x00ff00 if latest.result == "W" else 0xff0000 if latest.result == "L" else 0xffff00
+                embed = discord.Embed(
+                    title=f"Match Report: {latest.opponent} {result}",
+                    description=report,
+                    color=color
+                )
+                await rl.channel_send(ch, embed)
 
-  logger.info("Auto-reported match: %s %s", latest.opponent, result)
- except Exception as e:
-  logger.error("Match monitor error: %s", e)
-  traceback.print_exc()
+        # Persist after successful post attempt
+        if fp:
+            _last_posted_match_fp = fp
+            _save_last_posted_fp(fp)
+
+        logger.info("Auto-reported match: %s %s (fp=%s)", latest.opponent, result, fp[:10] if fp else "none")
+
+    except Exception as e:
+        logger.error("Match monitor error: %s", e)
+        traceback.print_exc()
 
 @match_monitor.before_loop
 async def before_match_monitor():
@@ -2838,7 +2897,7 @@ if __name__ == "__main__":
    sys.exit(0)
   else:
    logger.error("[FATAL] Discord HTTP %d: %s", e.status, e)
-   sys.exit(0)
+   sys.exit(0)-
  except Exception as e:
   logger.error("[FATAL] Unexpected error: %s", e)
   traceback.print_exc()
