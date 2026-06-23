@@ -40,8 +40,6 @@ RUN playwright install-deps chromium
 # Copy all source files
 COPY . .
 
-# Generate static premium card templates during deploy build
-RUN python create_card_templates.py
 
 # Expose health check port
 EXPOSE 8000
