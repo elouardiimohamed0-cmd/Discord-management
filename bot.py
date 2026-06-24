@@ -853,14 +853,14 @@ async def milestone_monitor():
 # ─────────────────────────────────────────────────────────────
 # PREFIX COMMANDS — existing 21 + Phase 4 (conditional)
 # ─────────────────────────────────────────────────────────────
-@bot.command(name="ping")
-@commands.cooldown(1, 5, commands.BucketType.user)
-async def cmd_ping(ctx):
+  @bot.command(name="ping")
+ @commands.cooldown(1, 5, commands.BucketType.user)
+ async def cmd_ping(ctx):
  await rl.ctx_send(ctx, "Pong! Bot is alive. Try !sync next.")
 
-@bot.command(name="debug")
-@commands.cooldown(1, 10, commands.BucketType.user)
-async def cmd_debug(ctx):
+  @bot.command(name="debug")
+ @commands.cooldown(1, 10, commands.BucketType.user)
+ async def cmd_debug(ctx):
  scraper_ready = "Yes" if scraper else "No"
  data_loaded = "Yes" if current_club and current_club.players else "No"
  player_count = len(current_club.players) if current_club and current_club.players else 0
@@ -886,7 +886,7 @@ async def cmd_debug(ctx):
  embed = discord.Embed(title="Debug Info", description="\n".join(lines), color=0x808080)
  await rl.ctx_send(ctx, embed=embed)
 
-@bot.command(name="resync")
+ @bot.command(name="resync")
 @commands.is_owner()
 @commands.cooldown(1, 60, commands.BucketType.guild)
 async def cmd_resync(ctx):
@@ -900,7 +900,7 @@ async def cmd_resync(ctx):
   except Exception as e:
    await rl.ctx_send(ctx, f"Resync failed: {e}")
 
-@bot.command(name="help")
+ @bot.command(name="help")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_help(ctx):
  embed = discord.Embed(
@@ -925,7 +925,7 @@ async def cmd_help(ctx):
  embed.add_field(name="All Commands", value=text, inline=False)
  await rl.ctx_send(ctx, embed=embed)
 
-@bot.command(name="sync")
+ @bot.command(name="sync")
 @commands.cooldown(1, 30, commands.BucketType.user)
 async def cmd_sync(ctx):
  async with ctx.typing():
@@ -947,7 +947,7 @@ async def cmd_sync(ctx):
    await rl.ctx_send(ctx, f"Sync failed: {str(e)[:800]}")
 
 # ─── Player commands ──
-@bot.command(name="stats")
+ @bot.command(name="stats")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_stats(ctx, *, player: str):
  if not await ensure_data(ctx): return
@@ -980,7 +980,7 @@ async def cmd_stats(ctx, *, player: str):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="player")
+ @bot.command(name="player")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_player(ctx, *, player: str):
  if not await ensure_data(ctx): return
@@ -1011,7 +1011,7 @@ async def cmd_player(ctx, *, player: str):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="bio")
+ @bot.command(name="bio")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_bio(ctx, *, player: str):
  if not await ensure_data(ctx): return
@@ -1096,7 +1096,7 @@ async def _maybe_send_video(channel, player, video_type, match_id=None):
  except Exception as e:
   logger.error("[VIDEO] Failed to generate/send video: %s", e)
 
-@bot.command(name="mvp")
+ @bot.command(name="mvp")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_mvp(ctx):
  if not await ensure_data(ctx): return
@@ -1122,7 +1122,7 @@ async def cmd_mvp(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="worst")
+ @bot.command(name="worst")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_worst(ctx):
  if not await ensure_data(ctx): return
@@ -1138,7 +1138,7 @@ async def cmd_worst(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="who_sold")
+ @bot.command(name="who_sold")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_who_sold(ctx):
  if not await ensure_data(ctx): return
@@ -1153,7 +1153,7 @@ async def cmd_who_sold(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="carry")
+ @bot.command(name="carry")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_carry(ctx):
  if not await ensure_data(ctx): return
@@ -1168,7 +1168,7 @@ async def cmd_carry(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="fraud")
+ @bot.command(name="fraud")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_fraud(ctx, *, player: str):
  if not await ensure_data(ctx): return
@@ -1191,7 +1191,7 @@ async def cmd_fraud(ctx, *, player: str):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="ballon")
+ @bot.command(name="ballon")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_ballon(ctx):
  if not await ensure_data(ctx): return
@@ -1208,7 +1208,7 @@ async def cmd_ballon(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="ghost")
+ @bot.command(name="ghost")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_ghost(ctx):
  if not await ensure_data(ctx): return
@@ -1223,7 +1223,7 @@ async def cmd_ghost(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="pass")
+ @bot.command(name="pass")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_pass(ctx):
  if not await ensure_data(ctx): return
@@ -1237,7 +1237,7 @@ async def cmd_pass(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="leaderboard")
+ @bot.command(name="leaderboard")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_leaderboard(ctx, metric: str = "impact"):
  if not await ensure_data(ctx): return
@@ -1253,7 +1253,7 @@ async def cmd_leaderboard(ctx, metric: str = "impact"):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="compare")
+ @bot.command(name="compare")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_compare(ctx, player1: str, player2: str):
  if not await ensure_data(ctx): return
@@ -1273,7 +1273,7 @@ async def cmd_compare(ctx, player1: str, player2: str):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="lastmatch")
+ @bot.command(name="lastmatch")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_lastmatch(ctx):
  if not await ensure_data(ctx): return
@@ -1289,7 +1289,7 @@ async def cmd_lastmatch(ctx):
   traceback.print_exc()
   await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="recent")
+ @bot.command(name="recent")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_recent(ctx, limit: int = 5):
  if not await ensure_data(ctx):
@@ -1337,7 +1337,7 @@ async def cmd_recent(ctx, limit: int = 5):
 
  await rl.ctx_send(ctx, embed=embed)
 
-@bot.command(name="club")
+ @bot.command(name="club")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_club(ctx):
  if not await ensure_data(ctx): return
@@ -1352,7 +1352,7 @@ async def cmd_club(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="court_case")
+ @bot.command(name="court_case")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_court_case(ctx, *, player: str):
  if not await ensure_data(ctx): return
@@ -1383,7 +1383,7 @@ async def cmd_court_case(ctx, *, player: str):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="ball_loser")
+ @bot.command(name="ball_loser")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_ball_loser(ctx):
  if not await ensure_data(ctx): return
@@ -1398,7 +1398,7 @@ async def cmd_ball_loser(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="playmaker")
+ @bot.command(name="playmaker")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_playmaker(ctx):
  if not await ensure_data(ctx): return
@@ -1421,7 +1421,7 @@ async def cmd_playmaker(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="sniper")
+ @bot.command(name="sniper")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_sniper(ctx):
  if not await ensure_data(ctx): return
@@ -1443,7 +1443,7 @@ async def cmd_sniper(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="keeper")
+ @bot.command(name="keeper")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_keeper(ctx):
  if not await ensure_data(ctx): return
@@ -1461,7 +1461,7 @@ async def cmd_keeper(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="rankings")
+ @bot.command(name="rankings")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_rankings(ctx):
  if not await ensure_data(ctx): return
@@ -1483,7 +1483,7 @@ async def cmd_rankings(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="awards")
+ @bot.command(name="awards")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_awards(ctx):
  if not await ensure_data(ctx): return
@@ -1503,7 +1503,7 @@ async def cmd_awards(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="form")
+ @bot.command(name="form")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_form(ctx, *, player: str):
  if not await ensure_data(ctx): return
@@ -1553,7 +1553,7 @@ async def cmd_form(ctx, *, player: str):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="records")
+ @bot.command(name="records")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_records(ctx):
  if not await ensure_data(ctx): return
@@ -1603,7 +1603,7 @@ async def cmd_records(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="legend")
+ @bot.command(name="legend")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_legend(ctx):
  if not await ensure_data(ctx): return
@@ -1628,7 +1628,7 @@ async def cmd_legend(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="hall_of_shame")
+ @bot.command(name="hall_of_shame")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_hall_of_shame(ctx):
  if not await ensure_data(ctx): return
@@ -1641,7 +1641,7 @@ async def cmd_hall_of_shame(ctx):
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="match_report")
+ @bot.command(name="match_report")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_match_report(ctx):
  if not await ensure_data(ctx): return
@@ -1661,7 +1661,7 @@ async def cmd_match_report(ctx):
 
 # ─── PHASE 4 PREFIX COMMANDS (conditional) ───
 if PHASE4_AVAILABLE:
- @bot.command(name="hall_of_fame")
+  @bot.command(name="hall_of_fame")
  @commands.cooldown(1, 10, commands.BucketType.user)
  async def cmd_hall_of_fame(ctx):
   if not await ensure_data(ctx): return
@@ -1683,7 +1683,7 @@ if PHASE4_AVAILABLE:
     traceback.print_exc()
     await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
- @bot.command(name="rivalry")
+  @bot.command(name="rivalry")
  @commands.cooldown(1, 5, commands.BucketType.user)
  async def cmd_rivalry(ctx, player1: str, player2: str):
   if not await ensure_data(ctx): return
@@ -1709,7 +1709,7 @@ if PHASE4_AVAILABLE:
     traceback.print_exc()
     await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
- @bot.command(name="fraud_score")
+  @bot.command(name="fraud_score")
  @commands.cooldown(1, 5, commands.BucketType.user)
  async def cmd_fraud_score(ctx, *, player: str):
   """
@@ -1749,7 +1749,7 @@ if PHASE4_AVAILABLE:
     traceback.print_exc()
     await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
-@bot.command(name="carry_score")
+ @bot.command(name="carry_score")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_carry_score(ctx, *, player: str):
     """
@@ -1814,7 +1814,7 @@ async def cmd_carry_score(ctx, *, player: str):
             traceback.print_exc()
             await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
- @bot.command(name="ghost_score")
+  @bot.command(name="ghost_score")
  @commands.cooldown(1, 5, commands.BucketType.user)
  async def cmd_ghost_score(ctx, *, player: str):
   """
@@ -1854,7 +1854,7 @@ async def cmd_carry_score(ctx, *, player: str):
     traceback.print_exc()
     await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
- @bot.command(name="excuses")
+  @bot.command(name="excuses")
  @commands.cooldown(1, 5, commands.BucketType.user)
  async def cmd_excuses(ctx, *, player: str):
   if not await ensure_data(ctx): return
@@ -1871,7 +1871,7 @@ async def cmd_carry_score(ctx, *, player: str):
     traceback.print_exc()
     await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
- @bot.command(name="match_poster")
+  @bot.command(name="match_poster")
  @commands.cooldown(1, 10, commands.BucketType.user)
  async def cmd_match_poster(ctx):
   if not await ensure_data(ctx): return
