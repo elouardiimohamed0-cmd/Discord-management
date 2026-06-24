@@ -291,39 +291,43 @@ def normalize_club_players(club):
 # ─── MATCH-ONLY PLAYER FILTER ───
 
 def _find_player_match_stats(latest: MatchResult, player: PlayerStats) -> Optional[dict]:
-    """
-    Return match.player_stats dict for this player (latest match).
-    Uses _raw_psn first then name; includes contains fallback.
-    """
-    if not latest or not getattr(latest, "player_stats", None):
-        return None
+ """
+ Return match.player_stats dict for this player (latest match).
+ Uses _raw_psn first then name; includes contains fallback.
+ """
+ if not latest or not getattr(latest, "player_stats", None):
+  return None
 
-    ps = latest.player_stats or {}
-    if not isinstance(ps, dict) or not ps:
-        return None
+ ps = latest.player_stats or {}
+ if not isinstance(ps, dict) or not ps:
+  return None
 
-    raw_psn = (getattr(player, "_raw_psn", "") or "").strip().lower()
-    name = (getattr(player, "name", "") or "").strip().lower()
+ raw_psn = (getattr(player, "_raw_psn", "") or "").strip().lower()
+ name = (getattr(player, "name", "") or "").strip().lower()
 
-    for k, v in ps.items():
-        if not isinstance(k, str):
-            continue
-        kl = k.strip().lower()
-        if raw_psn and kl == raw_psn:
-            return v
-        if name and kl == name:
-            return v
+ for k, v in ps.items():
+  if not isinstance(k, str):
+   continue
+  kl = k.strip().lower()
+  if raw_psn and kl == raw_psn:
+   return v
+  if name and kl == name:
+   return v
 
-    for k, v in ps.items():
-        if not isinstance(k, str):
-            continue
-        kl = k.strip().lower()
-        if raw_psn and (raw_psn in kl or kl in raw_psn):
-            return v
-        if name and (name in kl or kl in name):
-            return v
+ for k, v in ps.items():
+  if not isinstance(k, str):
+   continue
+  kl = k.strip().lower()
+  if raw_psn and (raw_psn in kl or kl in raw_psn):
+   return v
+  if name and (name in kl or kl in name):
+   return v
 
-    return None
+ return None
+
+ # ─────────────────────────────────────────────────────────────
+# BOT SETUP
+# ─────────────────────────────────────────────────────────────
 
  raw_psn = (getattr(player, "_raw_psn", "") or "").strip().lower()
  name = (getattr(player, "name", "") or "").strip().lower()
