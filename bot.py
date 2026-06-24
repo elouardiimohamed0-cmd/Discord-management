@@ -289,28 +289,39 @@ def normalize_club_players(club):
      p.name = p.name.strip()
 
 # ─── MATCH-ONLY PLAYER FILTER ───
-def get_match_players(club: ClubStats, match: MatchResult):
- if not hasattr(match, "player_stats") or not match.player_stats:
-  return club.players
- match_psns = set(k.lower() for k in match.player_stats.keys())
- result = []
- for p in club.players:
-  raw_psn = getattr(p, "_raw_psn", "").lower()
-  p_name = getattr(p, "name", "").lower()
-  if raw_psn in match_psns or p_name in match_psns:
-   result.append(p)
- return result if result else club.players
-
 def _find_player_match_stats(latest: MatchResult, player: PlayerStats) -> Optional[dict]:
- """
- Return match.player_stats dict for this player (latest match).
- Uses _raw_psn first then name; includes contains fallback.
- """
- if not latest or not getattr(latest, "player_stats", None):
-  return None
- ps = latest.player_stats or {}
- if not isinstance(ps, dict) or not ps:
-  return None
+    """
+    Return match.player_stats dict for this player (latest match).
+    Uses _raw_psn first then name; includes contains fallback.
+    """
+    if not latest or not getattr(latest, "player_stats", None):
+        return None
+    ps = latest.player_stats or {}
+    if not isinstance(ps, dict) or not ps:
+        return None
+
+    raw_psn = (getattr(player, "_raw_psn", "") or "").strip().lower()
+    name = (getattr(player, "name", "") or "").strip().lower()
+
+    for k, v in ps.items():
+        if not isinstance(k, str):
+            continue
+        kl = k.strip().lower()
+        if raw_psn and kl == raw_psn:
+            return v
+        if name and kl == name:
+            return v
+
+    for k, v in ps.items():
+        if not isinstance(k, str):
+            continue
+        kl = k.strip().lower()
+        if raw_psn and (raw_psn in kl or kl in raw_psn):
+            return v
+        if name and (name in kl or kl in name):
+            return v
+
+    return None
 
  raw_psn = (getattr(player, "_raw_psn", "") or "").strip().lower()
  name = (getattr(player, "name", "") or "").strip().lower()
@@ -1759,55 +1770,70 @@ if PHASE4_AVAILABLE:
     traceback.print_exc()
     await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
- @bot.command(name="carry_score")
- @commands.cooldown(1, 5, commands.BucketType.user)
- async def cmd_carry_score(ctx, *, player: str):
-  """
-  FIX: Carry score must use latest match stats (match.players only).
-  """
-  if not await ensure_data(ctx): return
-  target = find_player(player)
-  if not target:
-   await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
-   return
-  if not current_club.matches:
-   await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-   return
-  latest = current_club.matches[0]
-  ms = _find_player_match_stats(latest, target)
-  if not ms:
-   await rl.ctx_send(ctx, f"⚠️ {target.name} ما لعبش آخر ماتش. (match.players only)")
-   return
-  async with ctx.typing():
-   try:
-    carry = CarryScoreSystem.compute_match_carry(ms)
-    sq_info = getattr(target, "_squad_info", {}) or {}
-    pos = sq_info.get("position", "CM")
-    img_path = resolve_image_path(sq_info.get("image"))
-    card = imgen.generate_player_photo_card(target, pos, "blue", f"CARRY(MATCH): {carry['classification']}", photo_path=img_path)
-    file = discord.File(card, filename=f"{target.name}_carry_match.png")
-    embed = discord.Embed(title=f"💪 Carry Score (Latest Match) — {target.name}", color=0x00bfff)
-    embed.add_field(name="Score", value=str(carry["score"]), inline=True)
-    embed.add_field(name="Classification", value=carry["classification"], inline=True)
+@bot.command(name="carry_score")
+@commands.cooldown(1, 5, commands.BucketType.user)
+async def cmd_carry_score(ctx, *, player: str):
+    """
+    Carry score must use latest match stats ONLY (match.players only).
+    """
+    if not await ensure_data(ctx): return
+    if not current_club or not getattr(current_club, "matches", None):
+        await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
+        return
 
-    pa = ms.get("passes_attempted", 0)
-    pc = ms.get("passes_completed", 0)
-    pass_pct = round(pc / max(pa, 1) * 100, 1) if pa else 0.0
-    rating = ms.get("rating", 0)
-    if rating and rating > 10:
-     rating = round(rating / 10.0, 1)
-    evidence = (
-     f"Goals: {ms.get('goals', 0)} | Assists: {ms.get('assists', 0)} | "
-     f"Tackles: {ms.get('tackles', 0)} | Interceptions: {ms.get('interceptions', 0)}\n"
-     f"Pass%: {pass_pct} | Poss Lost: {max(0, pa - pc)} | Rating: {rating}"
-    )
-    embed.add_field(name="Evidence (match.players)", value=evidence, inline=False)
-    embed.set_footer(text=f"vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
+    target = find_player(player)
+    if not target:
+        await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
+        return
 
-    await rl.ctx_send(ctx, file=file, embed=embed)
-   except Exception as e:
-    traceback.print_exc()
-    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
+    latest = current_club.matches[0]
+    ms = _find_player_match_stats(latest, target)
+    if not ms:
+        await rl.ctx_send(ctx, f"⚠️ {target.name} ما لعبش آخر ماتش. (match.players only)")
+        return
+
+    async with ctx.typing():
+        try:
+            carry = CarryScoreSystem.compute_match_carry(ms)
+
+            sq_info = getattr(target, "_squad_info", {}) or {}
+            pos = sq_info.get("position", "CM")
+            img_path = resolve_image_path(sq_info.get("image"))
+
+            card = imgen.generate_player_photo_card(
+                target,
+                pos,
+                "blue",
+                f"CARRY(MATCH): {carry['classification']}",
+                photo_path=img_path
+            )
+            file = discord.File(card, filename=f"{target.name}_carry_match.png")
+
+            embed = discord.Embed(title=f"💪 Carry Score (Latest Match) — {target.name}", color=0x00bfff)
+            embed.add_field(name="Score", value=str(carry["score"]), inline=True)
+            embed.add_field(name="Classification", value=carry["classification"], inline=True)
+
+            passes_att = ms.get("passes_attempted", 0)
+            passes_comp = ms.get("passes_completed", 0)
+            pass_pct = round(passes_comp / max(passes_att, 1) * 100, 1) if passes_att else 0.0
+
+            rating = ms.get("rating", 0)
+            if rating and rating > 10:
+                rating = round(rating / 10.0, 1)
+
+            evidence = (
+                f"Goals: {ms.get('goals', 0)} | Assists: {ms.get('assists', 0)} | "
+                f"Tackles: {ms.get('tackles', 0)} | Interceptions: {ms.get('interceptions', 0)}\n"
+                f"Pass%: {pass_pct} | Poss Lost: {max(0, passes_att - passes_comp)} | Rating: {rating}"
+            )
+            embed.add_field(name="Evidence (match.players)", value=evidence, inline=False)
+            embed.set_footer(text=f"vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
+
+            await rl.ctx_send(ctx, file=file, embed=embed)
+
+        except Exception as e:
+            traceback.print_exc()
+            await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
  @bot.command(name="ghost_score")
  @commands.cooldown(1, 5, commands.BucketType.user)
@@ -2115,53 +2141,68 @@ if PHASE4_AVAILABLE:
    traceback.print_exc()
    await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
- @bot.tree.command(name="carry_score", description="Carry score (latest match only)")
- @app_commands.describe(player="Player name")
- @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
- async def slash_carry_score(interaction: discord.Interaction, player: str):
-  await interaction.response.defer()
-  if not await ensure_data_interaction(interaction): return
-  target = find_player(player)
-  if not target:
-   await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
-   return
-  if not current_club.matches:
-   await rl.interaction_send(interaction, "ما لقيتش match history. دير /sync.")
-   return
-  latest = current_club.matches[0]
-  ms = _find_player_match_stats(latest, target)
-  if not ms:
-   await rl.interaction_send(interaction, f"⚠️ {target.name} ما لعبش آخر ماتش. (match.players only)")
-   return
-  try:
-   carry = CarryScoreSystem.compute_match_carry(ms)
-   sq_info = getattr(target, "_squad_info", {}) or {}
-   pos = sq_info.get("position", "CM")
-   img_path = resolve_image_path(sq_info.get("image"))
-   card = imgen.generate_player_photo_card(target, pos, "blue", f"CARRY(MATCH): {carry['classification']}", photo_path=img_path)
-   file = discord.File(card, filename=f"{target.name}_carry_match.png")
-   embed = discord.Embed(title=f"💪 Carry Score (Latest Match) — {target.name}", color=0x00bfff)
-   embed.add_field(name="Score", value=str(carry["score"]), inline=True)
-   embed.add_field(name="Classification", value=carry["classification"], inline=True)
+@bot.tree.command(name="carry_score", description="Carry score (latest match only)")
+@app_commands.describe(player="Player name")
+@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
+async def slash_carry_score(interaction: discord.Interaction, player: str):
+    await interaction.response.defer()
+    if not await ensure_data_interaction(interaction): return
+    if not current_club or not getattr(current_club, "matches", None):
+        await rl.interaction_send(interaction, "ما لقيتش match history. دير /sync.")
+        return
 
-   pa = ms.get("passes_attempted", 0)
-   pc = ms.get("passes_completed", 0)
-   pass_pct = round(pc / max(pa, 1) * 100, 1) if pa else 0.0
-   rating = ms.get("rating", 0)
-   if rating and rating > 10:
-    rating = round(rating / 10.0, 1)
-   evidence = (
-    f"Goals: {ms.get('goals', 0)} | Assists: {ms.get('assists', 0)} | "
-    f"Tackles: {ms.get('tackles', 0)} | Interceptions: {ms.get('interceptions', 0)}\n"
-    f"Pass%: {pass_pct} | Poss Lost: {max(0, pa - pc)} | Rating: {rating}"
-   )
-   embed.add_field(name="Evidence (match.players)", value=evidence, inline=False)
-   embed.set_footer(text=f"vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
+    target = find_player(player)
+    if not target:
+        await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
+        return
 
-   await rl.interaction_send(interaction, file=file, embed=embed)
-  except Exception as e:
-   traceback.print_exc()
-   await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
+    latest = current_club.matches[0]
+    ms = _find_player_match_stats(latest, target)
+    if not ms:
+        await rl.interaction_send(interaction, f"⚠️ {target.name} ما لعبش آخر ماتش. (match.players only)")
+        return
+
+    try:
+        carry = CarryScoreSystem.compute_match_carry(ms)
+
+        sq_info = getattr(target, "_squad_info", {}) or {}
+        pos = sq_info.get("position", "CM")
+        img_path = resolve_image_path(sq_info.get("image"))
+
+        card = imgen.generate_player_photo_card(
+            target,
+            pos,
+            "blue",
+            f"CARRY(MATCH): {carry['classification']}",
+            photo_path=img_path
+        )
+        file = discord.File(card, filename=f"{target.name}_carry_match.png")
+
+        embed = discord.Embed(title=f"💪 Carry Score (Latest Match) — {target.name}", color=0x00bfff)
+        embed.add_field(name="Score", value=str(carry["score"]), inline=True)
+        embed.add_field(name="Classification", value=carry["classification"], inline=True)
+
+        passes_att = ms.get("passes_attempted", 0)
+        passes_comp = ms.get("passes_completed", 0)
+        pass_pct = round(passes_comp / max(passes_att, 1) * 100, 1) if passes_att else 0.0
+
+        rating = ms.get("rating", 0)
+        if rating and rating > 10:
+            rating = round(rating / 10.0, 1)
+
+        evidence = (
+            f"Goals: {ms.get('goals', 0)} | Assists: {ms.get('assists', 0)} | "
+            f"Tackles: {ms.get('tackles', 0)} | Interceptions: {ms.get('interceptions', 0)}\n"
+            f"Pass%: {pass_pct} | Poss Lost: {max(0, passes_att - passes_comp)} | Rating: {rating}"
+        )
+        embed.add_field(name="Evidence (match.players)", value=evidence, inline=False)
+        embed.set_footer(text=f"vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
+
+        await rl.interaction_send(interaction, file=file, embed=embed)
+
+    except Exception as e:
+        traceback.print_exc()
+        await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
  @bot.tree.command(name="ghost_score", description="Ghost score (latest match only)")
  @app_commands.describe(player="Player name")
