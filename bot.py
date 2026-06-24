@@ -328,32 +328,6 @@ def _find_player_match_stats(latest: MatchResult, player: PlayerStats) -> Option
 # ─────────────────────────────────────────────────────────────
 # BOT SETUP
 # ─────────────────────────────────────────────────────────────
- raw_psn = (getattr(player, "_raw_psn", "") or "").strip().lower()
- name = (getattr(player, "name", "") or "").strip().lower()
-
- for k, v in ps.items():
-  if not isinstance(k, str):
-   continue
-  kl = k.strip().lower()
-  if raw_psn and kl == raw_psn:
-   return v
-  if name and kl == name:
-   return v
-
- for k, v in ps.items():
-  if not isinstance(k, str):
-   continue
-  kl = k.strip().lower()
-  if raw_psn and (raw_psn in kl or kl in raw_psn):
-   return v
-  if name and (name in kl or kl in name):
-   return v
-
- return None
-
-# ─────────────────────────────────────────────────────────────
-# BOT SETUP
-# ─────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
