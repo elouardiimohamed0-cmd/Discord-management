@@ -1902,12 +1902,12 @@ async def cmd_carry_score(ctx, *, player: str):
 # ─────────────────────────────────────────────────────────────
 # SLASH COMMANDS — existing + Phase 4 (conditional)
 # ─────────────────────────────────────────────────────────────
-@bot.tree.command(name="ping", description="Test if bot is responding")
+ @bot.tree.command(name="ping", description="Test if bot is responding")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_ping(interaction: discord.Interaction):
  await rl.interaction_send(interaction, "Pong! Try /sync next.")
 
-@bot.tree.command(name="debug", description="Show bot state")
+ @bot.tree.command(name="debug", description="Show bot state")
 @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
 async def slash_debug(interaction: discord.Interaction):
  scraper_ready = "Yes" if scraper else "No"
@@ -1939,7 +1939,7 @@ async def slash_debug(interaction: discord.Interaction):
  embed = discord.Embed(title="Debug Info", description="\n".join(lines), color=0x808080)
  await rl.interaction_send(interaction, embed=embed)
 
-@bot.tree.command(name="sync", description="Manual sync from ProClubsTracker")
+ @bot.tree.command(name="sync", description="Manual sync from ProClubsTracker")
 @app_commands.checks.cooldown(1, 30.0, key=lambda i: i.user.id)
 async def slash_sync(interaction: discord.Interaction):
  await interaction.response.defer()
@@ -1956,7 +1956,7 @@ async def slash_sync(interaction: discord.Interaction):
   logger.error("SYNC ERROR: %s", tb)
   await rl.interaction_send(interaction, f"Sync failed: {str(e)[:800]}")
 
-@bot.tree.command(name="stats", description="Player stats + premium photo card")
+ @bot.tree.command(name="stats", description="Player stats + premium photo card")
 @app_commands.describe(player="Player name, PSN, or nickname")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_stats(interaction: discord.Interaction, player: str):
@@ -1991,7 +1991,7 @@ async def slash_stats(interaction: discord.Interaction, player: str):
   traceback.print_exc()
   await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
-@bot.tree.command(name="player", description="Complete player profile")
+ @bot.tree.command(name="player", description="Complete player profile")
 @app_commands.describe(player="Player name")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_player(interaction: discord.Interaction, player: str):
@@ -2023,7 +2023,7 @@ async def slash_player(interaction: discord.Interaction, player: str):
   traceback.print_exc()
   await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
-@bot.tree.command(name="bio", description="Show player bio from squad.json")
+ @bot.tree.command(name="bio", description="Show player bio from squad.json")
 @app_commands.describe(player="Player name")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_bio(interaction: discord.Interaction, player: str):
@@ -2050,7 +2050,7 @@ async def slash_bio(interaction: discord.Interaction, player: str):
   traceback.print_exc()
   await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
-@bot.tree.command(name="help", description="Show all commands")
+ @bot.tree.command(name="help", description="Show all commands")
 @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
 async def slash_help(interaction: discord.Interaction):
  await interaction.response.defer()
@@ -2082,7 +2082,7 @@ async def slash_help(interaction: discord.Interaction):
 
 # ─── PHASE 4 SLASH COMMANDS (conditional) ───
 if PHASE4_AVAILABLE:
- @bot.tree.command(name="fraud_score", description="Fraud score (latest match only)")
+  @bot.tree.command(name="fraud_score", description="Fraud score (latest match only)")
  @app_commands.describe(player="Player name")
  @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
  async def slash_fraud_score(interaction: discord.Interaction, player: str):
@@ -2120,7 +2120,7 @@ if PHASE4_AVAILABLE:
    traceback.print_exc()
    await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
-@bot.tree.command(name="carry_score", description="Carry score (latest match only)")
+ @bot.tree.command(name="carry_score", description="Carry score (latest match only)")
 @app_commands.describe(player="Player name")
 @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def slash_carry_score(interaction: discord.Interaction, player: str):
@@ -2183,7 +2183,7 @@ async def slash_carry_score(interaction: discord.Interaction, player: str):
         traceback.print_exc()
         await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
- @bot.tree.command(name="ghost_score", description="Ghost score (latest match only)")
+  @bot.tree.command(name="ghost_score", description="Ghost score (latest match only)")
  @app_commands.describe(player="Player name")
  @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
  async def slash_ghost_score(interaction: discord.Interaction, player: str):
