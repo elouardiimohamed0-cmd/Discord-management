@@ -5,16 +5,16 @@ except ImportError:
  AUTO_TEMPLATES_AVAILABLE = False
 
 import os
-import io # ✅ needed for io.BytesIO in _maybe_send_video
+import io  # ✅ needed for io.BytesIO in _maybe_send_video
 import sys
 import asyncio
 import logging
 import traceback
 import time
 import json
-import hashlib # ✅ needed for video cache
+import hashlib  # ✅ needed for video cache + match fingerprint
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
@@ -54,14 +54,14 @@ generate_weekly_awards_card = None
 
 try:
  from ecosystem_engine import (
- FraudScoreSystem, CarryScoreSystem, GhostScoreSystem,
- HallOfShame, HallOfFame, RivalrySystem, WeeklyAwards,
- MilestoneTracker, ExcusesEngine, MatchPosterEngine
+  FraudScoreSystem, CarryScoreSystem, GhostScoreSystem,
+  HallOfShame, HallOfFame, RivalrySystem, WeeklyAwards,
+  MilestoneTracker, ExcusesEngine, MatchPosterEngine
  )
  from image_gen_ecosystem import (
- generate_match_poster, generate_hall_of_shame_card,
- generate_hall_of_fame_card, generate_rivalry_card,
- generate_milestone_card, generate_weekly_awards_card
+  generate_match_poster, generate_hall_of_shame_card,
+  generate_hall_of_fame_card, generate_rivalry_card,
+  generate_milestone_card, generate_weekly_awards_card
  )
  PHASE4_AVAILABLE = True
  print("[PHASE4] Ecosystem engine loaded successfully")
@@ -77,53 +77,54 @@ logging.basicConfig(
  handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger("rachad_bot")
- # ─────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────
 # MATCH POST DEDUPE (prevents reposting same match repeatedly)
 # ─────────────────────────────────────────────────────────────
 _LAST_POST_FP_PATH = os.getenv("LAST_MATCH_FP_PATH", "/tmp/rachad_last_match_fp.json")
 
 def _match_fingerprint(m: MatchResult) -> str:
-    """
-    Stable fingerprint for a match, so we don't repost the same one forever.
-    """
-    if not m:
-        return ""
-    try:
-        opp = str(getattr(m, "opponent", "") or "")
-        sf = int(getattr(m, "score_for", 0) or 0)
-        sa = int(getattr(m, "score_against", 0) or 0)
-        res = str(getattr(m, "result", "") or "")
+ """
+ Stable fingerprint for a match so we don't repost the same one forever.
+ """
+ if not m:
+  return ""
+ try:
+  opp = str(getattr(m, "opponent", "") or "")
+  sf = int(getattr(m, "score_for", 0) or 0)
+  sa = int(getattr(m, "score_against", 0) or 0)
+  res = str(getattr(m, "result", "") or "")
 
-        dt = getattr(m, "date", None)
-        if isinstance(dt, datetime):
-            dt_key = dt.replace(second=0, microsecond=0).isoformat()
-        else:
-            dt_key = str(dt or "")
+  dt = getattr(m, "date", None)
+  if isinstance(dt, datetime):
+   dt_key = dt.replace(second=0, microsecond=0).isoformat()
+  else:
+   dt_key = str(dt or "")
 
-        ps = getattr(m, "player_stats", None) or {}
-        ps_count = len(ps) if isinstance(ps, dict) else 0
+  ps = getattr(m, "player_stats", None) or {}
+  ps_count = len(ps) if isinstance(ps, dict) else 0
 
-        raw = f"{opp}|{sf}|{sa}|{res}|{dt_key}|{ps_count}"
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-    except Exception:
-        return ""
+  raw = f"{opp}|{sf}|{sa}|{res}|{dt_key}|{ps_count}"
+  return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+ except Exception:
+  return ""
 
 def _load_last_posted_fp() -> str:
-    try:
-        if not os.path.exists(_LAST_POST_FP_PATH):
-            return ""
-        with open(_LAST_POST_FP_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return str(data.get("fp", "") or "")
-    except Exception:
-        return ""
+ try:
+  if not os.path.exists(_LAST_POST_FP_PATH):
+   return ""
+  with open(_LAST_POST_FP_PATH, "r", encoding="utf-8") as f:
+   data = json.load(f)
+  return str(data.get("fp", "") or "")
+ except Exception:
+  return ""
 
 def _save_last_posted_fp(fp: str) -> None:
-    try:
-        with open(_LAST_POST_FP_PATH, "w", encoding="utf-8") as f:
-            json.dump({"fp": fp, "saved_at": datetime.now().isoformat()}, f)
-    except Exception:
-        pass
+ try:
+  with open(_LAST_POST_FP_PATH, "w", encoding="utf-8") as f:
+   json.dump({"fp": fp, "saved_at": datetime.now().isoformat()}, f)
+ except Exception:
+  pass
 
 _last_posted_match_fp = _load_last_posted_fp()
 
@@ -289,56 +290,50 @@ def normalize_club_players(club):
 
 # ─── MATCH-ONLY PLAYER FILTER ───
 def get_match_players(club: ClubStats, match: MatchResult):
- """
- Return ONLY players who actually played in `match.player_stats`.
- If the match has no player_stats (older data), fallback to club.players.
- """
- if not club or not getattr(club, "players", None):
-  return []
- if not match or not hasattr(match, "player_stats") or not match.player_stats:
+ if not hasattr(match, "player_stats") or not match.player_stats:
   return club.players
-
  match_psns = set(k.lower() for k in match.player_stats.keys())
  result = []
  for p in club.players:
   raw_psn = getattr(p, "_raw_psn", "").lower()
   p_name = getattr(p, "name", "").lower()
-  # player_stats keys may be PSN/proName; we accept either
   if raw_psn in match_psns or p_name in match_psns:
    result.append(p)
  return result if result else club.players
 
-def get_latest_match(club: ClubStats) -> Optional[MatchResult]:
- if not club or not getattr(club, "matches", None):
+def _find_player_match_stats(latest: MatchResult, player: PlayerStats) -> Optional[dict]:
+ """
+ Return match.player_stats dict for this player (latest match).
+ Uses _raw_psn first then name; includes contains fallback.
+ """
+ if not latest or not getattr(latest, "player_stats", None):
   return None
- if len(club.matches) == 0:
+ ps = latest.player_stats or {}
+ if not isinstance(ps, dict) or not ps:
   return None
- return club.matches[0]
 
-def get_latest_match_context(club: ClubStats) -> Tuple[Optional[MatchResult], List[PlayerStats]]:
- """
- Central Phase-1 rule: award/roast commands must be LATEST MATCH ONLY,
- and only list players that actually played.
- """
- latest = get_latest_match(club)
- if not latest:
-  return None, []
- players = get_match_players(club, latest)
- return latest, players
+ raw_psn = (getattr(player, "_raw_psn", "") or "").strip().lower()
+ name = (getattr(player, "name", "") or "").strip().lower()
 
-def require_latest_match_players(ctx_or_interaction, *, is_interaction: bool):
- """
- Helper that enforces match.players-only constraints and returns (latest_match, match_players).
- """
- if not current_club or not current_club.players:
-  return None, []
- latest, match_players = get_latest_match_context(current_club)
- if not latest:
-  # message is handled by caller for prefix vs slash
-  return None, []
- if not match_players:
-  return latest, []
- return latest, match_players
+ for k, v in ps.items():
+  if not isinstance(k, str):
+   continue
+  kl = k.strip().lower()
+  if raw_psn and kl == raw_psn:
+   return v
+  if name and kl == name:
+   return v
+
+ for k, v in ps.items():
+  if not isinstance(k, str):
+   continue
+  kl = k.strip().lower()
+  if raw_psn and (raw_psn in kl or kl in raw_psn):
+   return v
+  if name and (name in kl or kl in name):
+   return v
+
+ return None
 
 # ─────────────────────────────────────────────────────────────
 # BOT SETUP
@@ -357,7 +352,7 @@ bot = commands.Bot(
 squad = load_squad()
 _build_nickname_maps()
 scraper = ScraperService()
-darija = DarijaEngine(squad) # FIX: was Config.DEFAULT_PERSONALITY
+darija = DarijaEngine(squad)  # FIX: was Config.DEFAULT_PERSONALITY
 imgen = ImageGenerator(Config.ASSETS_DIR)
 memory = SquadMemory()
 daily_engine = DailyEngine(darija)
@@ -742,69 +737,62 @@ async def log_command(ctx):
 # ─────────────────────────────────────────────────────────────
 @tasks.loop(minutes=10)
 async def match_monitor():
-    global current_club, _last_posted_match_fp
-    try:
-        data = await scraper.get_club_data(force=False, source="background")
-        if not data:
-            logger.warning("Match monitor: no data from scraper")
-            return
+ global current_club, _last_posted_match_fp
+ try:
+  data = await scraper.get_club_data(force=False, source="background")
+  if not data:
+   logger.warning("Match monitor: no data from scraper")
+   return
 
-        club = _dict_to_club(data)
-        if not club or not club.matches:
-            return
+  club = _dict_to_club(data)
+  if not club or not club.matches:
+   return
 
-        latest = club.matches[0]
-        fp = _match_fingerprint(latest)
+  latest = club.matches[0]
+  fp = _match_fingerprint(latest)
 
-        # Update in-memory state (always)
-        current_club = club
-        current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
-        normalize_club_players(current_club)
+  # Update in-memory state always
+  current_club = club
+  current_club.players = StatsEngine.compute_all(current_club.players, get_squad_map())
+  normalize_club_players(current_club)
 
-        # If we've already posted this exact match, don't repost
-        if fp and fp == _last_posted_match_fp:
-            logger.info("Match monitor: same latest match fingerprint — skipping post")
-            return
+  # Don't repost same match forever
+  if fp and fp == _last_posted_match_fp:
+   logger.info("Match monitor: same latest match fingerprint — skipping post")
+   return
 
-        result = f"{latest.score_for}-{latest.score_against}"
-        match_players = get_match_players(current_club, latest)
-        report = darija.match_report(result, match_players)
+  result = f"{latest.score_for}-{latest.score_against}"
+  match_players = get_match_players(current_club, latest)
+  report = darija.match_report(result, match_players)
 
-        match_ch = getattr(Config, "MATCH_CHANNEL_ID", 0)
-        if match_ch:
-            ch = bot.get_channel(match_ch)
-            if ch:
-                await rl.channel_send(ch, report)
+  match_ch = getattr(Config, "MATCH_CHANNEL_ID", 0)
+  if match_ch:
+   ch = bot.get_channel(match_ch)
+   if ch:
+    await rl.channel_send(ch, report)
 
-        lb_ch = getattr(Config, "LEADERBORD_CHANNEL_ID", 0)
-        if lb_ch:
-            ch = bot.get_channel(lb_ch)
-            if ch:
-                color = 0x00ff00 if latest.result == "W" else 0xff0000 if latest.result == "L" else 0xffff00
-                embed = discord.Embed(
-                    title=f"Match Report: {latest.opponent} {result}",
-                    description=report,
-                    color=color
-                )
-                await rl.channel_send(ch, embed)
+  lb_ch = getattr(Config, "LEADERBORD_CHANNEL_ID", 0)
+  if lb_ch:
+   ch = bot.get_channel(lb_ch)
+   if ch:
+    color = 0x00ff00 if latest.result == "W" else 0xff0000 if latest.result == "L" else 0xffff00
+    embed = discord.Embed(title=f"Match Report: {latest.opponent} {result}", description=report, color=color)
+    await rl.channel_send(ch, embed)
 
-        # Persist after successful post attempt
-        if fp:
-            _last_posted_match_fp = fp
-            _save_last_posted_fp(fp)
+  if fp:
+   _last_posted_match_fp = fp
+   _save_last_posted_fp(fp)
 
-        logger.info("Auto-reported match: %s %s (fp=%s)", latest.opponent, result, fp[:10] if fp else "none")
-
-    except Exception as e:
-        logger.error("Match monitor error: %s", e)
-        traceback.print_exc()
+  logger.info("Auto-reported match: %s %s (fp=%s)", latest.opponent, result, fp[:10] if fp else "none")
+ except Exception as e:
+  logger.error("Match monitor error: %s", e)
+  traceback.print_exc()
 
 @match_monitor.before_loop
 async def before_match_monitor():
  await bot.wait_until_ready()
 
 # ── PHASE 4 BACKGROUND TASKS ──
-
 @tasks.loop(hours=168)
 async def weekly_awards_task():
  global current_club
@@ -889,18 +877,13 @@ async def cmd_debug(ctx):
  cache_age = int(time.time() - _data_cache_time) if _data_cache_time else "N/A"
  metrics = scraper.metrics()
  db_stats = await scraper.db_stats()
- latest = get_latest_match(current_club) if current_club else None
- latest_id = getattr(latest, "match_id", None) if latest else None
- latest_players = len(get_match_players(current_club, latest)) if (current_club and latest) else 0
  lines = [
   f"PCT_URL: {Config.PCT_CLUB_URL}",
   f"PORT: {Config.PORT}",
   f"Club ID: {Config.CLUB_ID}",
   f"Scraper ready: {scraper_ready}",
   f"Data loaded: {data_loaded}",
-  f"Players (season list): {player_count}",
-  f"Latest match id: {latest_id}",
-  f"Latest match players: {latest_players}",
+  f"Players: {player_count}",
   f"Cache age: {cache_age}s",
   f"Scraper cooldown: {metrics['cooldown']} ({metrics['cooldown_remaining']}s remaining)",
   f"Scraper rate limited: {metrics['rate_limited']}",
@@ -938,9 +921,9 @@ async def cmd_help(ctx):
  text = (
   "**Basic:** `!ping` `!debug` `!resync` `!sync`\n\n"
   "**Player Cards:** `!stats [player]` `!player [player]` `!bio [player]`\n\n"
-  "**Rankings (LATEST MATCH ONLY):** `!mvp` `!worst` `!carry` `!ballon` `!ghost` `!ball_loser` `!playmaker` `!sniper` `!keeper`\n\n"
-  "**Roast Engine (LATEST MATCH ONLY):** `!fraud [player]` `!who_sold` `!pass` `!court_case [player]` `!hall_of_shame`\n\n"
-  "**Compare/Club:** `!compare p1 p2` `!lastmatch` `!recent [1-10]` `!club` `!leaderboard [metric]`\n\n"
+  "**Rankings:** `!mvp` `!worst` `!carry` `!ballon` `!ghost` `!ball_loser` `!playmaker` `!sniper` `!keeper`\n\n"
+  "**Roast Engine:** `!fraud [player]` `!who_sold` `!pass` `!court_case [player]` `!hall_of_shame`\n\n"
+  "**Compare:** `!compare p1 p2` `!lastmatch` `!recent [1-10]` `!club` `!leaderboard [metric]`\n\n"
   "**Form & Records:** `!form [player] [N]` `!records` `!legend` `!match_report`\n\n"
   "**History:** `!rankings` `!awards`\n\n"
  )
@@ -973,7 +956,7 @@ async def cmd_sync(ctx):
    logger.error("SYNC ERROR: %s", tb)
    await rl.ctx_send(ctx, f"Sync failed: {str(e)[:800]}")
 
-# ─── Player commands (season profile; allowed) ──
+# ─── Player commands ──
 @bot.command(name="stats")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_stats(ctx, *, player: str):
@@ -1123,39 +1106,13 @@ async def _maybe_send_video(channel, player, video_type, match_id=None):
  except Exception as e:
   logger.error("[VIDEO] Failed to generate/send video: %s", e)
 
-# ─────────────────────────────────────────────────────────────
-# MATCH-ONLY AWARDS (Phase 1 enforcement)
-# ─────────────────────────────────────────────────────────────
-def _ensure_latest_match_available_prefix(ctx) -> Tuple[Optional[MatchResult], List[PlayerStats]]:
- latest, match_players = get_latest_match_context(current_club)
- if not latest:
-  return None, []
- if not match_players:
-  return latest, []
- return latest, match_players
-
-def _ensure_latest_match_available_slash(interaction) -> Tuple[Optional[MatchResult], List[PlayerStats]]:
- latest, match_players = get_latest_match_context(current_club)
- if not latest:
-  return None, []
- if not match_players:
-  return latest, []
- return latest, match_players
-
 @bot.command(name="mvp")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_mvp(ctx):
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
- if not match_players:
-  await rl.ctx_send(ctx, "ما لقيتش players ديال هاد الماتش.")
-  return
  async with ctx.typing():
   try:
-   mvp = StatsEngine.get_mvp(match_players)
+   mvp = StatsEngine.get_mvp(current_club.players)
    sq_info = getattr(mvp, "_squad_info", {}) or {}
    pos = sq_info.get("position", "CM")
    raw_img = sq_info.get("image")
@@ -1169,10 +1126,8 @@ async def cmd_mvp(ctx):
    embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
    embed.add_field(name="Impact", value=str(mvp.impact_score), inline=True)
    embed.add_field(name="Win %", value=f"{round(mvp.win_rate, 1)}%", inline=True)
-   # evidence: match-only
-   embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.ctx_send(ctx, file=file, embed=embed)
-   asyncio.create_task(_maybe_send_video(ctx.channel, mvp, "mvp", latest.match_id))
+   asyncio.create_task(_maybe_send_video(ctx.channel, mvp, "mvp"))
   except Exception as e:
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1181,22 +1136,14 @@ async def cmd_mvp(ctx):
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_worst(ctx):
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
- if not match_players:
-  await rl.ctx_send(ctx, "ما لقيتش players ديال هاد الماتش.")
-  return
  async with ctx.typing():
   try:
-   worst = StatsEngine.get_worst(match_players)
+   worst = StatsEngine.get_worst(current_club.players)
    pos = get_squad_map().get(worst.name, {}).get("position", "CM")
    roast = darija.roast(worst, pos)
    embed = discord.Embed(title=f"🗑️ WORST PLAYER — {worst.name}", description=roast, color=0x8b0000)
-   embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.ctx_send(ctx, embed=embed)
-   asyncio.create_task(_maybe_send_video(ctx.channel, worst, "fraud", latest.match_id))
+   asyncio.create_task(_maybe_send_video(ctx.channel, worst, "fraud"))
   except Exception as e:
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1205,21 +1152,13 @@ async def cmd_worst(ctx):
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_who_sold(ctx):
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
- if not match_players:
-  await rl.ctx_send(ctx, "ما لقيتش players ديال هاد الماتش.")
-  return
  async with ctx.typing():
   try:
-   fraud = StatsEngine.get_fraud(match_players)
+   fraud = StatsEngine.get_fraud(current_club.players)
    roast = darija.fraud(fraud)
    embed = discord.Embed(title=f"🎭 FRAUD DETECTED — {fraud.name}", description=roast, color=0xff4500)
-   embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.ctx_send(ctx, embed=embed)
-   asyncio.create_task(_maybe_send_video(ctx.channel, fraud, "fraud", latest.match_id))
+   asyncio.create_task(_maybe_send_video(ctx.channel, fraud, "fraud"))
   except Exception as e:
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1228,21 +1167,13 @@ async def cmd_who_sold(ctx):
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_carry(ctx):
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
- if not match_players:
-  await rl.ctx_send(ctx, "ما لقيتش players ديال هاد الماتش.")
-  return
  async with ctx.typing():
   try:
-   carry = StatsEngine.get_carry(match_players)
+   carry = StatsEngine.get_carry(current_club.players)
    praise = darija.carry(carry)
    embed = discord.Embed(title=f"💪 CARRY DETECTED — {carry.name}", description=praise, color=0x00ff00)
-   embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.ctx_send(ctx, embed=embed)
-   asyncio.create_task(_maybe_send_video(ctx.channel, carry, "carry", latest.match_id))
+   asyncio.create_task(_maybe_send_video(ctx.channel, carry, "carry"))
   except Exception as e:
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1250,21 +1181,11 @@ async def cmd_carry(ctx):
 @bot.command(name="fraud")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_fraud(ctx, *, player: str):
- """
- Player-specific fraud check is kept as "season profile" BUT:
- - If the player did NOT play the latest match, we say so clearly and do not claim match-award status.
- """
  if not await ensure_data(ctx): return
  target = find_player(player)
  if not target:
   await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
   return
-
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- played_latest = False
- if latest and match_players:
-  played_latest = any(p.name == target.name for p in match_players)
-
  async with ctx.typing():
   try:
    is_fraud = target.throwing_score > 3.0
@@ -1274,10 +1195,6 @@ async def cmd_fraud(ctx, *, player: str):
    else:
     text = f"✅ CLEAN\n\n{target.name} — Throwing: {target.throwing_score}\n\nهادا لاعب صحيح."
     color = 0x00ff00
-
-   if latest and not played_latest:
-    text = f"{text}\n\n⚠️ Note: {target.name} ما لعبش آخر ماتش. (Latest match awards كيكونو غير للي لعبو)"
-
    embed = discord.Embed(title=f"FRAUD CHECK — {target.name}", description=text, color=color)
    await rl.ctx_send(ctx, embed=embed)
   except Exception as e:
@@ -1287,26 +1204,15 @@ async def cmd_fraud(ctx, *, player: str):
 @bot.command(name="ballon")
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_ballon(ctx):
- """
- Ballon d'Or ranking becomes LATEST MATCH ranking to obey match-only rule.
- """
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
- if not match_players:
-  await rl.ctx_send(ctx, "ما لقيتش players ديال هاد الماتش.")
-  return
  async with ctx.typing():
   try:
-   ranked = sorted(match_players, key=lambda p: p.impact_score + p.clutch_score + p.goals * 2, reverse=True)
-   embed = discord.Embed(title="🏆 BALLON D'OR (Latest Match)", color=0xffd700)
+   ranked = sorted(current_club.players, key=lambda p: p.impact_score + p.clutch_score + p.goals * 2, reverse=True)
+   embed = discord.Embed(title="🏆 BALLON D'OR", color=0xffd700)
    medals = ["🥇", "🥈", "🥉"]
    for i, p in enumerate(ranked[:5]):
     medal = medals[i] if i < 3 else f"{i+1}."
     embed.add_field(name=f"{medal} {p.name}", value=f"Impact: {p.impact_score} | Goals: {p.goals} | Rating: {round(p.rating_pg, 1)} | Win%: {round(p.win_rate, 1)}%", inline=False)
-   embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.ctx_send(ctx, embed=embed)
   except Exception as e:
    traceback.print_exc()
@@ -1316,21 +1222,13 @@ async def cmd_ballon(ctx):
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_ghost(ctx):
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
- if not match_players:
-  await rl.ctx_send(ctx, "ما لقيتش players ديال هاد الماتش.")
-  return
  async with ctx.typing():
   try:
-   ghost = StatsEngine.get_ghost(match_players)
+   ghost = StatsEngine.get_ghost(current_club.players)
    roast = darija.ghost(ghost)
    embed = discord.Embed(title=f"👻 GHOST DETECTED — {ghost.name}", description=roast, color=0x9370db)
-   embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.ctx_send(ctx, embed=embed)
-   asyncio.create_task(_maybe_send_video(ctx.channel, ghost, "ghost", latest.match_id))
+   asyncio.create_task(_maybe_send_video(ctx.channel, ghost, "ghost"))
   except Exception as e:
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1339,19 +1237,11 @@ async def cmd_ghost(ctx):
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_pass(ctx):
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
- if not match_players:
-  await rl.ctx_send(ctx, "ما لقيتش players ديال هاد الماتش.")
-  return
  async with ctx.typing():
   try:
-   hog = StatsEngine.get_ball_hog(match_players)
+   hog = StatsEngine.get_ball_hog(current_club.players)
    roast = darija.ball_loser(hog)
    embed = discord.Embed(title=f"⚽ PASS THE BALL! — {hog.name}", description=roast, color=0xffa500)
-   embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.ctx_send(ctx, embed=embed)
   except Exception as e:
    traceback.print_exc()
@@ -1360,10 +1250,6 @@ async def cmd_pass(ctx):
 @bot.command(name="leaderboard")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_leaderboard(ctx, metric: str = "impact"):
- """
- Leaderboard stays season-based (it’s a club/season feature),
- but this is NOT a match award command.
- """
  if not await ensure_data(ctx): return
  metric_map = {"impact": "impact_score", "goals": "goals", "assists": "assists", "rating": "rating_pg", "clutch": "clutch_score", "win_rate": "win_rate"}
  metric_value = metric_map.get(metric.lower(), "impact_score")
@@ -1480,22 +1366,10 @@ async def cmd_club(ctx):
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_court_case(ctx, *, player: str):
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
-
  target = find_player(player)
  if not target:
   await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
   return
-
- # Must not "force appearance": if they didn't play latest match, we still allow court_case
- # but we clearly mark it as season profile.
- played_latest = False
- if match_players:
-  played_latest = any(p.name == target.name for p in match_players)
-
  sq_info = getattr(target, "_squad_info", {}) or {}
  pos = sq_info.get("position", "CM")
  raw_img = sq_info.get("image")
@@ -1513,12 +1387,8 @@ async def cmd_court_case(ctx, *, player: str):
    embed.add_field(name="Pass %", value=f"{round(target.pass_accuracy, 1)}%", inline=True)
    embed.add_field(name="Rating", value=str(round(target.rating_pg, 1)), inline=True)
    embed.add_field(name="Win %", value=f"{round(target.win_rate, 1)}%", inline=True)
-   if latest and played_latest:
-    embed.set_footer(text=f"Latest match participant • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
-   else:
-    embed.set_footer(text="Season profile (player did not play latest match)")
    await rl.ctx_send(ctx, file=file, embed=embed)
-   asyncio.create_task(_maybe_send_video(ctx.channel, target, "court", latest.match_id if latest else None))
+   asyncio.create_task(_maybe_send_video(ctx.channel, target, "court"))
   except Exception as e:
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1527,21 +1397,13 @@ async def cmd_court_case(ctx, *, player: str):
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_ball_loser(ctx):
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
- if not match_players:
-  await rl.ctx_send(ctx, "ما لقيتش players ديال هاد الماتش.")
-  return
  async with ctx.typing():
   try:
-   loser = max(match_players, key=lambda p: p.possession_losses)
+   loser = max(current_club.players, key=lambda p: p.possession_losses)
    roast = darija.ball_loser(loser)
    embed = discord.Embed(title=f"💀 BALL LOSER — {loser.name}", description=roast, color=0x8b0000)
-   embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.ctx_send(ctx, embed=embed)
-   asyncio.create_task(_maybe_send_video(ctx.channel, None, "match", latest.match_id))
+   asyncio.create_task(_maybe_send_video(ctx.channel, None, "match"))
   except Exception as e:
    traceback.print_exc()
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
@@ -1550,16 +1412,9 @@ async def cmd_ball_loser(ctx):
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_playmaker(ctx):
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
- if not match_players:
-  await rl.ctx_send(ctx, "ما لقيتش players ديال هاد الماتش.")
-  return
  async with ctx.typing():
   try:
-   pm = max(match_players, key=lambda p: p.assists * 2 + p.pass_accuracy)
+   pm = max(current_club.players, key=lambda p: p.assists * 2 + p.pass_accuracy)
    pos = get_squad_map().get(pm.name, {}).get("position", "CM")
    text = darija.playmaker(pm)
    img_path = get_squad_map().get(pm.name, {}).get("image")
@@ -1571,7 +1426,6 @@ async def cmd_playmaker(ctx):
    embed.add_field(name="Pass %", value=f"{round(pm.pass_accuracy, 1)}%", inline=True)
    embed.add_field(name="Rating", value=str(round(pm.rating_pg, 1)), inline=True)
    embed.add_field(name="Win %", value=f"{round(pm.win_rate, 1)}%", inline=True)
-   embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.ctx_send(ctx, file=file, embed=embed)
   except Exception as e:
    traceback.print_exc()
@@ -1581,16 +1435,9 @@ async def cmd_playmaker(ctx):
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_sniper(ctx):
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
- if not match_players:
-  await rl.ctx_send(ctx, "ما لقيتش players ديال هاد الماتش.")
-  return
  async with ctx.typing():
   try:
-   sniper = max(match_players, key=lambda p: p.goals * 2 + p.rating_pg)
+   sniper = max(current_club.players, key=lambda p: p.goals * 2 + p.rating_pg)
    pos = get_squad_map().get(sniper.name, {}).get("position", "CM")
    img_path = get_squad_map().get(sniper.name, {}).get("image")
    img_path = resolve_image_path(img_path)
@@ -1601,7 +1448,6 @@ async def cmd_sniper(ctx):
    embed.add_field(name="Rating", value=str(round(sniper.rating_pg, 1)), inline=True)
    embed.add_field(name="Impact", value=str(sniper.impact_score), inline=True)
    embed.add_field(name="Win %", value=f"{round(sniper.win_rate, 1)}%", inline=True)
-   embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.ctx_send(ctx, file=file, embed=embed)
   except Exception as e:
    traceback.print_exc()
@@ -1611,23 +1457,15 @@ async def cmd_sniper(ctx):
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def cmd_keeper(ctx):
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
- if not match_players:
-  await rl.ctx_send(ctx, "ما لقيتش players ديال هاد الماتش.")
-  return
  async with ctx.typing():
   try:
-   gks = [p for p in match_players if get_squad_map().get(p.name, {}).get("position") == "GK"]
+   gks = [p for p in current_club.players if get_squad_map().get(p.name, {}).get("position") == "GK"]
    if not gks:
-    await rl.ctx_send(ctx, "ما لقيتش goalkeeper فهاد الماتش.")
+    await rl.ctx_send(ctx, "ما لقيتش goalkeeper فالفريق.")
     return
    keeper = max(gks, key=lambda p: p.tackles + p.interceptions)
    text = darija.keeper(keeper)
    embed = discord.Embed(title=f"🧤 KEEPER — {keeper.name}", description=text, color=0x1e90ff)
-   embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.ctx_send(ctx, embed=embed)
   except Exception as e:
    traceback.print_exc()
@@ -1636,31 +1474,20 @@ async def cmd_keeper(ctx):
 @bot.command(name="rankings")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_rankings(ctx):
- """
- Rankings becomes latest match summary to obey match-only rule.
- """
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
- if not match_players:
-  await rl.ctx_send(ctx, "ما لقيتش players ديال هاد الماتش.")
-  return
  async with ctx.typing():
   try:
-   embed = discord.Embed(title="📊 ALL RANKINGS (Latest Match)", color=0x1e90ff)
-   mvp = StatsEngine.get_mvp(match_players)
-   worst = StatsEngine.get_worst(match_players)
-   fraud = StatsEngine.get_fraud(match_players)
-   carry = StatsEngine.get_carry(match_players)
-   ghost = StatsEngine.get_ghost(match_players)
+   embed = discord.Embed(title="📊 ALL RANKINGS", color=0x1e90ff)
+   mvp = StatsEngine.get_mvp(current_club.players)
+   worst = StatsEngine.get_worst(current_club.players)
+   fraud = StatsEngine.get_fraud(current_club.players)
+   carry = StatsEngine.get_carry(current_club.players)
+   ghost = StatsEngine.get_ghost(current_club.players)
    embed.add_field(name="🏆 MVP", value=f"{mvp.name} (Impact: {mvp.impact_score} | Win%: {round(mvp.win_rate, 1)}%)", inline=False)
    embed.add_field(name="🗑️ Worst", value=f"{worst.name} (Impact: {worst.impact_score} | Win%: {round(worst.win_rate, 1)}%)", inline=False)
    embed.add_field(name="🎭 Fraud", value=f"{fraud.name} (Throwing: {fraud.throwing_score} | Win%: {round(fraud.win_rate, 1)}%)", inline=False)
    embed.add_field(name="💪 Carry", value=f"{carry.name} (Impact: {carry.impact_score} | Win%: {round(carry.win_rate, 1)}%)", inline=False)
    embed.add_field(name="👻 Ghost", value=f"{ghost.name} ({ghost.minutes_played}min | Win%: {round(ghost.win_rate, 1)}%)", inline=False)
-   embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.ctx_send(ctx, embed=embed)
   except Exception as e:
    traceback.print_exc()
@@ -1669,29 +1496,18 @@ async def cmd_rankings(ctx):
 @bot.command(name="awards")
 @commands.cooldown(1, 10, commands.BucketType.user)
 async def cmd_awards(ctx):
- """
- Awards becomes latest match awards to obey match-only rule.
- """
  if not await ensure_data(ctx): return
- latest, match_players = _ensure_latest_match_available_prefix(ctx)
- if not latest:
-  await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
-  return
- if not match_players:
-  await rl.ctx_send(ctx, "ما لقيتش players ديال هاد الماتش.")
-  return
  async with ctx.typing():
   try:
-   embed = discord.Embed(title="🏅 MATCH AWARDS (Latest Match)", color=0xffd700)
-   mvp = StatsEngine.get_mvp(match_players)
-   top_scorer = max(match_players, key=lambda p: p.goals)
-   top_assist = max(match_players, key=lambda p: p.assists)
-   fraud = StatsEngine.get_fraud(match_players)
-   embed.add_field(name="🥇 MVP", value=f"{mvp.name} (Rating: {round(mvp.rating_pg, 1)})", inline=False)
-   embed.add_field(name="⚽ Top Scorer", value=f"{top_scorer.name} ({top_scorer.goals} goals)", inline=False)
-   embed.add_field(name="🅰️ Top Assists", value=f"{top_assist.name} ({top_assist.assists} assists)", inline=False)
-   embed.add_field(name="🤡 Fraud", value=f"{fraud.name} (Throwing: {round(fraud.throwing_score, 1)})", inline=False)
-   embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
+   embed = discord.Embed(title="🏅 SEASON AWARDS", color=0xffd700)
+   mvp = StatsEngine.get_mvp(current_club.players)
+   top_scorer = max(current_club.players, key=lambda p: p.goals)
+   top_assist = max(current_club.players, key=lambda p: p.assists)
+   fraud = StatsEngine.get_fraud(current_club.players)
+   embed.add_field(name="🥇 Ballon d'Or", value=f"{mvp.name} (Win%: {round(mvp.win_rate, 1)}%)", inline=False)
+   embed.add_field(name="⚽ Golden Boot", value=f"{top_scorer.name} ({top_scorer.goals} goals)", inline=False)
+   embed.add_field(name="🅰️ Playmaker Award", value=f"{top_assist.name} ({top_assist.assists} assists)", inline=False)
+   embed.add_field(name="🤡 Fraud of the Season", value=f"{fraud.name} ({fraud.throwing_score} throwing)", inline=False)
    await rl.ctx_send(ctx, embed=embed)
   except Exception as e:
    traceback.print_exc()
@@ -1854,7 +1670,6 @@ async def cmd_match_report(ctx):
    await rl.ctx_send(ctx, f"Error: {str(e)[:300]}")
 
 # ─── PHASE 4 PREFIX COMMANDS (conditional) ───
-
 if PHASE4_AVAILABLE:
  @bot.command(name="hall_of_fame")
  @commands.cooldown(1, 10, commands.BucketType.user)
@@ -1907,27 +1722,38 @@ if PHASE4_AVAILABLE:
  @bot.command(name="fraud_score")
  @commands.cooldown(1, 5, commands.BucketType.user)
  async def cmd_fraud_score(ctx, *, player: str):
+  """
+  FIX: Fraud score must use latest match stats (match.players only).
+  """
   if not await ensure_data(ctx): return
   target = find_player(player)
   if not target:
    await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
    return
+  if not current_club.matches:
+   await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
+   return
+  latest = current_club.matches[0]
+  ms = _find_player_match_stats(latest, target)
+  if not ms:
+   await rl.ctx_send(ctx, f"⚠️ {target.name} ما لعبش آخر ماتش. (match.players only)")
+   return
   async with ctx.typing():
    try:
-    fraud = FraudScoreSystem.compute(target)
+    fraud = FraudScoreSystem.compute_match_fraud(ms)
     sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
-    raw_img = sq_info.get("image")
-    img_path = resolve_image_path(raw_img)
+    img_path = resolve_image_path(sq_info.get("image"))
     color_map = {"Safe": 0x00ff00, "Suspicious": 0xffa500, "Fraud": 0xff4500, "Criminal": 0xff0000}
     color = color_map.get(fraud["classification"], 0xff0000)
-    card = imgen.generate_player_photo_card(target, pos, "red" if fraud["score"] > 60 else "gold", f"FRAUD: {fraud['classification']}", photo_path=img_path)
-    file = discord.File(card, filename=f"{target.name}_fraud.png")
-    embed = discord.Embed(title=f"🎭 Fraud Score — {target.name}", color=color)
+    card = imgen.generate_player_photo_card(target, pos, "red" if fraud["score"] > 60 else "gold", f"FRAUD(MATCH): {fraud['classification']}", photo_path=img_path)
+    file = discord.File(card, filename=f"{target.name}_fraud_match.png")
+    embed = discord.Embed(title=f"🎭 Fraud Score (Latest Match) — {target.name}", color=color)
     embed.add_field(name="Score", value=f"{fraud['score']}/100", inline=True)
     embed.add_field(name="Classification", value=fraud["classification"], inline=True)
     breakdown_text = "\n".join([f"• {desc}: +{pts}" for desc, pts in fraud["breakdown"]])
     embed.add_field(name="Breakdown", value=breakdown_text or "Clean sheet", inline=False)
+    embed.set_footer(text=f"vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
     await rl.ctx_send(ctx, file=file, embed=embed)
    except Exception as e:
     traceback.print_exc()
@@ -1936,28 +1762,48 @@ if PHASE4_AVAILABLE:
  @bot.command(name="carry_score")
  @commands.cooldown(1, 5, commands.BucketType.user)
  async def cmd_carry_score(ctx, *, player: str):
+  """
+  FIX: Carry score must use latest match stats (match.players only).
+  """
   if not await ensure_data(ctx): return
   target = find_player(player)
   if not target:
    await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
    return
+  if not current_club.matches:
+   await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
+   return
+  latest = current_club.matches[0]
+  ms = _find_player_match_stats(latest, target)
+  if not ms:
+   await rl.ctx_send(ctx, f"⚠️ {target.name} ما لعبش آخر ماتش. (match.players only)")
+   return
   async with ctx.typing():
    try:
-    carry = CarryScoreSystem.compute(target)
+    carry = CarryScoreSystem.compute_match_carry(ms)
     sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
-    raw_img = sq_info.get("image")
-    img_path = resolve_image_path(raw_img)
-    card = imgen.generate_player_photo_card(target, pos, "blue", f"CARRY: {carry['classification']}", photo_path=img_path)
-    file = discord.File(card, filename=f"{target.name}_carry.png")
-    embed = discord.Embed(title=f"💪 Carry Score — {target.name}", color=0x00bfff)
-    embed.add_field(name="Total Score", value=str(carry["total_score"]), inline=True)
-    embed.add_field(name="Per Game", value=str(carry["score_per_game"]), inline=True)
+    img_path = resolve_image_path(sq_info.get("image"))
+    card = imgen.generate_player_photo_card(target, pos, "blue", f"CARRY(MATCH): {carry['classification']}", photo_path=img_path)
+    file = discord.File(card, filename=f"{target.name}_carry_match.png")
+    embed = discord.Embed(title=f"💪 Carry Score (Latest Match) — {target.name}", color=0x00bfff)
+    embed.add_field(name="Score", value=str(carry["score"]), inline=True)
     embed.add_field(name="Classification", value=carry["classification"], inline=True)
-    bd = carry["breakdown"]
-    bd_text = f"Goals: {bd['goals']} | Assists: {bd['assists']} | Tackles: {bd['tackles']}\n"
-    bd_text += f"Interceptions: {bd['interceptions']} | Pass Acc: {bd['pass_accuracy']} | MOTM: {bd['motm']} | Rating: {bd['rating']}"
-    embed.add_field(name="Breakdown", value=bd_text, inline=False)
+
+    pa = ms.get("passes_attempted", 0)
+    pc = ms.get("passes_completed", 0)
+    pass_pct = round(pc / max(pa, 1) * 100, 1) if pa else 0.0
+    rating = ms.get("rating", 0)
+    if rating and rating > 10:
+     rating = round(rating / 10.0, 1)
+    evidence = (
+     f"Goals: {ms.get('goals', 0)} | Assists: {ms.get('assists', 0)} | "
+     f"Tackles: {ms.get('tackles', 0)} | Interceptions: {ms.get('interceptions', 0)}\n"
+     f"Pass%: {pass_pct} | Poss Lost: {max(0, pa - pc)} | Rating: {rating}"
+    )
+    embed.add_field(name="Evidence (match.players)", value=evidence, inline=False)
+    embed.set_footer(text=f"vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
+
     await rl.ctx_send(ctx, file=file, embed=embed)
    except Exception as e:
     traceback.print_exc()
@@ -1966,27 +1812,38 @@ if PHASE4_AVAILABLE:
  @bot.command(name="ghost_score")
  @commands.cooldown(1, 5, commands.BucketType.user)
  async def cmd_ghost_score(ctx, *, player: str):
+  """
+  FIX: Ghost score must use latest match stats (match.players only).
+  """
   if not await ensure_data(ctx): return
   target = find_player(player)
   if not target:
    await rl.ctx_send(ctx, f"ما لقيتش `{player}`.")
    return
+  if not current_club.matches:
+   await rl.ctx_send(ctx, "ما لقيتش match history. دير !sync.")
+   return
+  latest = current_club.matches[0]
+  ms = _find_player_match_stats(latest, target)
+  if not ms:
+   await rl.ctx_send(ctx, f"⚠️ {target.name} ما لعبش آخر ماتش. (match.players only)")
+   return
   async with ctx.typing():
    try:
-    ghost = GhostScoreSystem.compute(target)
+    ghost = GhostScoreSystem._compute_match_ghost(ms)
     sq_info = getattr(target, "_squad_info", {}) or {}
     pos = sq_info.get("position", "CM")
-    raw_img = sq_info.get("image")
-    img_path = resolve_image_path(raw_img)
+    img_path = resolve_image_path(sq_info.get("image"))
     color = 0x9370db if ghost["is_ghost"] else 0x00ff00
-    card = imgen.generate_player_photo_card(target, pos, "purple", f"GHOST: {ghost['severity']}", photo_path=img_path)
-    file = discord.File(card, filename=f"{target.name}_ghost.png")
-    embed = discord.Embed(title=f"👻 Ghost Score — {target.name}", color=color)
+    card = imgen.generate_player_photo_card(target, pos, "purple", f"GHOST(MATCH): {ghost['severity']}", photo_path=img_path)
+    file = discord.File(card, filename=f"{target.name}_ghost_match.png")
+    embed = discord.Embed(title=f"👻 Ghost Score (Latest Match) — {target.name}", color=color)
     embed.add_field(name="Ghost Points", value=str(ghost["ghost_points"]), inline=True)
     embed.add_field(name="Severity", value=ghost["severity"], inline=True)
     embed.add_field(name="Is Ghost?", value="Yes" if ghost["is_ghost"] else "No", inline=True)
     reasons = "\n".join([f"• {r}" for r in ghost["reasons"]])
     embed.add_field(name="Reasons", value=reasons or "No ghost signs detected", inline=False)
+    embed.set_footer(text=f"vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
     await rl.ctx_send(ctx, file=file, embed=embed)
    except Exception as e:
     traceback.print_exc()
@@ -2056,9 +1913,6 @@ async def slash_debug(interaction: discord.Interaction):
  db_stats = await scraper.db_stats()
  sq_map = get_squad_map()
  sq_names = list(sq_map.keys())[:5] if sq_map else ["EMPTY - squad.json missing?"]
- latest = get_latest_match(current_club) if current_club else None
- latest_id = getattr(latest, "match_id", None) if latest else None
- latest_players = len(get_match_players(current_club, latest)) if (current_club and latest) else 0
  lines = [
   f"PCT_URL: {Config.PCT_CLUB_URL}",
   f"PORT: {Config.PORT}",
@@ -2066,8 +1920,6 @@ async def slash_debug(interaction: discord.Interaction):
   f"Scraper ready: {scraper_ready}",
   f"Data loaded: {data_loaded}",
   f"Players: {player_count}",
-  f"Latest match id: {latest_id}",
-  f"Latest match players: {latest_players}",
   f"Cache age: {cache_age}s",
   f"Squad.json loaded: {len(sq_map)} players",
   f"Squad sample: {', '.join(sq_names)}",
@@ -2193,377 +2045,6 @@ async def slash_bio(interaction: discord.Interaction, player: str):
   traceback.print_exc()
   await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
-@bot.tree.command(name="mvp", description="MVP of the latest match (match players only)")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_mvp(interaction: discord.Interaction):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- latest, match_players = _ensure_latest_match_available_slash(interaction)
- if not latest:
-  await rl.interaction_send(interaction, "ما لقيتش match history. دير /sync.")
-  return
- if not match_players:
-  await rl.interaction_send(interaction, "ما لقيتش players ديال هاد الماتش.")
-  return
- try:
-  mvp = StatsEngine.get_mvp(match_players)
-  sq_info = getattr(mvp, "_squad_info", {}) or {}
-  pos = sq_info.get("position", "CM")
-  raw_img = sq_info.get("image")
-  img_path = resolve_image_path(raw_img)
-  display_name = mvp.name
-  card = imgen.generate_player_photo_card(mvp, pos, "gold", "MAN OF THE MATCH", photo_path=img_path)
-  file = discord.File(card, filename="mvp.png")
-  embed = discord.Embed(title=f"🏆 MAN OF THE MATCH — {display_name}", color=0xffd700)
-  embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
-  embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
-  embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
-  embed.add_field(name="Impact", value=str(mvp.impact_score), inline=True)
-  embed.add_field(name="Win %", value=f"{round(mvp.win_rate, 1)}%", inline=True)
-  embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
-  await rl.interaction_send(interaction, file=file, embed=embed)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="who_sold", description="Fraud of the latest match (match players only)")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_who_sold(interaction: discord.Interaction):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- latest, match_players = _ensure_latest_match_available_slash(interaction)
- if not latest:
-  await rl.interaction_send(interaction, "ما لقيتش match history. دير /sync.")
-  return
- if not match_players:
-  await rl.interaction_send(interaction, "ما لقيتش players ديال هاد الماتش.")
-  return
- try:
-  fraud = StatsEngine.get_fraud(match_players)
-  roast = darija.fraud(fraud)
-  embed = discord.Embed(title=f"🎭 FRAUD DETECTED — {fraud.name}", description=roast, color=0xff4500)
-  embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
-  await rl.interaction_send(interaction, embed=embed)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="carry_detector", description="Carry of the latest match (match players only)")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_carry(interaction: discord.Interaction):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- latest, match_players = _ensure_latest_match_available_slash(interaction)
- if not latest:
-  await rl.interaction_send(interaction, "ما لقيتش match history. دير /sync.")
-  return
- if not match_players:
-  await rl.interaction_send(interaction, "ما لقيتش players ديال هاد الماتش.")
-  return
- try:
-  carry = StatsEngine.get_carry(match_players)
-  praise = darija.carry(carry)
-  embed = discord.Embed(title=f"💪 CARRY DETECTED — {carry.name}", description=praise, color=0x00ff00)
-  embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
-  await rl.interaction_send(interaction, embed=embed)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="fraud_check", description="Check if a player is fraud (season profile)")
-@app_commands.describe(player="Player name, PSN, or nickname")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_fraud_check(interaction: discord.Interaction, player: str):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- target = find_player(player)
- if not target:
-  await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
-  return
- try:
-  is_fraud = target.throwing_score > 3.0
-  if is_fraud:
-   text = darija.fraud(target)
-   color = 0xff0000
-  else:
-   text = f"✅ CLEAN\n\n{target.name} — Throwing: {target.throwing_score}\n\nهادا لاعب صحيح."
-   color = 0x00ff00
-  embed = discord.Embed(title=f"FRAUD CHECK — {target.name}", description=text, color=color)
-  await rl.interaction_send(interaction, embed=embed)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="ballon_dor", description="Ballon d'Or of the latest match (match players only)")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_ballon_dor(interaction: discord.Interaction):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- latest, match_players = _ensure_latest_match_available_slash(interaction)
- if not latest:
-  await rl.interaction_send(interaction, "ما لقيتش match history. دير /sync.")
-  return
- if not match_players:
-  await rl.interaction_send(interaction, "ما لقيتش players ديال هاد الماتش.")
-  return
- try:
-  ranked = sorted(match_players, key=lambda p: p.impact_score + p.clutch_score + p.goals * 2, reverse=True)
-  embed = discord.Embed(title="🏆 BALLON D'OR (Latest Match)", color=0xffd700)
-  medals = ["🥇", "🥈", "🥉"]
-  for i, p in enumerate(ranked[:5]):
-   medal = medals[i] if i < 3 else f"{i+1}."
-   embed.add_field(name=f"{medal} {p.name}", value=f"Impact: {p.impact_score} | Goals: {p.goals} | Rating: {round(p.rating_pg, 1)} | Win%: {round(p.win_rate, 1)}%", inline=False)
-  embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
-  await rl.interaction_send(interaction, embed=embed)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="ghost_detector", description="Ghost of the latest match (match players only)")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_ghost(interaction: discord.Interaction):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- latest, match_players = _ensure_latest_match_available_slash(interaction)
- if not latest:
-  await rl.interaction_send(interaction, "ما لقيتش match history. دير /sync.")
-  return
- if not match_players:
-  await rl.interaction_send(interaction, "ما لقيتش players ديال هاد الماتش.")
-  return
- try:
-  ghost = StatsEngine.get_ghost(match_players)
-  roast = darija.ghost(ghost)
-  embed = discord.Embed(title=f"👻 GHOST DETECTED — {ghost.name}", description=roast, color=0x9370db)
-  embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
-  await rl.interaction_send(interaction, embed=embed)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="pass_the_ball", description="Call out ball hog (latest match only)")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_pass_ball(interaction: discord.Interaction):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- latest, match_players = _ensure_latest_match_available_slash(interaction)
- if not latest:
-  await rl.interaction_send(interaction, "ما لقيتش match history. دير /sync.")
-  return
- if not match_players:
-  await rl.interaction_send(interaction, "ما لقيتش players ديال هاد الماتش.")
-  return
- try:
-  hog = StatsEngine.get_ball_hog(match_players)
-  roast = darija.ball_loser(hog)
-  embed = discord.Embed(title=f"⚽ PASS THE BALL! — {hog.name}", description=roast, color=0xffa500)
-  embed.set_footer(text=f"Latest match only • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
-  await rl.interaction_send(interaction, embed=embed)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="court_case", description="Court case for a player (season profile; match note if played)")
-@app_commands.describe(player="Player name")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_court_case(interaction: discord.Interaction, player: str):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- target = find_player(player)
- if not target:
-  await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
-  return
-
- latest, match_players = _ensure_latest_match_available_slash(interaction)
- played_latest = False
- if latest and match_players:
-  played_latest = any(p.name == target.name for p in match_players)
-
- sq_info = getattr(target, "_squad_info", {}) or {}
- pos = sq_info.get("position", "CM")
- raw_img = sq_info.get("image")
- img_path = resolve_image_path(raw_img)
- display_name = target.name
- try:
-  text = darija.court_case(target)
-  card = imgen.generate_player_photo_card(target, pos, "red", "COURT CASE", photo_path=img_path)
-  file = discord.File(card, filename=f"{display_name}.png")
-  color = 0xff0000 if target.throwing_score > 3.0 or target.rating_pg < 5.5 else 0x00ff00
-  embed = discord.Embed(title=f"⚖️ COURT CASE: {display_name}", description=text, color=color)
-  embed.add_field(name="Throwing", value=str(round(target.throwing_score, 1)), inline=True)
-  embed.add_field(name="Error", value=str(round(target.error_score, 1)), inline=True)
-  embed.add_field(name="Pass %", value=f"{round(target.pass_accuracy, 1)}%", inline=True)
-  embed.add_field(name="Rating", value=str(round(target.rating_pg, 1)), inline=True)
-  embed.add_field(name="Win %", value=f"{round(target.win_rate, 1)}%", inline=True)
-  if latest and played_latest:
-   embed.set_footer(text=f"Latest match participant • vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
-  else:
-   embed.set_footer(text="Season profile (player did not play latest match)")
-  await rl.interaction_send(interaction, file=file, embed=embed)
-  asyncio.create_task(_maybe_send_video(interaction.channel, target, "court", latest.match_id if latest else None))
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="form", description="Player form from match history")
-@app_commands.describe(player="Player name, optionally with number of matches like 'Dictator 10'")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_form(interaction: discord.Interaction, player: str):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- num = 5
- parts = player.rsplit(" ", 1)
- if len(parts) == 2 and parts[1].isdigit():
-  num = min(int(parts[1]), 20)
-  player = parts[0]
- target = find_player(player)
- if not target:
-  await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
-  return
- if not current_club.matches:
-  await rl.interaction_send(interaction, "ما لقيتش match history.")
-  return
- raw_psn = getattr(target, "_raw_psn", target.name)
- matches_data = []
- for m in current_club.matches[:num]:
-  ps = m.player_stats.get(raw_psn, {})
-  if not ps:
-   for pid, pstat in m.player_stats.items():
-    if pid.lower() == target.name.lower():
-     ps = pstat
-     break
-  if ps:
-   pa = ps.get("passes_attempted", 0)
-   pc = ps.get("passes_completed", 0)
-   pass_acc = round(pc / max(pa, 1) * 100, 1) if pa > 0 else 0
-   matches_data.append({
-    "date": m.date.strftime("%d/%m"),
-    "opponent": m.opponent,
-    "rating": round(ps.get("rating", 0), 1),
-    "goals": ps.get("goals", 0),
-    "assists": ps.get("assists", 0),
-    "pass_acc": pass_acc,
-   })
- if not matches_data:
-  await rl.interaction_send(interaction, f"ما لقيتش match history لـ {target.name}.")
-  return
- try:
-  card = imgen.generate_form_card(target, matches_data, len(matches_data))
-  file = discord.File(card, filename="form.png")
-  embed = discord.Embed(title=f"📈 Form — {target.name} (Last {len(matches_data)})", color=0x00bfff)
-  await rl.interaction_send(interaction, embed=embed, file=file)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="records", description="Club records")
-@app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
-async def slash_records(interaction: discord.Interaction):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- if not current_club.matches:
-  await rl.interaction_send(interaction, "ما لقيتش match history.")
-  return
- matches = current_club.matches
- biggest_win = max(matches, key=lambda m: m.score_for - m.score_against)
- biggest_loss = min(matches, key=lambda m: m.score_for - m.score_against)
- most_goals_match = max(matches, key=lambda m: m.score_for)
- best_rating = 0.0
- best_rating_player = "None"
- for m in matches:
-  for psn, ps in m.player_stats.items():
-   r = ps.get("rating", 0)
-   if r > best_rating:
-    best_rating = r
-    best_rating_player = psn
- streak = 0
- best_streak = 0
- for m in reversed(matches):
-  if m.result == "W":
-   streak += 1
-   best_streak = max(best_streak, streak)
-  else:
-   streak = 0
- total_goals = sum(m.score_for for m in matches)
- total_matches = len(matches)
- win_rate = round(sum(1 for m in matches if m.result == "W") / total_matches * 100, 1) if total_matches > 0 else 0
- records = [
-  ("Biggest Win", f"{biggest_win.score_for}-{biggest_win.score_against} vs {biggest_win.opponent}"),
-  ("Biggest Loss", f"{biggest_loss.score_for}-{biggest_loss.score_against} vs {biggest_loss.opponent}"),
-  ("Most Goals (Match)", f"{most_goals_match.score_for} vs {most_goals_match.opponent}"),
-  ("Best Match Rating", f"{round(best_rating, 1)} by {best_rating_player}"),
-  ("Longest Win Streak", f"{best_streak} matches"),
-  ("Total Goals Scored", str(total_goals)),
-  ("Total Matches", str(total_matches)),
-  ("Win Rate", f"{win_rate}%"),
- ]
- try:
-  card = imgen.generate_records_card(current_club, records)
-  file = discord.File(card, filename="records.png")
-  embed = discord.Embed(title="🏆 Club Records", color=0xffd700)
-  await rl.interaction_send(interaction, embed=embed, file=file)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="legend", description="Club legend (season)")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_legend(interaction: discord.Interaction):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- try:
-  mvp = StatsEngine.get_mvp(current_club.players)
-  sq_info = getattr(mvp, "_squad_info", {}) or {}
-  pos = sq_info.get("position", "CM")
-  raw_img = sq_info.get("image")
-  img_path = resolve_image_path(raw_img)
-  display_name = mvp.name
-  card = imgen.generate_player_photo_card(mvp, pos, "gold", "CLUB LEGEND", photo_path=img_path)
-  file = discord.File(card, filename="legend.png")
-  embed = discord.Embed(title=f"👑 CLUB LEGEND — {display_name}", color=0xffd700)
-  embed.add_field(name="Goals", value=str(mvp.goals), inline=True)
-  embed.add_field(name="Assists", value=str(mvp.assists), inline=True)
-  embed.add_field(name="Rating", value=str(round(mvp.rating_pg, 1)), inline=True)
-  embed.add_field(name="Impact", value=str(mvp.impact_score), inline=True)
-  embed.add_field(name="Win %", value=f"{round(mvp.win_rate, 1)}%", inline=True)
-  await rl.interaction_send(interaction, file=file, embed=embed)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="hall_of_shame", description="Worst performances ever recorded")
-@app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
-async def slash_hall_of_shame(interaction: discord.Interaction):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- try:
-  text = darija.hall_of_shame(current_club.players)
-  embed = discord.Embed(title="🏛️ Hall of Shame", description=text, color=0x8b0000)
-  await rl.interaction_send(interaction, embed=embed)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="match_report", description="Full report of latest match")
-@app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
-async def slash_match_report(interaction: discord.Interaction):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- if not current_club.matches:
-  await rl.interaction_send(interaction, "ما لقيتش match history.")
-  return
- try:
-  last = current_club.matches[0]
-  result = f"{last.score_for}-{last.score_against}"
-  match_players = get_match_players(current_club, last)
-  report = darija.match_report(result, match_players)
-  color = 0x00ff00 if last.result == "W" else 0xff0000 if last.result == "L" else 0xffff00
-  embed = discord.Embed(title=f"⚽ Match Report: {last.opponent} {result}", description=report, color=color)
-  await rl.interaction_send(interaction, embed=embed)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
 @bot.tree.command(name="help", description="Show all commands")
 @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
 async def slash_help(interaction: discord.Interaction):
@@ -2577,14 +2058,17 @@ async def slash_help(interaction: discord.Interaction):
   text = (
    "**Basic:** /ping /debug /resync /sync\n\n"
    "**Player Cards:** /stats [player] /player [player] /bio [player]\n\n"
-   "**Latest Match Awards:** /mvp /who_sold /carry_detector /ballon_dor /ghost_detector /pass_the_ball\n\n"
-   "**Court/Reports:** /court_case [player] /match_report /records /form\n\n"
-   "**Club/Compare:** /leaderboard /compare /clubinfo /lastmatch\n\n"
+   "**Rankings:** /mvp /worst /carry_detector /ballon_dor /ghost_detector /ball_loser /playmaker /sniper /keeper\n\n"
+   "**Roast Engine:** /fraud_check [player] /who_sold /pass_the_ball /court_case [player] /hall_of_shame\n\n"
+   "**Compare:** /compare p1 p2 /lastmatch /clubinfo /leaderboard\n\n"
+   "**Form & Records:** /form [player] [N] /records /legend /match_report\n\n"
+   "**History:** /rankings /awards\n\n"
   )
   if PHASE4_AVAILABLE:
    text += (
     "**Ecosystem (Phase 4):** /hall_of_fame /rivalry p1 p2 /fraud_score [player] /carry_score [player] /ghost_score [player] /excuses [player] /match_poster\n\n"
    )
+  text += "**Settings:** /sync"
   embed.add_field(name="All Commands", value=text, inline=False)
   await rl.interaction_send(interaction, embed=embed)
  except Exception as e:
@@ -2592,58 +2076,8 @@ async def slash_help(interaction: discord.Interaction):
   await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
 # ─── PHASE 4 SLASH COMMANDS (conditional) ───
-
 if PHASE4_AVAILABLE:
- @bot.tree.command(name="hall_of_fame", description="Best performances ever recorded")
- @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
- async def slash_hall_of_fame(interaction: discord.Interaction):
-  await interaction.response.defer()
-  if not await ensure_data_interaction(interaction): return
-  if not current_club.matches:
-   await rl.interaction_send(interaction, "ما لقيتش match history.")
-   return
-  try:
-   records = HallOfFame.scan_matches(current_club.matches, current_club.players)
-   if not records:
-    await rl.interaction_send(interaction, "🏆 **Hall of Fame**\n\nما كاين حتى شي record لحد الآن.")
-    return
-   card = generate_hall_of_fame_card(Config.ASSETS_DIR, records, current_club.club_name)
-   file = discord.File(card, filename="hall_of_fame.png")
-   text = HallOfFame.get_records_text(records)
-   embed = discord.Embed(title="🏆 Hall of Fame", description=text, color=0xffd700)
-   await rl.interaction_send(interaction, embed=embed, file=file)
-  except Exception as e:
-   traceback.print_exc()
-   await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
- @bot.tree.command(name="rivalry", description="1v1 player rivalry with roast")
- @app_commands.describe(player1="First player", player2="Second player")
- @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
- async def slash_rivalry(interaction: discord.Interaction, player1: str, player2: str):
-  await interaction.response.defer()
-  if not await ensure_data_interaction(interaction): return
-  p1 = find_player(player1)
-  p2 = find_player(player2)
-  if not p1 or not p2:
-   await rl.interaction_send(interaction, "ما لقيتش players.")
-   return
-  try:
-   stats = RivalrySystem.compare(p1, p2, current_club.matches)
-   text = RivalrySystem.format_text(stats)
-   sq1 = getattr(p1, "_squad_info", {}) or {}
-   sq2 = getattr(p2, "_squad_info", {}) or {}
-   p1_photo = resolve_image_path(sq1.get("image"))
-   p2_photo = resolve_image_path(sq2.get("image"))
-   card = generate_rivalry_card(Config.ASSETS_DIR, stats, p1_photo, p2_photo)
-   file = discord.File(card, filename="rivalry.png")
-   embed = discord.Embed(title=f"⚔️ Rivalry: {p1.name} vs {p2.name}", description=text, color=0xff4500)
-   await rl.interaction_send(interaction, embed=embed, file=file)
-   memory.record_rivalry_result(p1.name, p2.name, stats["overall_winner"])
-  except Exception as e:
-   traceback.print_exc()
-   await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
- @bot.tree.command(name="fraud_score", description="Real fraud score 0-100")
+ @bot.tree.command(name="fraud_score", description="Fraud score (latest match only)")
  @app_commands.describe(player="Player name")
  @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
  async def slash_fraud_score(interaction: discord.Interaction, player: str):
@@ -2653,27 +2087,35 @@ if PHASE4_AVAILABLE:
   if not target:
    await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
    return
+  if not current_club.matches:
+   await rl.interaction_send(interaction, "ما لقيتش match history. دير /sync.")
+   return
+  latest = current_club.matches[0]
+  ms = _find_player_match_stats(latest, target)
+  if not ms:
+   await rl.interaction_send(interaction, f"⚠️ {target.name} ما لعبش آخر ماتش. (match.players only)")
+   return
   try:
-   fraud = FraudScoreSystem.compute(target)
+   fraud = FraudScoreSystem.compute_match_fraud(ms)
    sq_info = getattr(target, "_squad_info", {}) or {}
    pos = sq_info.get("position", "CM")
-   raw_img = sq_info.get("image")
-   img_path = resolve_image_path(raw_img)
+   img_path = resolve_image_path(sq_info.get("image"))
    color_map = {"Safe": 0x00ff00, "Suspicious": 0xffa500, "Fraud": 0xff4500, "Criminal": 0xff0000}
    color = color_map.get(fraud["classification"], 0xff0000)
-   card = imgen.generate_player_photo_card(target, pos, "red" if fraud["score"] > 60 else "gold", f"FRAUD: {fraud['classification']}", photo_path=img_path)
-   file = discord.File(card, filename=f"{target.name}_fraud.png")
-   embed = discord.Embed(title=f"🎭 Fraud Score — {target.name}", color=color)
+   card = imgen.generate_player_photo_card(target, pos, "red" if fraud["score"] > 60 else "gold", f"FRAUD(MATCH): {fraud['classification']}", photo_path=img_path)
+   file = discord.File(card, filename=f"{target.name}_fraud_match.png")
+   embed = discord.Embed(title=f"🎭 Fraud Score (Latest Match) — {target.name}", color=color)
    embed.add_field(name="Score", value=f"{fraud['score']}/100", inline=True)
    embed.add_field(name="Classification", value=fraud["classification"], inline=True)
    breakdown_text = "\n".join([f"• {desc}: +{pts}" for desc, pts in fraud["breakdown"]])
    embed.add_field(name="Breakdown", value=breakdown_text or "Clean sheet", inline=False)
+   embed.set_footer(text=f"vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.interaction_send(interaction, file=file, embed=embed)
   except Exception as e:
    traceback.print_exc()
    await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
- @bot.tree.command(name="carry_score", description="Real carry score")
+ @bot.tree.command(name="carry_score", description="Carry score (latest match only)")
  @app_commands.describe(player="Player name")
  @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
  async def slash_carry_score(interaction: discord.Interaction, player: str):
@@ -2683,28 +2125,45 @@ if PHASE4_AVAILABLE:
   if not target:
    await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
    return
+  if not current_club.matches:
+   await rl.interaction_send(interaction, "ما لقيتش match history. دير /sync.")
+   return
+  latest = current_club.matches[0]
+  ms = _find_player_match_stats(latest, target)
+  if not ms:
+   await rl.interaction_send(interaction, f"⚠️ {target.name} ما لعبش آخر ماتش. (match.players only)")
+   return
   try:
-   carry = CarryScoreSystem.compute(target)
+   carry = CarryScoreSystem.compute_match_carry(ms)
    sq_info = getattr(target, "_squad_info", {}) or {}
    pos = sq_info.get("position", "CM")
-   raw_img = sq_info.get("image")
-   img_path = resolve_image_path(raw_img)
-   card = imgen.generate_player_photo_card(target, pos, "blue", f"CARRY: {carry['classification']}", photo_path=img_path)
-   file = discord.File(card, filename=f"{target.name}_carry.png")
-   embed = discord.Embed(title=f"💪 Carry Score — {target.name}", color=0x00bfff)
-   embed.add_field(name="Total Score", value=str(carry["total_score"]), inline=True)
-   embed.add_field(name="Per Game", value=str(carry["score_per_game"]), inline=True)
+   img_path = resolve_image_path(sq_info.get("image"))
+   card = imgen.generate_player_photo_card(target, pos, "blue", f"CARRY(MATCH): {carry['classification']}", photo_path=img_path)
+   file = discord.File(card, filename=f"{target.name}_carry_match.png")
+   embed = discord.Embed(title=f"💪 Carry Score (Latest Match) — {target.name}", color=0x00bfff)
+   embed.add_field(name="Score", value=str(carry["score"]), inline=True)
    embed.add_field(name="Classification", value=carry["classification"], inline=True)
-   bd = carry["breakdown"]
-   bd_text = f"Goals: {bd['goals']} | Assists: {bd['assists']} | Tackles: {bd['tackles']}\n"
-   bd_text += f"Interceptions: {bd['interceptions']} | Pass Acc: {bd['pass_accuracy']} | MOTM: {bd['motm']} | Rating: {bd['rating']}"
-   embed.add_field(name="Breakdown", value=bd_text, inline=False)
+
+   pa = ms.get("passes_attempted", 0)
+   pc = ms.get("passes_completed", 0)
+   pass_pct = round(pc / max(pa, 1) * 100, 1) if pa else 0.0
+   rating = ms.get("rating", 0)
+   if rating and rating > 10:
+    rating = round(rating / 10.0, 1)
+   evidence = (
+    f"Goals: {ms.get('goals', 0)} | Assists: {ms.get('assists', 0)} | "
+    f"Tackles: {ms.get('tackles', 0)} | Interceptions: {ms.get('interceptions', 0)}\n"
+    f"Pass%: {pass_pct} | Poss Lost: {max(0, pa - pc)} | Rating: {rating}"
+   )
+   embed.add_field(name="Evidence (match.players)", value=evidence, inline=False)
+   embed.set_footer(text=f"vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
+
    await rl.interaction_send(interaction, file=file, embed=embed)
   except Exception as e:
    traceback.print_exc()
    await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
- @bot.tree.command(name="ghost_score", description="Real ghost score")
+ @bot.tree.command(name="ghost_score", description="Ghost score (latest match only)")
  @app_commands.describe(player="Player name")
  @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
  async def slash_ghost_score(interaction: discord.Interaction, player: str):
@@ -2714,141 +2173,33 @@ if PHASE4_AVAILABLE:
   if not target:
    await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
    return
+  if not current_club.matches:
+   await rl.interaction_send(interaction, "ما لقيتش match history. دير /sync.")
+   return
+  latest = current_club.matches[0]
+  ms = _find_player_match_stats(latest, target)
+  if not ms:
+   await rl.interaction_send(interaction, f"⚠️ {target.name} ما لعبش آخر ماتش. (match.players only)")
+   return
   try:
-   ghost = GhostScoreSystem.compute(target)
+   ghost = GhostScoreSystem._compute_match_ghost(ms)
    sq_info = getattr(target, "_squad_info", {}) or {}
    pos = sq_info.get("position", "CM")
-   raw_img = sq_info.get("image")
-   img_path = resolve_image_path(raw_img)
+   img_path = resolve_image_path(sq_info.get("image"))
    color = 0x9370db if ghost["is_ghost"] else 0x00ff00
-   card = imgen.generate_player_photo_card(target, pos, "purple", f"GHOST: {ghost['severity']}", photo_path=img_path)
-   file = discord.File(card, filename=f"{target.name}_ghost.png")
-   embed = discord.Embed(title=f"👻 Ghost Score — {target.name}", color=color)
+   card = imgen.generate_player_photo_card(target, pos, "purple", f"GHOST(MATCH): {ghost['severity']}", photo_path=img_path)
+   file = discord.File(card, filename=f"{target.name}_ghost_match.png")
+   embed = discord.Embed(title=f"👻 Ghost Score (Latest Match) — {target.name}", color=color)
    embed.add_field(name="Ghost Points", value=str(ghost["ghost_points"]), inline=True)
    embed.add_field(name="Severity", value=ghost["severity"], inline=True)
    embed.add_field(name="Is Ghost?", value="Yes" if ghost["is_ghost"] else "No", inline=True)
    reasons = "\n".join([f"• {r}" for r in ghost["reasons"]])
    embed.add_field(name="Reasons", value=reasons or "No ghost signs detected", inline=False)
+   embed.set_footer(text=f"vs {latest.opponent} • {latest.score_for}-{latest.score_against}")
    await rl.interaction_send(interaction, file=file, embed=embed)
   except Exception as e:
    traceback.print_exc()
    await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
- @bot.tree.command(name="excuses", description="Generate fake excuses for bad performance")
- @app_commands.describe(player="Player name")
- @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
- async def slash_excuses(interaction: discord.Interaction, player: str):
-  await interaction.response.defer()
-  if not await ensure_data_interaction(interaction): return
-  target = find_player(player)
-  if not target:
-   await rl.interaction_send(interaction, f"ما لقيتش `{player}`.")
-   return
-  try:
-   text = darija.excuses(target)
-   embed = discord.Embed(title=f"📝 Excuses — {target.name}", description=text, color=0x1e90ff)
-   await rl.interaction_send(interaction, embed=embed)
-  except Exception as e:
-   traceback.print_exc()
-   await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
- @bot.tree.command(name="match_poster", description="Generate premium match poster for last match")
- @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
- async def slash_match_poster(interaction: discord.Interaction):
-  await interaction.response.defer()
-  if not await ensure_data_interaction(interaction): return
-  if not current_club.matches:
-   await rl.interaction_send(interaction, "ما لقيتش match history.")
-   return
-  try:
-   last = current_club.matches[0]
-   poster_data = MatchPosterEngine.build_poster_data(last, current_club.players)
-   if not poster_data:
-    await rl.interaction_send(interaction, "ما قدرتش نبني poster.")
-    return
-   photo_paths = {}
-   for mp in poster_data.get("all_players", []):
-    pobj = mp.get("player_obj")
-    if pobj:
-     sq = getattr(pobj, "_squad_info", {}) or {}
-     photo_paths[mp["name"]] = resolve_image_path(sq.get("image"))
-   card = generate_match_poster(Config.ASSETS_DIR, poster_data, photo_paths)
-   file = discord.File(card, filename="match_poster.png")
-   embed = discord.Embed(title=f"🎨 Match Poster: {poster_data['opponent']} {poster_data['score']}", color=0xffd700)
-   await rl.interaction_send(interaction, embed=embed, file=file)
-  except Exception as e:
-   traceback.print_exc()
-   await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="clubinfo", description="Club info")
-@app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
-async def slash_clubinfo(interaction: discord.Interaction):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- try:
-  motm = StatsEngine.get_mvp(current_club.players)
-  card = imgen.generate_match_report(current_club, motm)
-  file = discord.File(card, filename="club_report.png")
-  embed = discord.Embed(title=f"🏟️ {current_club.club_name}", description=f"Division {current_club.division} • Skill {current_club.skill_rating}", color=0x00ff00)
-  await rl.interaction_send(interaction, embed=embed, file=file)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="lastmatch", description="Latest match score")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_lastmatch(interaction: discord.Interaction):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- if not current_club.matches:
-  await rl.interaction_send(interaction, "ما لقيتش match history.")
-  return
- try:
-  last = current_club.matches[0]
-  color = 0x00ff00 if last.result == "W" else 0xff0000 if last.result == "L" else 0xffff00
-  embed = discord.Embed(title=f"⚽ Last Match: {last.score_for} - {last.score_against} vs {last.opponent}", description=f"Result: {last.result} • {last.date.strftime('%d/%m/%Y')}", color=color)
-  await rl.interaction_send(interaction, embed=embed)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="leaderboard", description="Season leaderboard")
-@app_commands.describe(metric="impact, goals, assists, rating, clutch, win_rate")
-@app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
-async def slash_leaderboard(interaction: discord.Interaction, metric: str = "impact"):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- metric_map = {"impact": "impact_score", "goals": "goals", "assists": "assists", "rating": "rating_pg", "clutch": "clutch_score", "win_rate": "win_rate"}
- metric_value = metric_map.get(metric.lower(), "impact_score")
- try:
-  card = imgen.generate_leaderboard(current_club.players, metric_value)
-  file = discord.File(card, filename="leaderboard.png")
-  embed = discord.Embed(title=f"📊 Leaderboard — {metric.capitalize()}", color=0x1e90ff)
-  await rl.interaction_send(interaction, embed=embed, file=file)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
-
-@bot.tree.command(name="compare", description="Compare two players (season profile)")
-@app_commands.describe(player1="First player", player2="Second player")
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
-async def slash_compare(interaction: discord.Interaction, player1: str, player2: str):
- await interaction.response.defer()
- if not await ensure_data_interaction(interaction): return
- p1 = find_player(player1)
- p2 = find_player(player2)
- if not p1 or not p2:
-  await rl.interaction_send(interaction, "ما لقيتش players.")
-  return
- try:
-  text = darija.compare(p1, p2)
-  embed = discord.Embed(title="⚔️ 1v1 COMPARISON", description=text, color=0xff4500)
-  embed.add_field(name=p1.name, value=f"Impact: {p1.impact_score}\nGoals: {p1.goals}\nAssists: {p1.assists}\nRating: {round(p1.rating_pg, 1)}\nWin%: {round(p1.win_rate, 1)}%", inline=True)
-  embed.add_field(name=p2.name, value=f"Impact: {p2.impact_score}\nGoals: {p2.goals}\nAssists: {p2.assists}\nRating: {round(p2.rating_pg, 1)}\nWin%: {round(p2.win_rate, 1)}%", inline=True)
-  await rl.interaction_send(interaction, embed=embed)
- except Exception as e:
-  traceback.print_exc()
-  await rl.interaction_send(interaction, f"Error: {str(e)[:300]}")
 
 # ─────────────────────────────────────────────────────────────
 # MAIN ENTRY
