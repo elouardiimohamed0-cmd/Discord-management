@@ -296,6 +296,7 @@ def _find_player_match_stats(latest: MatchResult, player: PlayerStats) -> Option
     """
     if not latest or not getattr(latest, "player_stats", None):
         return None
+
     ps = latest.player_stats or {}
     if not isinstance(ps, dict) or not ps:
         return None
@@ -303,6 +304,7 @@ def _find_player_match_stats(latest: MatchResult, player: PlayerStats) -> Option
     raw_psn = (getattr(player, "_raw_psn", "") or "").strip().lower()
     name = (getattr(player, "name", "") or "").strip().lower()
 
+    # Exact key match first
     for k, v in ps.items():
         if not isinstance(k, str):
             continue
@@ -312,6 +314,7 @@ def _find_player_match_stats(latest: MatchResult, player: PlayerStats) -> Option
         if name and kl == name:
             return v
 
+    # Fallback: contains match (handles small mismatches)
     for k, v in ps.items():
         if not isinstance(k, str):
             continue
