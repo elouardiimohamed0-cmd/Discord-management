@@ -325,10 +325,9 @@ def _find_player_match_stats(latest: MatchResult, player: PlayerStats) -> Option
 
  return None
 
- # ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 # BOT SETUP
 # ─────────────────────────────────────────────────────────────
-
  raw_psn = (getattr(player, "_raw_psn", "") or "").strip().lower()
  name = (getattr(player, "name", "") or "").strip().lower()
 
