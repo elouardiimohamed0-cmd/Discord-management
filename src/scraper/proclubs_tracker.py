@@ -25,7 +25,7 @@ class ProClubsTrackerClient:
         self.parser = ProClubsTrackerParser(settings.club_id, squad)
         self.cache = JsonCache(settings.cache_dir / "pct")
         self.browser = BrowserFetcher(settings.cache_dir / "browser")
-        self.api_url = f"{{https://proclubstracker.com/api/clubs/{settings.club_id}}}?platform={settings.pct_platform}"
+        self.api_url = f"https://proclubstracker.com/api/clubs/{settings.club_id}?platform={settings.pct_platform}"
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
             "Accept": "application/json, text/html,*/*",
