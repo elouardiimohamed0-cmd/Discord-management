@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
-from typing import Any, Iterable, Optional
+from datetime import datetime, timedelta
+from typing import Any, Iterable, List, Optional
 
 from src.data.database import Database
-from src.domain.models import ClubSnapshot, Match, PlayerIdentity, PlayerMatchStats
+from src.domain.models import ClubSnapshot, Match, PlayerForm, PlayerIdentity, PlayerMatchStats
 
 
 def _now() -> str:
@@ -109,9 +109,10 @@ class ClubRepository:
                 """
                 INSERT INTO player_match_stats
                 (match_id, ea_id, display_name, position, rating, minutes, goals, assists, shots,
-                 passes_attempted, passes_completed, tackles, interceptions, saves, possession_losses,
-                 red_cards, yellow_cards, clean_sheets, raw_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 shots_on_target, passes_attempted, passes_completed, key_passes, tackles, interceptions,
+                 saves, possession_losses, red_cards, yellow_cards, clean_sheets, distance_covered,
+                 sprint_speed, raw_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(match_id, ea_id) DO UPDATE SET
                     display_name=excluded.display_name,
                     position=excluded.position,
@@ -120,8 +121,10 @@ class ClubRepository:
                     goals=excluded.goals,
                     assists=excluded.assists,
                     shots=excluded.shots,
+                    shots_on_target=excluded.shots_on_target,
                     passes_attempted=excluded.passes_attempted,
                     passes_completed=excluded.passes_completed,
+                    key_passes=excluded.key_passes,
                     tackles=excluded.tackles,
                     interceptions=excluded.interceptions,
                     saves=excluded.saves,
@@ -129,6 +132,8 @@ class ClubRepository:
                     red_cards=excluded.red_cards,
                     yellow_cards=excluded.yellow_cards,
                     clean_sheets=excluded.clean_sheets,
+                    distance_covered=excluded.distance_covered,
+                    sprint_speed=excluded.sprint_speed,
                     raw_json=excluded.raw_json,
                     updated_at=excluded.updated_at
                 """,
@@ -142,8 +147,10 @@ class ClubRepository:
                     player.goals,
                     player.assists,
                     player.shots,
+                    player.shots_on_target,
                     player.passes_attempted,
                     player.passes_completed,
+                    player.key_passes,
                     player.tackles,
                     player.interceptions,
                     player.saves,
@@ -151,6 +158,8 @@ class ClubRepository:
                     player.red_cards,
                     player.yellow_cards,
                     player.clean_sheets,
+                    player.distance_covered,
+                    player.sprint_speed,
                     _json(player.raw),
                     now,
                     now,
@@ -175,7 +184,28 @@ class ClubRepository:
             ).fetchall()
         return self._row_to_match(row, player_rows)
 
-    def aggregate_leaderboard(self, metric: str = "goals", limit: int = 10) -> list[dict[str, Any]]:
+    def last_matches(self, limit: int = 10) -> List[Match]:
+        with self.db.connect() as conn:
+            rows = conn.execute("SELECT * FROM matches ORDER BY date DESC LIMIT ?", (limit,)).fetchall()
+            matches = []
+            for row in rows:
+                player_rows = conn.execute(
+                    "SELECT * FROM player_match_stats WHERE match_id = ?",
+                    (row["match_id"],),
+                ).fetchall()
+                matches.append(self._row_to_match(row, player_rows))
+            return matches
+
+    def player_matches(self, ea_id: str, limit: int = 20) -> List[PlayerMatchStats]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM player_match_stats
+                   WHERE ea_id = ? ORDER BY created_at DESC LIMIT ?""",
+                (ea_id, limit),
+            ).fetchall()
+        return [self._row_to_player_stats(r) for r in rows]
+
+    def aggregate_leaderboard(self, metric: str = "goals", limit: int = 10) -> List[dict[str, Any]]:
         allowed = {
             "goals": "SUM(goals)",
             "assists": "SUM(assists)",
@@ -184,6 +214,8 @@ class ClubRepository:
             "losses": "SUM(possession_losses)",
             "saves": "SUM(saves)",
             "matches": "COUNT(DISTINCT match_id)",
+            "key_passes": "SUM(key_passes)",
+            "tackles": "SUM(tackles)",
         }
         expression = allowed.get(metric, allowed["goals"])
         with self.db.connect() as conn:
@@ -199,30 +231,79 @@ class ClubRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def _row_to_match(self, row: Any, player_rows: Iterable[Any]) -> Match:
-        players = [
-            PlayerMatchStats(
-                ea_id=p["ea_id"],
-                display_name=p["display_name"],
-                position=p["position"],
-                rating=p["rating"],
-                minutes=p["minutes"],
-                goals=p["goals"],
-                assists=p["assists"],
-                shots=p["shots"],
-                passes_attempted=p["passes_attempted"],
-                passes_completed=p["passes_completed"],
-                tackles=p["tackles"],
-                interceptions=p["interceptions"],
-                saves=p["saves"],
-                possession_losses=p["possession_losses"],
-                red_cards=p["red_cards"],
-                yellow_cards=p["yellow_cards"],
-                clean_sheets=p["clean_sheets"],
-                raw=json.loads(p["raw_json"] or "{}"),
+    def save_form(self, form: PlayerForm) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO player_form
+                (ea_id, match_id, form_score, impact_score, clutch_score, error_score, throwing_score, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ea_id, match_id) DO UPDATE SET
+                    form_score=excluded.form_score,
+                    impact_score=excluded.impact_score,
+                    clutch_score=excluded.clutch_score,
+                    error_score=excluded.error_score,
+                    throwing_score=excluded.throwing_score
+                """,
+                (
+                    form.ea_id,
+                    form.match_id,
+                    form.form_score,
+                    form.impact_score,
+                    form.clutch_score,
+                    form.error_score,
+                    form.throwing_score,
+                    form.created_at.isoformat(),
+                ),
             )
-            for p in player_rows
+
+    def get_recent_form(self, ea_id: str, matches: int = 5) -> List[PlayerForm]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM player_form WHERE ea_id = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (ea_id, matches),
+            ).fetchall()
+        return [
+            PlayerForm(
+                ea_id=r["ea_id"],
+                match_id=r["match_id"],
+                form_score=r["form_score"],
+                impact_score=r["impact_score"],
+                clutch_score=r["clutch_score"],
+                error_score=r["error_score"],
+                throwing_score=r["throwing_score"],
+                created_at=datetime.fromisoformat(r["created_at"]),
+            )
+            for r in rows
         ]
+
+    def record_reply(self, category: str, text: str) -> None:
+        import hashlib
+        h = hashlib.md5(text.encode()).hexdigest()
+        with self.db.connect() as conn:
+            conn.execute(
+                "INSERT INTO recent_replies (category, reply_hash, reply_text, used_at) VALUES (?, ?, ?, ?)",
+                (category, h, text, _now()),
+            )
+            # Keep only last 50 per category
+            conn.execute(
+                """DELETE FROM recent_replies WHERE id NOT IN (
+                    SELECT id FROM recent_replies WHERE category = ? ORDER BY used_at DESC LIMIT 50
+                )""",
+                (category,),
+            )
+
+    def get_recent_replies(self, category: str, limit: int = 20) -> List[str]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT reply_text FROM recent_replies WHERE category = ? ORDER BY used_at DESC LIMIT ?",
+                (category, limit),
+            ).fetchall()
+        return [r["reply_text"] for r in rows]
+
+    def _row_to_match(self, row: Any, player_rows: Iterable[Any]) -> Match:
+        players = [self._row_to_player_stats(p) for p in player_rows]
         return Match(
             match_id=row["match_id"],
             date=datetime.fromisoformat(row["date"]),
@@ -231,5 +312,31 @@ class ClubRepository:
             score_against=row["score_against"],
             result=row["result"],
             players=players,
+            raw=json.loads(row["raw_json"] or "{}"),
+        )
+
+    def _row_to_player_stats(self, row: Any) -> PlayerMatchStats:
+        return PlayerMatchStats(
+            ea_id=row["ea_id"],
+            display_name=row["display_name"],
+            position=row["position"],
+            rating=row["rating"],
+            minutes=row["minutes"],
+            goals=row["goals"],
+            assists=row["assists"],
+            shots=row["shots"],
+            shots_on_target=row.get("shots_on_target", 0) or 0,
+            passes_attempted=row["passes_attempted"],
+            passes_completed=row["passes_completed"],
+            key_passes=row.get("key_passes", 0) or 0,
+            tackles=row["tackles"],
+            interceptions=row["interceptions"],
+            saves=row["saves"],
+            possession_losses=row["possession_losses"],
+            red_cards=row["red_cards"],
+            yellow_cards=row["yellow_cards"],
+            clean_sheets=row["clean_sheets"],
+            distance_covered=row.get("distance_covered", 0.0) or 0.0,
+            sprint_speed=row.get("sprint_speed", 0.0) or 0.0,
             raw=json.loads(row["raw_json"] or "{}"),
         )
