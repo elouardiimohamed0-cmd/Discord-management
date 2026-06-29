@@ -1,1 +1,1 @@
-"""Rachad Pro Clubs bot rebuilt architecture."""
+# Rachad Pro Clubs Bot v3
