@@ -3,10 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.core.config import Settings, load_settings
+from src.core.logging import configure_logging
 from src.data.database import Database
 from src.data.repositories import ClubRepository
 from src.discord_layer.bot import build_bot
+from src.engine.card_engine import CardEngine
+from src.engine.roast_engine import RoastEngine
+from src.engine.video_engine import VideoEngine
 from src.scraper.proclubs_tracker import ProClubsTrackerClient
+from src.services.auto_service import AutoContentService
 from src.services.match_service import MatchService
 from src.squad.registry import SquadRegistry
 
@@ -19,24 +24,49 @@ class AppContext:
     repo: ClubRepository
     pct: ProClubsTrackerClient
     matches: MatchService
+    roast: RoastEngine
+    cards: CardEngine
+    video: VideoEngine
+    auto: AutoContentService
     bot: object
 
 
 def create_app() -> AppContext:
     settings = load_settings()
+    configure_logging(settings.log_level)
+
     squad = SquadRegistry.from_file(settings.squad_file)
 
     db = Database(settings.database_path)
     db.initialize()
     repo = ClubRepository(db)
-
-    # store squad identities for enrichment (identity only)
     repo.upsert_identities(squad.all())
 
     pct = ProClubsTrackerClient(settings=settings, squad=squad, repository=repo)
-    matches = MatchService(client=pct, repository=repo)
+    matches = MatchService(client=pct, repository=repo, squad=squad)
 
-    bot = build_bot(settings=settings, squad=squad, match_service=matches)
+    roast = RoastEngine(repository=repo, squad=squad)
+    cards = CardEngine(settings=settings, squad=squad)
+    video = VideoEngine(settings=settings, squad=squad)
+
+    auto = AutoContentService(
+        settings=settings,
+        repository=repo,
+        squad=squad,
+        roast=roast,
+        cards=cards,
+        video=video,
+    )
+
+    bot = build_bot(
+        settings=settings,
+        squad=squad,
+        match_service=matches,
+        roast=roast,
+        cards=cards,
+        video=video,
+        auto=auto,
+    )
 
     return AppContext(
         settings=settings,
@@ -45,5 +75,9 @@ def create_app() -> AppContext:
         repo=repo,
         pct=pct,
         matches=matches,
+        roast=roast,
+        cards=cards,
+        video=video,
+        auto=auto,
         bot=bot,
     )
