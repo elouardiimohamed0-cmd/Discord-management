@@ -19,13 +19,5 @@ logger.info("Starting %s", app.settings.app_name)
 await app.bot.start(app.settings.discord_token)
 def main() -> None:
 asyncio.run(async_main())
-if name == "main":
+if __name__ == "__main__":
 main()
-
-### Important (so the U+200B never comes back)
-After pasting, make sure the blank line under:
-​
-logger = get_logger(name)
-is a **real empty line** (no invisible characters). The code block above is clean.
-
-Once you commit, open your raw URL again and it should look exactly like this.
