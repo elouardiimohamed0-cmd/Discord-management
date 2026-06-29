@@ -13,7 +13,8 @@ primary_region = "iad"
   ROAST_FREQUENCY = "0.95"
   SQUAD_FILE = "squad.json"
   ASSETS_DIR = "assets"
-  SQLITE_PATH = "/app/rachad_data.db"
+  DATABASE_PATH = "/app/data/proclubs.db"
+  CACHE_DIR = "/app/.cache"
 
 [[services]]
   internal_port = 8000
