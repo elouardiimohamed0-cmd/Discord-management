@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field, field_validator
 
 from src.core.errors import PlayerNotInMatch
 
-
 Result = Literal["W", "D", "L"]
 
 
@@ -31,8 +30,10 @@ class PlayerMatchStats(BaseModel):
     goals: int = 0
     assists: int = 0
     shots: int = 0
+    shots_on_target: int = 0
     passes_attempted: int = 0
     passes_completed: int = 0
+    key_passes: int = 0
     tackles: int = 0
     interceptions: int = 0
     saves: int = 0
@@ -40,6 +41,8 @@ class PlayerMatchStats(BaseModel):
     red_cards: int = 0
     yellow_cards: int = 0
     clean_sheets: int = 0
+    distance_covered: float = 0.0
+    sprint_speed: float = 0.0
     raw: Dict[str, Any] = Field(default_factory=dict)
 
     @property
@@ -66,20 +69,62 @@ class Match(BaseModel):
     @field_validator("players")
     @classmethod
     def only_real_played_players(cls, players: List[PlayerMatchStats]) -> List[PlayerMatchStats]:
-        # This is the global hard rule: if a player is not in match.players,
-        # they do not exist for match-level commands.
-        return [player for player in players if player.played]
+        filtered = [p for p in players if p.played]
+        return filtered
+
+    def get_player(self, ea_id: str) -> PlayerMatchStats:
+        for p in self.players:
+            if p.ea_id == ea_id:
+                return p
+        raise PlayerNotInMatch(f"Player {ea_id} not in match.players")
 
     @property
-    def player_ids(self) -> set[str]:
-        return {player.ea_id.lower() for player in self.players}
+    def mvp(self) -> Optional[PlayerMatchStats]:
+        if not self.players:
+            return None
+        return max(self.players, key=lambda p: (p.rating, p.goals, p.assists, -p.possession_losses))
 
-    def require_player(self, ea_id_or_name: str) -> PlayerMatchStats:
-        key = ea_id_or_name.lower().strip()
-        for player in self.players:
-            if player.ea_id.lower() == key or player.display_name.lower() == key:
-                return player
-        raise PlayerNotInMatch(f"{ea_id_or_name} did not play this match")
+    @property
+    def fraud(self) -> Optional[PlayerMatchStats]:
+        if not self.players:
+            return None
+        return min(self.players, key=lambda p: (p.rating, -p.possession_losses, p.minutes))
+
+    @property
+    def ghost(self) -> Optional[PlayerMatchStats]:
+        if not self.players:
+            return None
+        ghosts = [p for p in self.players if p.minutes < 20 and p.rating < 5.0]
+        if not ghosts:
+            return min(self.players, key=lambda p: (p.minutes, p.rating))
+        return min(ghosts, key=lambda p: (p.minutes, p.rating))
+
+    @property
+    def carry(self) -> Optional[PlayerMatchStats]:
+        if not self.players:
+            return None
+        return max(self.players, key=lambda p: (p.goals + p.assists, p.rating, p.key_passes))
+
+    @property
+    def ball_loser(self) -> Optional[PlayerMatchStats]:
+        if not self.players:
+            return None
+        return max(self.players, key=lambda p: (p.possession_losses, -p.passes_completed))
+
+    @property
+    def playmaker(self) -> Optional[PlayerMatchStats]:
+        if not self.players:
+            return None
+        return max(self.players, key=lambda p: (p.assists + p.key_passes, p.pass_accuracy, p.passes_completed))
+
+    @property
+    def sniper(self) -> Optional[PlayerMatchStats]:
+        if not self.players:
+            return None
+        eligible = [p for p in self.players if p.shots > 0]
+        if not eligible:
+            return None
+        return max(eligible, key=lambda p: (p.goals / max(p.shots, 1), p.shots_on_target / max(p.shots, 1)))
 
 
 class ClubSnapshot(BaseModel):
@@ -91,15 +136,22 @@ class ClubSnapshot(BaseModel):
     losses: int = 0
     goals_scored: int = 0
     goals_conceded: int = 0
-    scraped_at: datetime = Field(default_factory=datetime.now)
     matches: List[Match] = Field(default_factory=list)
+    scraped_at: datetime = Field(default_factory=datetime.now)
 
     @property
     def latest_match(self) -> Optional[Match]:
-        return self.matches[0] if self.matches else None
+        if not self.matches:
+            return None
+        return max(self.matches, key=lambda m: m.date)
 
 
-def enforce_match_players_only(match: Match, candidates: List[PlayerIdentity]) -> List[PlayerIdentity]:
-    """Return identities only for people who are present in match.players."""
-    allowed = match.player_ids
-    return [candidate for candidate in candidates if candidate.ea_id.lower() in allowed]
+class PlayerForm(BaseModel):
+    ea_id: str
+    match_id: str
+    form_score: float = 0.0
+    impact_score: float = 0.0
+    clutch_score: float = 0.0
+    error_score: float = 0.0
+    throwing_score: float = 0.0
+    created_at: datetime = Field(default_factory=datetime.now)
