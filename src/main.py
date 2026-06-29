@@ -12,6 +12,7 @@ logger = get_logger(__name__)
 async def async_main() -> None:
 app = create_app()
 configure_logging(app.settings.log_level)
+Fly sets PORT. Default to 8000 for local/dev.
 port = int(os.getenv("PORT", "8000"))
 start_health_server(port)
 logger.info("Starting %s", app.settings.app_name)
@@ -20,3 +21,11 @@ def main() -> None:
 asyncio.run(async_main())
 if name == "main":
 main()
+
+### Important (so the U+200B never comes back)
+After pasting, make sure the blank line under:
+​
+logger = get_logger(name)
+is a **real empty line** (no invisible characters). The code block above is clean.
+
+Once you commit, open your raw URL again and it should look exactly like this.
