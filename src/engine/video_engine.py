@@ -27,27 +27,22 @@ class VideoEngine:
         identity: PlayerIdentity,
         card_type: str = "mvp",
     ) -> Optional[Path]:
-        """Generate a short 3-5s highlight animation using Pollinations image API + frames."""
-        # For now: create a simple animated GIF from card frames
-        # Future: integrate with Pollinations video endpoint when available
+        from PIL import Image
         from src.engine.card_engine import CardEngine
 
         cards = CardEngine(self.settings, self.squad)
         generator = getattr(cards, f"generate_{card_type}_card", cards.generate_mvp_card)
         base_card = generator(player, identity)
 
-        # Create 5 frames with slight zoom/pulse
         frames = []
-        base_img = __import__("PIL.Image", fromlist=["Image"]).Image.open(base_card)
+        base_img = Image.open(base_card)
 
         for i in range(5):
             frame = base_img.copy()
-            # Simple effect: zoom in slightly
             zoom = 1.0 + (i * 0.02)
             w, h = frame.size
             new_w, new_h = int(w * zoom), int(h * zoom)
-            frame = frame.resize((new_w, new_h), __import__("PIL.Image", fromlist=["Image"]).Image.LANCZOS)
-            # Crop back to center
+            frame = frame.resize((new_w, new_h), Image.LANCZOS)
             left = (new_w - w) // 2
             top = (new_h - h) // 2
             frame = frame.crop((left, top, left + w, top + h))
@@ -69,10 +64,9 @@ class VideoEngine:
         text: str,
         identity: PlayerIdentity,
     ) -> Optional[Path]:
-        """Placeholder for Hugging Face / Pollinations video generation."""
-        # Pollinations image prompt for meme background
+        import urllib.parse
         prompt = f"football meme, dramatic lighting, {identity.nickname}, {text[:50]}, cinematic, 4k"
-        url = f"{self.settings.pollinations_url}{__import__('urllib.parse').parse.quote(prompt)}"
+        url = f"{self.settings.pollinations_url}{urllib.parse.quote(prompt)}"
 
         img_path = self.cache_dir / f"meme_{identity.ea_id}_{hash(text)}.png"
         try:
