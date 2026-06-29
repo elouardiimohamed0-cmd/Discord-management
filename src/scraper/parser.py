@@ -1,157 +1,166 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
+from src.core.logging import get_logger
 from src.domain.models import ClubSnapshot, Match, PlayerMatchStats
-from src.squad.registry import SquadRegistry
+
+logger = get_logger(__name__)
 
 
 class ProClubsTrackerParser:
-    def __init__(self, club_id: str, squad: SquadRegistry):
-        self.club_id = str(club_id)
-        self.squad = squad
+    """Parse ProClubsTracker HTML/JSON into domain models."""
 
-    def parse(self, raw: dict[str, Any]) -> ClubSnapshot:
-        club_info = raw.get("clubInfoData") or {}
-        club_row = club_info.get(self.club_id) or (next(iter(club_info.values()), {}) if club_info else {})
-        overall = raw.get("overallStats") or {}
-        matches = self._parse_matches(raw)
+    def parse_club_page(self, html: str, url: str, raw_json: Optional[dict] = None) -> ClubSnapshot:
+        # Try structured JSON first
+        if raw_json and "matches" in raw_json:
+            return self._parse_json_snapshot(raw_json)
+
+        # Fallback: extract from embedded JSON in script tags
+        return self._parse_html_snapshot(html, url)
+
+    def _parse_json_snapshot(self, data: dict) -> ClubSnapshot:
+        club = data.get("club", {})
+        matches_data = data.get("matches", [])
+        matches = [self._parse_match(m) for m in matches_data if self._is_valid_match(m)]
         return ClubSnapshot(
-            club_name=club_row.get("name") or club_row.get("clubName") or "Unknown Club",
-            division=self._int(overall.get("bestDivision") or club_row.get("divisionId"), 0),
-            skill_rating=self._int(overall.get("skillRating") or club_row.get("skillRating"), 0),
-            wins=self._int(overall.get("wins"), 0),
-            draws=self._int(overall.get("ties"), 0),
-            losses=self._int(overall.get("losses"), 0),
-            goals_scored=self._int(overall.get("goals"), 0),
-            goals_conceded=self._int(overall.get("goalsAgainst"), 0),
-            scraped_at=datetime.now(),
+            club_name=club.get("name", "Unknown"),
+            division=club.get("division", 0),
+            skill_rating=club.get("skillRating", 0),
+            wins=club.get("wins", 0),
+            draws=club.get("draws", 0),
+            losses=club.get("losses", 0),
+            goals_scored=club.get("goalsFor", 0),
+            goals_conceded=club.get("goalsAgainst", 0),
             matches=matches,
+            scraped_at=datetime.now(),
         )
 
-    def _parse_matches(self, raw: dict[str, Any]) -> list[Match]:
-        raw_matches = raw.get("matches") or {}
-        all_matches: list[dict[str, Any]] = []
-        if isinstance(raw_matches, dict):
-            for key in ("league", "playoff", "friendly"):
-                rows = raw_matches.get(key) or []
-                if isinstance(rows, list):
-                    all_matches.extend(rows)
-        elif isinstance(raw_matches, list):
-            all_matches = raw_matches
+    def _parse_html_snapshot(self, html: str, url: str) -> ClubSnapshot:
+        # Extract match rows from HTML tables
+        # ProClubsTracker uses data-match-id attributes
+        matches: List[Match] = []
+        match_blocks = re.findall(r'data-match-id="(\d+)"[^>]*>(.*?)</tr>', html, re.DOTALL)
+        for match_id, block in match_blocks:
+            match = self._parse_match_block(match_id, block)
+            if match:
+                matches.append(match)
 
-        parsed: list[Match] = []
-        for row in all_matches:
-            if not isinstance(row, dict):
-                continue
-            match = self._parse_match(row)
-            if match and match.players:
-                parsed.append(match)
-        parsed.sort(key=lambda m: m.date, reverse=True)
-        return parsed
-
-    def _parse_match(self, row: dict[str, Any]) -> Optional[Match]:
-        clubs = row.get("clubs") or {}
-        if not isinstance(clubs, dict):
-            return None
-        ours = clubs.get(self.club_id)
-        opponent = None
-        for club_key, club_value in clubs.items():
-            if str(club_key) != self.club_id:
-                opponent = club_value
-                break
-        if not isinstance(ours, dict):
-            return None
-
-        score_for = self._int(ours.get("goals"), 0)
-        score_against = self._int(ours.get("goalsAgainst"), 0)
-        result = "W" if score_for > score_against else "L" if score_for < score_against else "D"
-        timestamp = row.get("timestamp") or row.get("time")
-        date = datetime.now()
-        if timestamp:
-            try:
-                date = datetime.fromtimestamp(int(timestamp))
-            except Exception:
-                pass
-        match_id = str(row.get("matchId") or row.get("matchid") or timestamp or f"{date.isoformat()}-{score_for}-{score_against}")
-        players = self._parse_match_players(row)
-        return Match(
-            match_id=match_id,
-            date=date,
-            opponent=self._opponent_name(opponent),
-            score_for=score_for,
-            score_against=score_against,
-            result=result,  # type: ignore[arg-type]
-            players=players,
-            raw=row,
+        # Extract club info
+        club_name = self._extract_meta(html, r'<h1[^>]*class="club-name"[^>]*>(.*?)</h1>', "Rachad FC")
+        return ClubSnapshot(
+            club_name=club_name,
+            matches=matches,
+            scraped_at=datetime.now(),
         )
 
-    def _parse_match_players(self, row: dict[str, Any]) -> list[PlayerMatchStats]:
-        raw_players = ((row.get("players") or {}).get(self.club_id) or {})
-        players: list[PlayerMatchStats] = []
-        if not isinstance(raw_players, dict):
-            return players
-        for _pid, raw_player in raw_players.items():
-            if not isinstance(raw_player, dict):
-                continue
-            ea_id = str(
-                raw_player.get("playername")
-                or raw_player.get("name")
-                or raw_player.get("personaName")
-                or "Unknown"
-            ).strip()
-            identity = self.squad.find(ea_id)
-            display = identity.nickname if identity else ea_id
-            passes_attempted = self._int(raw_player.get("passattempts"), 0)
-            passes_completed = self._int(raw_player.get("passesmade"), 0)
-            rating = self._rating(raw_player.get("rating"))
-            minutes = self._int(raw_player.get("secondsPlayed"), 0) // 60
-            players.append(
-                PlayerMatchStats(
-                    ea_id=ea_id,
-                    display_name=display,
-                    position=(identity.position if identity else (raw_player.get("pos") or None)),
-                    rating=rating,
-                    minutes=minutes,
-                    goals=self._int(raw_player.get("goals"), 0),
-                    assists=self._int(raw_player.get("assists"), 0),
-                    shots=self._int(raw_player.get("shots"), 0),
-                    passes_attempted=passes_attempted,
-                    passes_completed=passes_completed,
-                    tackles=self._int(raw_player.get("tacklesmade"), 0),
-                    interceptions=self._int(raw_player.get("interceptions"), 0),
-                    saves=self._int(raw_player.get("saves"), 0),
-                    possession_losses=max(0, passes_attempted - passes_completed),
-                    red_cards=self._int(raw_player.get("redcards"), 0),
-                    yellow_cards=self._int(raw_player.get("yellowcards"), 0),
-                    clean_sheets=self._int(raw_player.get("cleansheetsany"), 0),
-                    raw=raw_player,
-                )
+    def _parse_match_block(self, match_id: str, html: str) -> Optional[Match]:
+        try:
+            opponent = self._extract_meta(html, r'class="opponent-name"[^>]*>(.*?)</', "Unknown")
+            score_text = self._extract_meta(html, r'class="score"[^>]*>(.*?)</', "0-0")
+            score_for, score_against = self._parse_score(score_text)
+            date_str = self._extract_meta(html, r'data-date="([^"]*)"', datetime.now().isoformat())
+            result = "W" if score_for > score_against else "L" if score_for < score_against else "D"
+
+            players = self._extract_players_from_match(html, match_id)
+            return Match(
+                match_id=match_id,
+                date=datetime.fromisoformat(date_str.replace("Z", "+00:00")),
+                opponent=opponent,
+                score_for=score_for,
+                score_against=score_against,
+                result=result,
+                players=players,
             )
+        except Exception as e:
+            logger.warning("Failed to parse match block %s: %s", match_id, e)
+            return None
+
+    def _extract_players_from_match(self, html: str, match_id: str) -> List[PlayerMatchStats]:
+        players = []
+        # Look for player rows within match detail
+        player_rows = re.findall(r'<tr[^>]*class="player-row"[^>]*>(.*?)</tr>', html, re.DOTALL)
+        for row in player_rows:
+            p = self._parse_player_row(row)
+            if p and p.played:
+                players.append(p)
         return players
 
-    @staticmethod
-    def _opponent_name(opponent: Any) -> str:
-        if not isinstance(opponent, dict):
-            return "Unknown"
-        details = opponent.get("details") if isinstance(opponent.get("details"), dict) else {}
-        return details.get("name") or opponent.get("name") or opponent.get("clubName") or "Unknown"
-
-    @staticmethod
-    def _int(value: Any, default: int = 0) -> int:
+    def _parse_player_row(self, html: str) -> Optional[PlayerMatchStats]:
         try:
-            return int(float(str(value))) if value is not None else default
-        except Exception:
-            return default
+            ea_id = self._extract_meta(html, r'data-player-id="([^"]*)"', "")
+            name = self._extract_meta(html, r'class="player-name"[^>]*>(.*?)</', "Unknown")
+            rating = float(self._extract_meta(html, r'class="rating"[^>]*>(.*?)</', "0"))
+            minutes = int(self._extract_meta(html, r'class="minutes"[^>]*>(.*?)</', "0"))
+            goals = int(self._extract_meta(html, r'class="goals"[^>]*>(.*?)</', "0"))
+            assists = int(self._extract_meta(html, r'class="assists"[^>]*>(.*?)</', "0"))
 
-    @staticmethod
-    def _float(value: Any, default: float = 0.0) -> float:
-        try:
-            return float(str(value)) if value is not None else default
-        except Exception:
-            return default
+            return PlayerMatchStats(
+                ea_id=ea_id or name,
+                display_name=name,
+                rating=rating,
+                minutes=minutes,
+                goals=goals,
+                assists=assists,
+            )
+        except Exception as e:
+            logger.warning("Failed to parse player row: %s", e)
+            return None
 
-    def _rating(self, value: Any) -> float:
-        rating = self._float(value, 0.0)
-        return round(rating / 10.0, 2) if rating > 10 else round(rating, 2)
+    def _parse_match(self, data: dict) -> Match:
+        players = []
+        for p in data.get("players", []):
+            stats = PlayerMatchStats(
+                ea_id=str(p.get("playerId", p.get("name", "unknown"))),
+                display_name=p.get("name", "Unknown"),
+                position=p.get("position"),
+                rating=float(p.get("rating", 0)),
+                minutes=int(p.get("minutes", 0)),
+                goals=int(p.get("goals", 0)),
+                assists=int(p.get("assists", 0)),
+                shots=int(p.get("shots", 0)),
+                shots_on_target=int(p.get("shotsOnTarget", 0)),
+                passes_attempted=int(p.get("passesAttempted", 0)),
+                passes_completed=int(p.get("passesCompleted", 0)),
+                key_passes=int(p.get("keyPasses", 0)),
+                tackles=int(p.get("tackles", 0)),
+                interceptions=int(p.get("interceptions", 0)),
+                saves=int(p.get("saves", 0)),
+                possession_losses=int(p.get("possessionLosses", 0)),
+                red_cards=int(p.get("redCards", 0)),
+                yellow_cards=int(p.get("yellowCards", 0)),
+                clean_sheets=int(p.get("cleanSheet", 0)),
+                distance_covered=float(p.get("distance", 0)),
+                sprint_speed=float(p.get("sprintSpeed", 0)),
+                raw=p,
+            )
+            if stats.played:
+                players.append(stats)
+
+        return Match(
+            match_id=str(data.get("matchId", data.get("id", "unknown"))),
+            date=datetime.fromisoformat(str(data.get("date", datetime.now().isoformat())).replace("Z", "+00:00")),
+            opponent=str(data.get("opponent", "Unknown")),
+            score_for=int(data.get("scoreFor", 0)),
+            score_against=int(data.get("scoreAgainst", 0)),
+            result=data.get("result", "D"),
+            players=players,
+            raw=data,
+        )
+
+    def _is_valid_match(self, data: dict) -> bool:
+        return bool(data.get("matchId") or data.get("id"))
+
+    def _parse_score(self, text: str) -> tuple[int, int]:
+        parts = text.replace(" ", "").split("-")
+        if len(parts) == 2:
+            return int(parts[0]), int(parts[1])
+        return 0, 0
+
+    def _extract_meta(self, html: str, pattern: str, default: str) -> str:
+        m = re.search(pattern, html)
+        if m:
+            return m.group(1).strip()
+        return default
