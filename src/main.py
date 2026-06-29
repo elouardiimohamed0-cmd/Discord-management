@@ -12,6 +12,7 @@ logger = get_logger(__name__)
 async def async_main() -> None:
 app = create_app()
 configure_logging(app.settings.log_level)
+Fly smoke checks expect a listener on PORT (default 8000)
 port = int(os.getenv("PORT", "8000"))
 start_health_server(port)
 logger.info("Starting %s", app.settings.app_name)
