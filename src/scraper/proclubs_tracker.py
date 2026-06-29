@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import gzip
-from typing import Any, Optional
-
-import httpx
+import asyncio
+from typing import Optional
 
 from src.core.config import Settings
 from src.core.logging import get_logger
 from src.data.repositories import ClubRepository
 from src.domain.models import ClubSnapshot
-from src.scraper.browser import BrowserFetcher
-from src.scraper.cache import JsonCache
+from src.scraper.browser import BrowserManager
+from src.scraper.cache import FileCache
 from src.scraper.parser import ProClubsTrackerParser
 from src.squad.registry import SquadRegistry
 
@@ -18,69 +16,67 @@ logger = get_logger(__name__)
 
 
 class ProClubsTrackerClient:
-    def __init__(self, settings: Settings, squad: SquadRegistry, repository: ClubRepository):
+    def __init__(
+        self,
+        settings: Settings,
+        squad: SquadRegistry,
+        repository: ClubRepository,
+        headless: bool = True,
+    ):
         self.settings = settings
         self.squad = squad
-        self.repository = repository
-        self.parser = ProClubsTrackerParser(settings.club_id, squad)
-        self.cache = JsonCache(settings.cache_dir / "pct")
-        self.browser = BrowserFetcher(settings.cache_dir / "browser")
-        self.api_url = f"https://proclubstracker.com/api/clubs/{settings.club_id}?platform={settings.pct_platform}"
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-            "Accept": "application/json, text/html,*/*",
-            "Referer": "https://proclubstracker.com/",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
+        self.repo = repository
+        self.cache = FileCache(settings.cache_dir, ttl_seconds=120)
+        self.parser = ProClubsTrackerParser()
+        self.browser = BrowserManager(headless=headless)
+        self._initialized = False
 
-    async def refresh(self, force: bool = False, source: str = "manual") -> ClubSnapshot:
-        raw: Optional[dict[str, Any]] = None
-        request_count = 0
+    async def ensure_browser(self) -> None:
+        if not self._initialized:
+            await self.browser.start()
+            self._initialized = True
 
+    async def refresh(self, force: bool = False, source: str = "scheduled") -> ClubSnapshot:
+        url = self.settings.pct_club_url
         if not force:
-            raw = self.cache.get("club", ttl_seconds=max(60, self.settings.scrape_interval_minutes * 60))
-            if raw:
-                logger.info("Using cached Pro Clubs Tracker payload")
+            cached = self.cache.get(url)
+            if cached:
+                logger.info("Using cached snapshot")
+                return self.parser.parse_club_page("", url, cached)
 
-        try:
-            if raw is None:
-                request_count += 1
-                raw = await self._fetch_api()
+        await self.ensure_browser()
+        snapshot = await self._scrape_with_retry(url)
+        self.cache.set(url, snapshot.model_dump())
+        self.repo.save_snapshot(snapshot)
+        self.repo.log_scrape(source=source, success=True, request_count=1)
+        return snapshot
 
-            if raw is None:
-                request_count += 1
-                raw = await self.browser.fetch_json_from_page(self.settings.pct_club_url, self.api_url)
+    async def _scrape_with_retry(self, url: str, max_retries: int = 3) -> ClubSnapshot:
+        last_error = ""
+        for attempt in range(max_retries):
+            try:
+                page = await self.browser.new_page()
+                await page.goto(url, wait_until="networkidle", timeout=30000)
+                await page.wait_for_selector("table, .match-row, .club-header", timeout=15000)
+                html = await page.content()
+                # Try to extract JSON from page
+                raw_json = await page.evaluate("""() => {
+                    if (window.__INITIAL_STATE__) return window.__INITIAL_STATE__;
+                    if (window.__DATA__) return window.__DATA__;
+                    return null;
+                }""")
+                await page.close()
+                snapshot = self.parser.parse_club_page(html, url, raw_json)
+                logger.info("Scraped %d matches", len(snapshot.matches))
+                return snapshot
+            except Exception as e:
+                last_error = str(e)
+                logger.warning("Scrape attempt %d failed: %s", attempt + 1, e)
+                await asyncio.sleep(2 ** attempt)
 
-            if raw is None:
-                raise RuntimeError("Pro Clubs Tracker returned no usable data")
+        self.repo.log_scrape(source="proclubs_tracker", success=False, error=last_error, request_count=max_retries)
+        raise Exception(f"Failed to scrape after {max_retries} attempts: {last_error}")
 
-            self.cache.set("club", raw)
-            snapshot = self.parser.parse(raw)
-            self.repository.save_snapshot(snapshot, raw=raw)
-            self.repository.log_scrape(source=source, success=True, request_count=request_count)
-            logger.info("Saved snapshot: %s matches", len(snapshot.matches))
-            return snapshot
-        except Exception as exc:
-            self.repository.log_scrape(source=source, success=False, error=str(exc), request_count=request_count)
-            logger.exception("Refresh failed")
-            raise
-
-    async def _fetch_api(self) -> Optional[dict[str, Any]]:
-        async with httpx.AsyncClient(headers=self.headers, follow_redirects=True, timeout=20) as client:
-            response = await client.get(self.api_url)
-            if response.status_code in {403, 429}:
-                logger.warning("PCT API blocked/limited: %s", response.status_code)
-                return None
-            if response.status_code != 200:
-                logger.warning("PCT API status %s", response.status_code)
-                return None
-
-            raw = response.content
-            if raw[:2] == b"\x1f\x8b" or "gzip" in response.headers.get("content-encoding", "").lower():
-                raw = gzip.decompress(raw)
-            if raw[:100].strip().startswith(b"<"):
-                logger.warning("PCT API returned HTML instead of JSON")
-                return None
-
-            data = response.json()
-            return data if isinstance(data, dict) else None
+    async def close(self) -> None:
+        await self.browser.close()
+        self._initialized = False
