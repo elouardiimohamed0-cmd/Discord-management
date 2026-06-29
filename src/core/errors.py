@@ -15,3 +15,19 @@ class DataRuleViolation(BotError):
 
 class PlayerNotInMatch(DataRuleViolation):
     """Raised when a command tries to use a player absent from match.players."""
+
+
+class NoMatchesFound(BotError):
+    """No matches in database."""
+
+
+class ScraperError(BotError):
+    """Playwright/scraper failure."""
+
+
+class CardError(BotError):
+    """Image generation failure."""
+
+
+class VideoError(BotError):
+    """Video generation failure."""
