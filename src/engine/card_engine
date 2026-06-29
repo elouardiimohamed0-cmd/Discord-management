@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Optional
+
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+
+from src.core.config import Settings
+from src.core.logging import get_logger
+from src.domain.models import PlayerIdentity, PlayerMatchStats
+from src.squad.registry import SquadRegistry
+
+logger = get_logger(__name__)
+
+CARD_WIDTH = 1440
+CARD_HEIGHT = 2160
+
+
+class CardEngine:
+    def __init__(self, settings: Settings, squad: SquadRegistry):
+        self.settings = settings
+        self.squad = squad
+        self.templates_dir = settings.templates_dir
+        self.assets_dir = settings.assets_dir
+        self.cache_dir = settings.cache_dir
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Ensure templates exist
+        self._ensure_templates()
+
+    def _ensure_templates(self) -> None:
+        """Generate minimal template backgrounds if missing."""
+        self.templates_dir.mkdir(parents=True, exist_ok=True)
+        types = ["mvp", "fraud", "ghost", "carry", "court", "playmaker", "sniper", "ball_loser", "legend"]
+        for t in types:
+            path = self.templates_dir / f"{t}_bg.png"
+            if not path.exists():
+                self._generate_template_bg(t, path)
+
+    def _generate_template_bg(self, card_type: str, path: Path) -> None:
+        colors = {
+            "mvp": (255, 215, 0),      # Gold
+            "fraud": (220, 20, 60),      # Crimson
+            "ghost": (138, 43, 226),     # BlueViolet
+            "carry": (0, 191, 255),      # DeepSkyBlue
+            "court": (139, 69, 19),      # SaddleBrown
+            "playmaker": (50, 205, 50),   # LimeGreen
+            "sniper": (255, 69, 0),       # OrangeRed
+            "ball_loser": (128, 128, 128), # Gray
+            "legend": (255, 223, 0),      # Gold
+        }
+        base = colors.get(card_type, (30, 30, 30))
+        img = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (18, 18, 22))
+        draw = ImageDraw.Draw(img)
+
+        # Gradient-ish background
+        for y in range(CARD_HEIGHT):
+            r = int(base[0] * (1 - y / CARD_HEIGHT) + 18 * (y / CARD_HEIGHT))
+            g = int(base[1] * (1 - y / CARD_HEIGHT) + 18 * (y / CARD_HEIGHT))
+            b = int(base[2] * (1 - y / CARD_HEIGHT) + 22 * (y / CARD_HEIGHT))
+            draw.line([(0, y), (CARD_WIDTH, y)], fill=(r, g, b))
+
+        # Add noise texture
+        overlay = Image.new("RGBA", (CARD_WIDTH, CARD_HEIGHT), (255, 255, 255, 15))
+        img = Image.alpha_composite(img.convert("RGBA"), overlay)
+
+       
