@@ -35,6 +35,8 @@ class Settings:
     cache_dir: Path
     database_path: Path
 
+    pollinations_url: str
+
 
 def _int_or_none(value: str | None) -> Optional[int]:
     if value is None or value == "" or value == "0":
@@ -71,4 +73,5 @@ def load_settings() -> Settings:
         templates_dir=Path(os.getenv("TEMPLATES_DIR", "assets/templates")),
         cache_dir=Path(os.getenv("CACHE_DIR", ".cache")),
         database_path=Path(os.getenv("DATABASE_PATH", "data/proclubs.db")),
+        pollinations_url=os.getenv("POLLINATIONS_API_URL", "https://image.pollinations.ai/prompt/"),
     )
