@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import os
-import random
 from pathlib import Path
 from typing import Optional
 
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+from PIL import Image, ImageDraw, ImageFont
 
 from src.core.config import Settings
 from src.core.logging import get_logger
@@ -26,7 +25,6 @@ class CardEngine:
         self.assets_dir = settings.assets_dir
         self.cache_dir = settings.cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-
         self._ensure_templates()
         self._load_fonts()
 
@@ -37,7 +35,7 @@ class CardEngine:
         self.font_small = self._get_font(36)
         self.font_tiny = self._get_font(28)
 
-    def _get_font(self, size: int) -> ImageFont.FreeTypeFont:
+    def _get_font(self, size: int):
         candidates = [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
@@ -72,21 +70,17 @@ class CardEngine:
         base = colors.get(card_type, (30, 30, 30))
         img = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (18, 18, 22))
         draw = ImageDraw.Draw(img)
-
         for y in range(CARD_HEIGHT):
             r = int(base[0] * (1 - y / CARD_HEIGHT) + 18 * (y / CARD_HEIGHT))
             g = int(base[1] * (1 - y / CARD_HEIGHT) + 18 * (y / CARD_HEIGHT))
             b = int(base[2] * (1 - y / CARD_HEIGHT) + 22 * (y / CARD_HEIGHT))
             draw.line([(0, y), (CARD_WIDTH, y)], fill=(r, g, b))
-
-        # Hex pattern overlay
         for i in range(0, CARD_WIDTH, 80):
             for j in range(0, CARD_HEIGHT, 70):
                 draw.polygon(
                     [(i + 20, j), (i + 60, j), (i + 80, j + 35), (i + 60, j + 70), (i + 20, j + 70), (i, j + 35)],
                     outline=(255, 255, 255, 8),
                 )
-
         img.save(path)
         logger.info("Generated template: %s", path)
 
@@ -95,43 +89,27 @@ class CardEngine:
             img_path = self.assets_dir / identity.image
             if img_path.exists():
                 return Image.open(img_path).convert("RGBA")
-        # Fallback silhouette
-        img = Image.new("RGBA", (600, 800), (40, 40, 45, 255))
-        return img
+        return Image.new("RGBA", (600, 800), (40, 40, 45, 255))
 
-    def _create_base_card(self, card_type: str, title: str, color: tuple[int, int, int]) -> tuple[Image.Image, ImageDraw.Draw]:
+    def _create_base_card(self, card_type: str, title: str, color: tuple):
         bg_path = self.templates_dir / f"{card_type}_bg.png"
         if bg_path.exists():
             card = Image.open(bg_path).convert("RGBA").copy()
         else:
             card = Image.new("RGBA", (CARD_WIDTH, CARD_HEIGHT), (18, 18, 22, 255))
-
         draw = ImageDraw.Draw(card)
-
-        # Top bar
         draw.rectangle([(0, 0), (CARD_WIDTH, 140)], fill=(*color, 220))
         draw.text((CARD_WIDTH // 2, 70), title, font=self.font_title, fill=(255, 255, 255), anchor="mm")
-
-        # Bottom strip
         draw.rectangle([(0, CARD_HEIGHT - 100), (CARD_WIDTH, CARD_HEIGHT)], fill=(0, 0, 0, 180))
-
         return card, draw
 
     def _paste_player_image(self, card: Image.Image, identity: PlayerIdentity, x: int = 720, y: int = 900) -> None:
         player_img = self._load_player_image(identity)
         player_img = player_img.resize((500, 667), Image.LANCZOS)
-
-        # Circular mask
-        mask = Image.new("L", (500, 667), 0)
-        mask_draw = ImageDraw.Draw(mask)
-        mask_draw.ellipse([(0, 0), (500, 667)], fill=255)
-
-        # Glow
         glow = Image.new("RGBA", (540, 707), (255, 255, 255, 0))
         glow_draw = ImageDraw.Draw(glow)
         glow_draw.ellipse([(10, 10), (530, 697)], fill=(255, 255, 255, 40))
         card.paste(glow, (x - 270, y - 333), glow)
-
         card.paste(player_img, (x - 250, y - 333), player_img)
 
     def _draw_stats_block(self, draw: ImageDraw.Draw, player: PlayerMatchStats, x: int, y: int) -> None:
@@ -169,7 +147,6 @@ class CardEngine:
         draw.text((720, 1100), identity.nickname, font=self.font_name, fill=(255, 255, 255), anchor="mm")
         draw.text((720, 1200), "VERDICT: GUILTY", font=self.font_stat, fill=(220, 20, 60), anchor="mm")
         self._draw_stats_block(draw, player, 520, 1300)
-        # Red stamp
         draw.text((720, 1600), "FRAUD", font=self._get_font(140), fill=(220, 20, 60, 120), anchor="mm")
         return self._save_card(card, f"fraud_{identity.ea_id}_{player.match_id}")
 
@@ -195,7 +172,6 @@ class CardEngine:
         draw.text((720, 1100), identity.nickname, font=self.font_name, fill=(255, 255, 255), anchor="mm")
         draw.text((720, 1200), "CASE FILE #001", font=self.font_stat, fill=(139, 69, 19), anchor="mm")
         self._draw_stats_block(draw, player, 520, 1300)
-        # Gavel
         draw.text((720, 1650), "GUILTY", font=self._get_font(120), fill=(139, 69, 19, 150), anchor="mm")
         return self._save_card(card, f"court_{identity.ea_id}_{player.match_id}")
 
@@ -229,7 +205,6 @@ class CardEngine:
         self._paste_player_image(card, identity, 720, 700)
         draw.text((720, 1100), identity.nickname, font=self.font_name, fill=(255, 255, 255), anchor="mm")
         draw.text((720, 1200), identity.personality or "Legend", font=self.font_stat, fill=(255, 223, 0), anchor="mm")
-        # Bio
         if identity.raw.get("bio"):
             draw.text((720, 1300), identity.raw["bio"][:80], font=self.font_small, fill=(200, 200, 200), anchor="mm")
         return self._save_card(card, f"legend_{identity.ea_id}")
@@ -237,26 +212,18 @@ class CardEngine:
     def generate_compare_card(self, p1: PlayerMatchStats, id1: PlayerIdentity, p2: PlayerMatchStats, id2: PlayerIdentity) -> Path:
         card = Image.new("RGBA", (CARD_WIDTH, CARD_HEIGHT), (18, 18, 22, 255))
         draw = ImageDraw.Draw(card)
-
-        # Split background
         draw.rectangle([(0, 0), (CARD_WIDTH // 2, CARD_HEIGHT)], fill=(30, 30, 40, 255))
         draw.rectangle([(CARD_WIDTH // 2, 0), (CARD_WIDTH, CARD_HEIGHT)], fill=(40, 30, 30, 255))
-
         draw.text((CARD_WIDTH // 2, 80), "VS", font=self._get_font(100), fill=(255, 255, 255), anchor="mm")
-
-        # Left player
         self._paste_player_image(card, id1, CARD_WIDTH // 4, 600)
         draw.text((CARD_WIDTH // 4, 1000), id1.nickname, font=self.font_name, fill=(255, 255, 255), anchor="mm")
         self._draw_stats_block(draw, p1, 120, 1100)
-
-        # Right player
         self._paste_player_image(card, id2, CARD_WIDTH * 3 // 4, 600)
         draw.text((CARD_WIDTH * 3 // 4, 1000), id2.nickname, font=self.font_name, fill=(255, 255, 255), anchor="mm")
         self._draw_stats_block(draw, p2, CARD_WIDTH // 2 + 120, 1100)
-
         return self._save_card(card, f"compare_{id1.ea_id}_{id2.ea_id}")
 
-    def generate_leaderboard_card(self, title: str, rows: list[dict], metric: str) -> Path:
+    def generate_leaderboard_card(self, title: str, rows: list, metric: str) -> Path:
         card, draw = self._create_base_card("mvp", title.upper(), (255, 215, 0))
         y = 300
         for i, row in enumerate(rows[:10]):
@@ -269,5 +236,4 @@ class CardEngine:
             draw.text((350, y + 40), name, font=self.font_stat, fill=(255, 255, 255), anchor="lm")
             draw.text((CARD_WIDTH - 240, y + 40), f"{value:.1f} ({matches}M)", font=self.font_stat, fill=color, anchor="rm")
             y += 100
-
         return self._save_card(card, f"leaderboard_{metric}")
