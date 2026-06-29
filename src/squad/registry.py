@@ -2,86 +2,56 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Dict, List, Optional
 
 from src.domain.models import PlayerIdentity
 
 
 class SquadRegistry:
-    """Identity-only registry backed by squad.json.
-
-    This class must never decide who played. It only enriches a player that
-    already came from match.players / Pro Clubs Tracker.
-    """
-
-    def __init__(self, players: Iterable[PlayerIdentity]):
+    def __init__(self, players: Dict[str, PlayerIdentity]):
         self._by_ea_id: Dict[str, PlayerIdentity] = {}
         self._by_nickname: Dict[str, PlayerIdentity] = {}
-        for player in players:
-            self._by_ea_id[player.ea_id.lower()] = player
-            self._by_nickname[player.nickname.lower()] = player
+        self._by_psn: Dict[str, PlayerIdentity] = {}
+        for key, p in players.items():
+            self._by_ea_id[p.ea_id.lower()] = p
+            self._by_nickname[p.nickname.lower()] = p
+            if p.raw.get("psn"):
+                self._by_psn[p.raw["psn"].lower()] = p
 
     @classmethod
     def from_file(cls, path: Path) -> "SquadRegistry":
-        if not path.exists():
-            return cls([])
-        with path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        return cls(cls._parse(data))
-
-    @staticmethod
-    def _parse(data: Any) -> list[PlayerIdentity]:
-        if isinstance(data, dict) and "players" in data and isinstance(data["players"], list):
-            rows = data["players"]
-        elif isinstance(data, dict):
-            rows = list(data.values())
-        elif isinstance(data, list):
-            rows = data
-        else:
-            rows = []
-
-        identities: list[PlayerIdentity] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            ea_id = str(row.get("ea_id") or row.get("psn") or row.get("PSN") or row.get("name") or "").strip()
-            nickname = str(row.get("nickname") or row.get("name") or ea_id).strip()
-            if not ea_id or not nickname:
-                continue
-            meme_tags = row.get("meme_tags") or row.get("tags") or []
-            if isinstance(meme_tags, str):
-                meme_tags = [meme_tags]
-            identities.append(
-                PlayerIdentity(
-                    ea_id=ea_id,
-                    nickname=nickname,
-                    image=row.get("image"),
-                    personality=row.get("personality") or row.get("style"),
-                    meme_tags=list(meme_tags),
-                    position=row.get("position"),
-                    number=row.get("number"),
-                    raw=row,
-                )
+        data = json.loads(path.read_text(encoding="utf-8"))
+        players = {}
+        for key, raw in data.items():
+            players[key] = PlayerIdentity(
+                ea_id=raw.get("psn", key),  # PSN is often the EA ID
+                nickname=raw.get("nickname", raw.get("name", key)),
+                image=raw.get("image"),
+                personality=raw.get("style") or raw.get("personality"),
+                meme_tags=raw.get("meme_tags", []),
+                position=raw.get("position"),
+                number=raw.get("number"),
+                raw=raw,
             )
-        return identities
+        return cls(players)
 
     def find(self, query: str) -> Optional[PlayerIdentity]:
-        key = query.lower().strip()
-        if key in self._by_ea_id:
-            return self._by_ea_id[key]
-        if key in self._by_nickname:
-            return self._by_nickname[key]
-        for player in self._by_ea_id.values():
-            if key in player.ea_id.lower() or key in player.nickname.lower():
-                return player
+        q = query.lower().strip()
+        return (
+            self._by_ea_id.get(q)
+            or self._by_nickname.get(q)
+            or self._by_psn.get(q)
+            or self._fuzzy_find(q)
+        )
+
+    def find_by_ea_id(self, ea_id: str) -> Optional[PlayerIdentity]:
+        return self._by_ea_id.get(ea_id.lower())
+
+    def _fuzzy_find(self, query: str) -> Optional[PlayerIdentity]:
+        for p in self._by_ea_id.values():
+            if query in p.nickname.lower() or query in p.ea_id.lower():
+                return p
         return None
 
-    def enrich_name(self, ea_id: str, fallback: str) -> str:
-        player = self._by_ea_id.get(ea_id.lower())
-        return player.nickname if player else fallback
-
-    def all(self) -> list[PlayerIdentity]:
+    def all(self) -> List[PlayerIdentity]:
         return list(self._by_ea_id.values())
-
-    def __len__(self) -> int:
-        return len(self._by_ea_id)
