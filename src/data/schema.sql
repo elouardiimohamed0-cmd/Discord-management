@@ -2,7 +2,7 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS players (
     ea_id TEXT PRIMARY KEY,
-    nickname TEXT,
+    nickname TEXT NOT NULL,
     image TEXT,
     personality TEXT,
     meme_tags_json TEXT NOT NULL DEFAULT '[]',
@@ -35,8 +35,10 @@ CREATE TABLE IF NOT EXISTS player_match_stats (
     goals INTEGER NOT NULL DEFAULT 0,
     assists INTEGER NOT NULL DEFAULT 0,
     shots INTEGER NOT NULL DEFAULT 0,
+    shots_on_target INTEGER NOT NULL DEFAULT 0,
     passes_attempted INTEGER NOT NULL DEFAULT 0,
     passes_completed INTEGER NOT NULL DEFAULT 0,
+    key_passes INTEGER NOT NULL DEFAULT 0,
     tackles INTEGER NOT NULL DEFAULT 0,
     interceptions INTEGER NOT NULL DEFAULT 0,
     saves INTEGER NOT NULL DEFAULT 0,
@@ -44,6 +46,8 @@ CREATE TABLE IF NOT EXISTS player_match_stats (
     red_cards INTEGER NOT NULL DEFAULT 0,
     yellow_cards INTEGER NOT NULL DEFAULT 0,
     clean_sheets INTEGER NOT NULL DEFAULT 0,
+    distance_covered REAL NOT NULL DEFAULT 0,
+    sprint_speed REAL NOT NULL DEFAULT 0,
     raw_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -135,3 +139,19 @@ CREATE TABLE IF NOT EXISTS recent_replies (
 );
 
 CREATE INDEX IF NOT EXISTS idx_recent_replies_category ON recent_replies(category, used_at DESC);
+
+CREATE TABLE IF NOT EXISTS player_form (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ea_id TEXT NOT NULL,
+    match_id TEXT NOT NULL,
+    form_score REAL NOT NULL DEFAULT 0,
+    impact_score REAL NOT NULL DEFAULT 0,
+    clutch_score REAL NOT NULL DEFAULT 0,
+    error_score REAL NOT NULL DEFAULT 0,
+    throwing_score REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE(ea_id, match_id),
+    FOREIGN KEY(match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_player_form_ea_id ON player_form(ea_id, created_at DESC);
