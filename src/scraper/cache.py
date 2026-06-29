@@ -1,27 +1,29 @@
 from __future__ import annotations
 
+import hashlib
 import json
-import time
 from pathlib import Path
 from typing import Any, Optional
 
 
-class JsonCache:
-    def __init__(self, directory: Path):
-        self.directory = directory
-        self.directory.mkdir(parents=True, exist_ok=True)
+class FileCache:
+    def __init__(self, cache_dir: Path, ttl_seconds: int = 300):
+        self.cache_dir = cache_dir
+        self.ttl_seconds = ttl_seconds
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def get(self, key: str, ttl_seconds: int) -> Optional[dict[str, Any]]:
-        path = self.directory / f"{key}.json"
+    def _key(self, url: str) -> str:
+        return hashlib.sha256(url.encode()).hexdigest()[:16]
+
+    def get(self, url: str) -> Optional[dict[str, Any]]:
+        path = self.cache_dir / f"{self._key(url)}.json"
         if not path.exists():
             return None
-        if time.time() - path.stat().st_mtime > ttl_seconds:
+        import time
+        if time.time() - path.stat().st_mtime > self.ttl_seconds:
             return None
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return None
+        return json.loads(path.read_text(encoding="utf-8"))
 
-    def set(self, key: str, value: dict[str, Any]) -> None:
-        path = self.directory / f"{key}.json"
-        path.write_text(json.dumps(value, ensure_ascii=False, default=str), encoding="utf-8")
+    def set(self, url: str, data: dict[str, Any]) -> None:
+        path = self.cache_dir / f"{self._key(url)}.json"
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
