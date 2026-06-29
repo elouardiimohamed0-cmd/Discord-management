@@ -1,1 +1,1 @@
-# Rachad Pro Clubs Bot v3
+# Empty file - makes src.engine a Python package
