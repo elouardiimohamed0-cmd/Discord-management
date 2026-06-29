@@ -13,13 +13,20 @@ async def main() -> None:
     app = create_app()
     configure_logging(app.settings.log_level)
 
-    # Start health server for Render
     health_task = asyncio.create_task(start_health_server(port=8000))
 
-    # Start bot
     logger.info("Starting bot...")
-    async with app.bot:
+    try:
         await app.bot.start(app.settings.discord_token)
+    except KeyboardInterrupt:
+        logger.info("Shutting down...")
+        await app.bot.close()
+    finally:
+        health_task.cancel()
+        try:
+            await health_task
+        except asyncio.CancelledError:
+            pass
 
 
 if __name__ == "__main__":
