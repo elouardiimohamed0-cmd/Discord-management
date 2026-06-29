@@ -1,10 +1,10 @@
-from future import annotations
+from__future__ import annotations
 import asyncio
 import os
 from src.core.app import create_app
 from src.core.logging import configure_logging, get_logger
 from src.services.health import start_health_server
-logger = get_logger(name)
+logger = get_logger(__name__)
 async def async_main() -> None:
         app = create_app()
         configure_logging(app.settings.log_level)
