@@ -59,35 +59,55 @@ def register_commands(bot: commands.Bot) -> None:
         await interaction.response.defer(thinking=True)
         svc = _get_match_service(bot)
         if not svc:
-            await interaction.followup.send("Match service not wired.")
+            await interaction.followup.send("❌ Match service not wired.")
             return
-        snapshot = await svc.refresh(force=True, source="discord:/sync")
-        latest = snapshot.latest_match
-        if not latest:
-            await interaction.followup.send(f"Sync ok. Matches: {len(snapshot.matches)} (no latest match).")
-            return
-        await interaction.followup.send(
-            f"Sync ok. Latest: {latest.score_for}-{latest.score_against} vs {latest.opponent} | "
-            f"match.players: {len(latest.players)}"
-        )
+        
+        try:
+            snapshot = await svc.refresh(force=True, source="discord:/sync")
+            latest = snapshot.latest_match
+            
+            if not latest:
+                await interaction.followup.send(
+                    f"✅ Sync complete. Total matches in DB: checked. "
+                    f"No new match found this scrape."
+                )
+                return
+            
+            lines = [
+                f"✅ **Sync complete**",
+                f"",
+                f"**Latest Match**",
+                f"Score: **{latest.score_for}-{latest.score_against}** vs {latest.opponent}",
+                f"Result: {'🟢 WIN' if latest.result == 'W' else '🔴 LOSS' if latest.result == 'L' else '🟡 DRAW'}",
+                f"Players: {len(latest.players)}",
+            ]
+            
+            if latest.mvp:
+                mvp_id = latest.mvp.ea_id
+                identity = _get_squad(bot).find_by_ea_id(mvp_id)
+                mvp_name = identity.nickname if identity else latest.mvp.display_name
+                lines.append(f"MVP: {mvp_name} ({latest.mvp.rating}⭐)")
+            
+            await interaction.followup.send("\n".join(lines))
+            
+        except Exception as e:
+            logger.error("Sync failed: %s", e, exc_info=True)
+            await interaction.followup.send(f"❌ Sync failed: {str(e)[:500]}")
 
     @bot.tree.command(name="status", description="Show current data status")
     async def status(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
         svc = _get_match_service(bot)
         if not svc:
-            await interaction.response.send_message("Match service not wired.")
+            await interaction.followup.send("❌ Match service not wired.")
             return
         st = svc.status()
-        await interaction.response.send_message(
-            "\n".join(
-                [
-                    "Data status",
-                    f"Latest match: {st.get('latest_match_id')}",
-                    f"Score: {st.get('latest_score')} vs {st.get('opponent')}",
-                    f"match.players: {st.get('latest_players')}",
-                ]
-            )
-        )
+        embed = discord.Embed(title="📊 Bot Status", color=0x3498db)
+        embed.add_field(name="Latest Match", value=st.get('latest_match_id') or "None", inline=False)
+        embed.add_field(name="Score", value=st.get('latest_score') or "N/A", inline=True)
+        embed.add_field(name="Opponent", value=st.get('opponent') or "N/A", inline=True)
+        embed.add_field(name="Players", value=str(st.get('latest_players', 0)), inline=True)
+        await interaction.followup.send(embed=embed)
 
     @bot.tree.command(name="player", description="Player profile, stats, lore, and card")
     @app_commands.describe(player="Nickname, EA ID, or PSN")
@@ -105,7 +125,8 @@ def register_commands(bot: commands.Bot) -> None:
             else:
                 await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("Player command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="mvp", description="Best performer from eligible match players")
     async def mvp(interaction: discord.Interaction) -> None:
@@ -113,7 +134,7 @@ def register_commands(bot: commands.Bot) -> None:
         try:
             match = _require_latest(bot)
             if not match.mvp:
-                await interaction.followup.send("No MVP found.")
+                await interaction.followup.send("No MVP found in latest match.")
                 return
             p = match.mvp
             identity = _get_squad(bot).find_by_ea_id(p.ea_id)
@@ -129,7 +150,8 @@ def register_commands(bot: commands.Bot) -> None:
             else:
                 await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("MVP command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="fraud", description="Fraud verdict for a player")
     @app_commands.describe(player="Nickname, EA ID, or PSN (optional, defaults to worst)")
@@ -157,7 +179,8 @@ def register_commands(bot: commands.Bot) -> None:
             else:
                 await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("Fraud command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="ghost", description="Ghost verdict from match activity")
     async def ghost(interaction: discord.Interaction) -> None:
@@ -181,7 +204,8 @@ def register_commands(bot: commands.Bot) -> None:
             else:
                 await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("Ghost command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="carry", description="Who carried the squad")
     async def carry(interaction: discord.Interaction) -> None:
@@ -205,7 +229,8 @@ def register_commands(bot: commands.Bot) -> None:
             else:
                 await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("Carry command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="who_sold", description="Who sold the match")
     async def who_sold(interaction: discord.Interaction) -> None:
@@ -229,7 +254,8 @@ def register_commands(bot: commands.Bot) -> None:
             else:
                 await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("WhoSold command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="ball_loser", description="Most dangerous ball loss merchant")
     async def ball_loser(interaction: discord.Interaction) -> None:
@@ -253,7 +279,8 @@ def register_commands(bot: commands.Bot) -> None:
             else:
                 await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("BallLoser command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="playmaker", description="Chance creator and pass dictator")
     async def playmaker(interaction: discord.Interaction) -> None:
@@ -277,7 +304,8 @@ def register_commands(bot: commands.Bot) -> None:
             else:
                 await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("Playmaker command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="sniper", description="Finishing and shot efficiency king")
     async def sniper(interaction: discord.Interaction) -> None:
@@ -301,7 +329,8 @@ def register_commands(bot: commands.Bot) -> None:
             else:
                 await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("Sniper command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="compare", description="Compare two players")
     @app_commands.describe(player_one="First player", player_two="Second player")
@@ -320,7 +349,8 @@ def register_commands(bot: commands.Bot) -> None:
             else:
                 await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("Compare command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="court_case", description="Open the tribunal case file")
     @app_commands.describe(player="Accused player")
@@ -338,7 +368,8 @@ def register_commands(bot: commands.Bot) -> None:
             else:
                 await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("CourtCase command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="club", description="Club summary and squad state")
     async def club(interaction: discord.Interaction) -> None:
@@ -354,7 +385,8 @@ def register_commands(bot: commands.Bot) -> None:
             embed.add_field(name="Players", value=str(len(match.players)), inline=True)
             await interaction.followup.send(embed=embed)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("Club command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="records", description="Club records and broken records")
     async def records(interaction: discord.Interaction) -> None:
@@ -365,11 +397,9 @@ def register_commands(bot: commands.Bot) -> None:
                 await interaction.followup.send("Records service not available.")
                 return
 
-            # Compute and save fresh records
             computed = recs.compute_all_records()
             recs.save_records(computed)
 
-            # Display
             embed = discord.Embed(
                 title="Rachad FC Records",
                 description="All-time club records",
@@ -383,8 +413,8 @@ def register_commands(bot: commands.Bot) -> None:
                 )
             await interaction.followup.send(embed=embed)
         except Exception as e:
-            logger.error("Records error: %s", e)
-            await interaction.followup.send(f"Error loading records: {e}")
+            logger.error("Records command error: %s", e)
+            await interaction.followup.send(f"❌ Error loading records: {e}")
 
     @bot.tree.command(name="form", description="Recent form for a player")
     @app_commands.describe(player="Player", matches="Number of recent matches")
@@ -402,7 +432,6 @@ def register_commands(bot: commands.Bot) -> None:
                 await interaction.followup.send("No history found.")
                 return
 
-            # Build sparkline
             ratings = [h.rating for h in history]
             spark_chars = "▁▂▃▄▅▆▇█"
             min_r, max_r = min(ratings), max(ratings)
@@ -424,7 +453,6 @@ def register_commands(bot: commands.Bot) -> None:
                 result_icon = "🟢" if h.rating >= 7 else "🟡" if h.rating >= 5 else "🔴"
                 lines.append(f"{result_icon} Rating {h.rating} | G+A: {h.goals}+{h.assists} | Losses: {h.possession_losses}")
 
-            # Get advanced form metrics
             recs = _get_records(bot)
             if recs:
                 memory = recs.generate_memory(identity.ea_id)
@@ -433,11 +461,26 @@ def register_commands(bot: commands.Bot) -> None:
 
             await interaction.followup.send("\n".join(lines))
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("Form command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="awards", description="Awards and weekly winners")
     async def awards(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message("Awards system active. Check daily channel for auto-posts.")
+        await interaction.response.defer(thinking=True)
+        try:
+            recs = _get_records(bot)
+            if recs:
+                fame = recs.get_hall_of_fame(limit=5)
+                if fame:
+                    lines = ["🏆 **Hall of Fame Top 5**"]
+                    for i, f in enumerate(fame):
+                        lines.append(f"{i+1}. {f['nickname']} - Avg {f['avg_rating']} ({f['matches']}M)")
+                    await interaction.followup.send("\n".join(lines))
+                    return
+            await interaction.followup.send("Awards system active. Check daily channel for auto-posts.")
+        except Exception as e:
+            logger.error("Awards command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="legend", description="Legend card and lore")
     @app_commands.describe(player="Optional player")
@@ -461,7 +504,8 @@ def register_commands(bot: commands.Bot) -> None:
             else:
                 await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("Legend command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="hall_of_shame", description="Historic fraud museum")
     async def hall_of_shame(interaction: discord.Interaction) -> None:
@@ -489,7 +533,8 @@ def register_commands(bot: commands.Bot) -> None:
                 )
             await interaction.followup.send(embed=embed)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("HallOfShame command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="hall_of_fame", description="Historic elite performances")
     async def hall_of_fame(interaction: discord.Interaction) -> None:
@@ -517,7 +562,8 @@ def register_commands(bot: commands.Bot) -> None:
                 )
             await interaction.followup.send(embed=embed)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("HallOfFame command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="rivalry", description="Head-to-head between two players")
     @app_commands.describe(player_one="First player", player_two="Second player")
@@ -559,7 +605,8 @@ def register_commands(bot: commands.Bot) -> None:
 
             await interaction.followup.send(embed=embed)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("Rivalry command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="memory", description="Squad historian report for a player")
     @app_commands.describe(player="Player name")
@@ -578,7 +625,8 @@ def register_commands(bot: commands.Bot) -> None:
             text = recs.generate_memory(identity.ea_id)
             await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("Memory command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="match_report", description="Latest match report with banter")
     async def match_report(interaction: discord.Interaction) -> None:
@@ -599,7 +647,8 @@ def register_commands(bot: commands.Bot) -> None:
                 embed.add_field(name="MVP", value=name, inline=False)
             await interaction.followup.send(embed=embed)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("MatchReport command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     @bot.tree.command(name="leaderboard", description="Leaderboard by metric")
     @app_commands.describe(metric="goals, assists, rating, minutes, losses, saves, matches, key_passes, tackles")
@@ -626,6 +675,7 @@ def register_commands(bot: commands.Bot) -> None:
             else:
                 await interaction.followup.send(text)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}")
+            logger.error("Leaderboard command error: %s", e)
+            await interaction.followup.send(f"❌ Error: {e}")
 
     logger.info("Registered all commands")
