@@ -146,7 +146,7 @@ class AutoContentService:
             row = rows[0]
             identity = self.squad.find_by_ea_id(row["ea_id"])
             if identity:
-                text = f"🚨 **Fraud of the Week**: {identity.nickname}\\nAvg Rating: {row['avg_rating']:.1f} | Possession Losses: {row['total_losses']}"
+                text = f"🚨 **Fraud of the Week**: {identity.nickname}\nAvg Rating: {row['avg_rating']:.1f} | Possession Losses: {row['total_losses']}"
                 await channel.send(text)
         except Exception as e:
             logger.error("Weekly fraud post failed: %s", e)
@@ -169,7 +169,7 @@ class AutoContentService:
             row = rows[0]
             identity = self.squad.find_by_ea_id(row["ea_id"])
             if identity:
-                text = f"👻 **Ghost of the Week**: {identity.nickname}\\nAvg Minutes: {row['avg_minutes']:.0f} over {row['matches']} matches"
+                text = f"👻 **Ghost of the Week**: {identity.nickname}\nAvg Minutes: {row['avg_minutes']:.0f} over {row['matches']} matches"
                 await channel.send(text)
         except Exception as e:
             logger.error("Weekly ghost post failed: %s", e)
@@ -192,7 +192,7 @@ class AutoContentService:
             row = rows[0]
             identity = self.squad.find_by_ea_id(row["ea_id"])
             if identity:
-                text = f"🔥 **MVP of the Week**: {identity.nickname}\\nAvg Rating: {row['avg_rating']:.1f} | G+A: {row['total_goals']}+{row['total_assists']}"
+                text = f"🔥 **MVP of the Week**: {identity.nickname}\nAvg Rating: {row['avg_rating']:.1f} | G+A: {row['total_goals']}+{row['total_assists']}"
                 await channel.send(text)
         except Exception as e:
             logger.error("Weekly MVP post failed: %s", e)
