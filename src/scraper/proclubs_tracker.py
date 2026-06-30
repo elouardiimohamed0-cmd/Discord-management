@@ -43,6 +43,16 @@ class ProClubsTrackerClient:
             if cached:
                 logger.info("Using cached snapshot")
                 return self.parser.parse_club_page("", url, cached)
+                
+    async def ensure_browser(self) -> None:
+        if not self._initialized:
+            await self.browser.start()
+            self._initialized = True
+
+    async def prewarm(self) -> None:
+        """Start browser early so it's ready when needed."""
+        await self.ensure_browser()
+        logger.info("Browser pre-warmed and ready")
 
         await self.ensure_browser()
         snapshot = await self._scrape_with_retry(url)
