@@ -29,6 +29,10 @@ def _get_squad(bot: commands.Bot):
     return getattr(bot, "squad", None)
 
 
+def _get_records(bot: commands.Bot):
+    return getattr(bot, "records", None)
+
+
 def _require_latest(bot: commands.Bot) -> Match:
     svc = _get_match_service(bot)
     if not svc:
@@ -44,13 +48,11 @@ def _resolve_player(bot: commands.Bot, query: str, match: Match):
     identity = squad.find(query) if squad else None
     if not identity:
         raise PlayerNotInMatch(f"Player '{query}' not found in squad registry.")
-    # HARD RULE: must be in match.players
     player = match.get_player(identity.ea_id)
     return player, identity
 
 
 def register_commands(bot: commands.Bot) -> None:
-    # ---- admin ----
     @bot.tree.command(name="sync", description="Fetch latest club data from Pro Clubs Tracker")
     @app_commands.checks.cooldown(1, 30.0, key=lambda i: i.user.id)
     async def sync(interaction: discord.Interaction) -> None:
@@ -65,7 +67,7 @@ def register_commands(bot: commands.Bot) -> None:
             await interaction.followup.send(f"Sync ok. Matches: {len(snapshot.matches)} (no latest match).")
             return
         await interaction.followup.send(
-            f"✅ Sync ok. Latest: {latest.score_for}-{latest.score_against} vs {latest.opponent} | "
+            f"Sync ok. Latest: {latest.score_for}-{latest.score_against} vs {latest.opponent} | "
             f"match.players: {len(latest.players)}"
         )
 
@@ -79,7 +81,7 @@ def register_commands(bot: commands.Bot) -> None:
         await interaction.response.send_message(
             "\n".join(
                 [
-                    "📊 Data status",
+                    "Data status",
                     f"Latest match: {st.get('latest_match_id')}",
                     f"Score: {st.get('latest_score')} vs {st.get('opponent')}",
                     f"match.players: {st.get('latest_players')}",
@@ -87,7 +89,6 @@ def register_commands(bot: commands.Bot) -> None:
             )
         )
 
-    # ---- core commands ----
     @bot.tree.command(name="player", description="Player profile, stats, lore, and card")
     @app_commands.describe(player="Nickname, EA ID, or PSN")
     async def player(interaction: discord.Interaction, player: str) -> None:
@@ -344,7 +345,6 @@ def register_commands(bot: commands.Bot) -> None:
         await interaction.response.defer(thinking=True)
         try:
             match = _require_latest(bot)
-            svc = _get_match_service(bot)
             embed = discord.Embed(
                 title="Rachad FC Club Status",
                 description=f"Latest: {match.score_for}-{match.score_against} vs {match.opponent}",
@@ -358,7 +358,33 @@ def register_commands(bot: commands.Bot) -> None:
 
     @bot.tree.command(name="records", description="Club records and broken records")
     async def records(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message("Records system active. Phase 3 complete.")
+        await interaction.response.defer(thinking=True)
+        try:
+            recs = _get_records(bot)
+            if not recs:
+                await interaction.followup.send("Records service not available.")
+                return
+
+            # Compute and save fresh records
+            computed = recs.compute_all_records()
+            recs.save_records(computed)
+
+            # Display
+            embed = discord.Embed(
+                title="Rachad FC Records",
+                description="All-time club records",
+                color=0xFFD700,
+            )
+            for rec in computed[:6]:
+                embed.add_field(
+                    name=rec["title"],
+                    value=rec["text"],
+                    inline=False,
+                )
+            await interaction.followup.send(embed=embed)
+        except Exception as e:
+            logger.error("Records error: %s", e)
+            await interaction.followup.send(f"Error loading records: {e}")
 
     @bot.tree.command(name="form", description="Recent form for a player")
     @app_commands.describe(player="Player", matches="Number of recent matches")
@@ -375,9 +401,36 @@ def register_commands(bot: commands.Bot) -> None:
             if not history:
                 await interaction.followup.send("No history found.")
                 return
-            lines = [f"**{identity.nickname}** - Last {len(history)} matches:"]
+
+            # Build sparkline
+            ratings = [h.rating for h in history]
+            spark_chars = "▁▂▃▄▅▆▇█"
+            min_r, max_r = min(ratings), max(ratings)
+            if max_r == min_r:
+                spark = "█" * len(ratings)
+            else:
+                spark = "".join(
+                    spark_chars[int((r - min_r) / (max_r - min_r) * (len(spark_chars) - 1))]
+                    for r in ratings
+                )
+
+            lines = [
+                f"**{identity.nickname}** - Last {len(history)} matches",
+                f"```",
+                f"Rating trend: {spark}",
+                f"```",
+            ]
             for h in history:
-                lines.append(f"Rating {h.rating} | G+A: {h.goals}+{h.assists} | Losses: {h.possession_losses}")
+                result_icon = "🟢" if h.rating >= 7 else "🟡" if h.rating >= 5 else "🔴"
+                lines.append(f"{result_icon} Rating {h.rating} | G+A: {h.goals}+{h.assists} | Losses: {h.possession_losses}")
+
+            # Get advanced form metrics
+            recs = _get_records(bot)
+            if recs:
+                memory = recs.generate_memory(identity.ea_id)
+                lines.append(f"")
+                lines.append(memory)
+
             await interaction.followup.send("\n".join(lines))
         except Exception as e:
             await interaction.followup.send(f"Error: {e}")
@@ -395,7 +448,6 @@ def register_commands(bot: commands.Bot) -> None:
             if player:
                 identity = squad.find(player) if squad else None
             else:
-                # Random legend
                 import random
                 identity = random.choice(squad.all()) if squad else None
             if not identity:
@@ -413,11 +465,120 @@ def register_commands(bot: commands.Bot) -> None:
 
     @bot.tree.command(name="hall_of_shame", description="Historic fraud museum")
     async def hall_of_shame(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message("Hall of Shame: coming with records engine.")
+        await interaction.response.defer(thinking=True)
+        try:
+            recs = _get_records(bot)
+            if not recs:
+                await interaction.followup.send("Records service not available.")
+                return
+            shame = recs.get_hall_of_shame(limit=10)
+            if not shame:
+                await interaction.followup.send("No shame data yet. Need at least 5 matches per player.")
+                return
+
+            embed = discord.Embed(
+                title="Hall of Shame",
+                description="The worst of the worst. Minimum 5 matches.",
+                color=0x8B0000,
+            )
+            for i, s in enumerate(shame):
+                embed.add_field(
+                    name=f"{i+1}. {s['nickname']}",
+                    value=f"Avg Rating: {s['avg_rating']} | Losses: {s['losses']} | Cards: {s['cards']} ({s['matches']}M)",
+                    inline=False,
+                )
+            await interaction.followup.send(embed=embed)
+        except Exception as e:
+            await interaction.followup.send(f"Error: {e}")
 
     @bot.tree.command(name="hall_of_fame", description="Historic elite performances")
     async def hall_of_fame(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message("Hall of Fame: coming with records engine.")
+        await interaction.response.defer(thinking=True)
+        try:
+            recs = _get_records(bot)
+            if not recs:
+                await interaction.followup.send("Records service not available.")
+                return
+            fame = recs.get_hall_of_fame(limit=10)
+            if not fame:
+                await interaction.followup.send("No fame data yet. Need at least 5 matches per player.")
+                return
+
+            embed = discord.Embed(
+                title="Hall of Fame",
+                description="The elite. Minimum 5 matches.",
+                color=0xFFD700,
+            )
+            for i, f in enumerate(fame):
+                embed.add_field(
+                    name=f"{i+1}. {f['nickname']}",
+                    value=f"Avg Rating: {f['avg_rating']} | G+A: {f['goals']}+{f['assists']} ({f['matches']}M)",
+                    inline=False,
+                )
+            await interaction.followup.send(embed=embed)
+        except Exception as e:
+            await interaction.followup.send(f"Error: {e}")
+
+    @bot.tree.command(name="rivalry", description="Head-to-head between two players")
+    @app_commands.describe(player_one="First player", player_two="Second player")
+    async def rivalry(interaction: discord.Interaction, player_one: str, player_two: str) -> None:
+        await interaction.response.defer(thinking=True)
+        try:
+            squad = _get_squad(bot)
+            id1 = squad.find(player_one) if squad else None
+            id2 = squad.find(player_two) if squad else None
+            if not id1 or not id2:
+                await interaction.followup.send("One or both players not found.")
+                return
+
+            recs = _get_records(bot)
+            if not recs:
+                await interaction.followup.send("Records service not available.")
+                return
+
+            data = recs.get_rivalry(id1.ea_id, id2.ea_id)
+            if not data:
+                await interaction.followup.send("These players have never played together.")
+                return
+
+            embed = discord.Embed(
+                title=f"⚔️ {data['player_one']} vs {data['player_two']}",
+                description=f"Played together in {data['matches_together']} matches",
+                color=0xFF4500,
+            )
+            embed.add_field(name=data['player_one'], value=f"Wins: {data['p1_wins']}\nAvg Rating: {data['p1_avg_rating']}", inline=True)
+            embed.add_field(name="Draws", value=str(data['draws']), inline=True)
+            embed.add_field(name=data['player_two'], value=f"Wins: {data['p2_wins']}\nAvg Rating: {data['p2_avg_rating']}", inline=True)
+
+            if data['recent_matches']:
+                recent = "\n".join(
+                    f"{m['date']} vs {m['opponent']} ({m['result']}): {m['p1_rating']} vs {m['p2_rating']}"
+                    for m in data['recent_matches']
+                )
+                embed.add_field(name="Recent battles", value=f"```\n{recent}\n```", inline=False)
+
+            await interaction.followup.send(embed=embed)
+        except Exception as e:
+            await interaction.followup.send(f"Error: {e}")
+
+    @bot.tree.command(name="memory", description="Squad historian report for a player")
+    @app_commands.describe(player="Player name")
+    async def memory(interaction: discord.Interaction, player: str) -> None:
+        await interaction.response.defer(thinking=True)
+        try:
+            squad = _get_squad(bot)
+            identity = squad.find(player) if squad else None
+            if not identity:
+                await interaction.followup.send("Player not found.")
+                return
+            recs = _get_records(bot)
+            if not recs:
+                await interaction.followup.send("Records service not available.")
+                return
+            text = recs.generate_memory(identity.ea_id)
+            await interaction.followup.send(text)
+        except Exception as e:
+            await interaction.followup.send(f"Error: {e}")
 
     @bot.tree.command(name="match_report", description="Latest match report with banter")
     async def match_report(interaction: discord.Interaction) -> None:
@@ -467,4 +628,4 @@ def register_commands(bot: commands.Bot) -> None:
         except Exception as e:
             await interaction.followup.send(f"Error: {e}")
 
-    logger.info("Registered all 20 commands + /sync + /status")
+    logger.info("Registered all commands")
