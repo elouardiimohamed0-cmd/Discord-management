@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from src.core.config import Settings
@@ -54,6 +55,29 @@ def build_bot(
         else:
             await bot.tree.sync()
             logger.info("Synced global commands")
+
+    @bot.tree.error
+    async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+        """Global error handler for slash commands."""
+        if isinstance(error, app_commands.CommandOnCooldown):
+            await interaction.response.send_message(
+                f"⏳ Command on cooldown. Try again in {error.retry_after:.1f}s.",
+                ephemeral=True
+            )
+        elif isinstance(error, app_commands.CommandInvokeError):
+            cause = error.original
+            logger.error("Command %s failed: %s", interaction.command.name if interaction.command else "unknown", cause, exc_info=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"❌ Command failed: {str(cause)[:500]}", ephemeral=True)
+            else:
+                try:
+                    await interaction.followup.send(f"❌ Command failed: {str(cause)[:500]}")
+                except Exception:
+                    pass
+        else:
+            logger.error("Unhandled app command error: %s", error, exc_info=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ An unexpected error occurred.", ephemeral=True)
 
     register_commands(bot)
     return bot
