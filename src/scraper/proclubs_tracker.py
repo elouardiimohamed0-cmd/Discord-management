@@ -36,6 +36,11 @@ class ProClubsTrackerClient:
             await self.browser.start()
             self._initialized = True
 
+    async def prewarm(self) -> None:
+        """Start browser early so it's ready when needed."""
+        await self.ensure_browser()
+        logger.info("Browser pre-warmed and ready")
+
     async def refresh(self, force: bool = False, source: str = "scheduled") -> ClubSnapshot:
         url = self.settings.pct_club_url
         if not force:
@@ -43,16 +48,6 @@ class ProClubsTrackerClient:
             if cached:
                 logger.info("Using cached snapshot")
                 return self.parser.parse_club_page("", url, cached)
-                
-    async def ensure_browser(self) -> None:
-        if not self._initialized:
-            await self.browser.start()
-            self._initialized = True
-
-    async def prewarm(self) -> None:
-        """Start browser early so it's ready when needed."""
-        await self.ensure_browser()
-        logger.info("Browser pre-warmed and ready")
 
         await self.ensure_browser()
         snapshot = await self._scrape_with_retry(url)
@@ -69,7 +64,6 @@ class ProClubsTrackerClient:
                 await page.goto(url, wait_until="networkidle", timeout=30000)
                 await page.wait_for_selector("table, .match-row, .club-header", timeout=15000)
                 html = await page.content()
-                # Try to extract JSON from page
                 raw_json = await page.evaluate("""() => {
                     if (window.__INITIAL_STATE__) return window.__INITIAL_STATE__;
                     if (window.__DATA__) return window.__DATA__;
