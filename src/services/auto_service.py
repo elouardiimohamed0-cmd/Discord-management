@@ -75,19 +75,25 @@ class AutoContentService:
             if latest.mvp:
                 mvp = latest.mvp
                 identity = self.squad.find_by_ea_id(mvp.ea_id)
-                if identity:
-                    card_path = self.cards.generate_mvp_card(mvp, identity)
-                    roast_text = self.roast.mvp_roast(mvp, identity)
-                    await channel.send(content=roast_text, file=discord.File(card_path))
+                if identity and self.cards and self.roast:
+                    try:
+                        card_path = self.cards.generate_mvp_card(mvp, identity)
+                        roast_text = self.roast.mvp_roast(mvp, identity)
+                        await channel.send(content=roast_text, file=discord.File(card_path))
+                    except Exception as e:
+                        logger.error("Auto MVP post failed: %s", e)
 
             # Fraud of match
             if latest.fraud:
                 fraud = latest.fraud
                 identity = self.squad.find_by_ea_id(fraud.ea_id)
-                if identity:
-                    card_path = self.cards.generate_fraud_card(fraud, identity)
-                    roast_text = self.roast.fraud_roast(fraud, identity)
-                    await channel.send(content=roast_text, file=discord.File(card_path))
+                if identity and self.cards and self.roast:
+                    try:
+                        card_path = self.cards.generate_fraud_card(fraud, identity)
+                        roast_text = self.roast.fraud_roast(fraud, identity)
+                        await channel.send(content=roast_text, file=discord.File(card_path))
+                    except Exception as e:
+                        logger.error("Auto fraud post failed: %s", e)
 
         except Exception as e:
             logger.error("Auto match check failed: %s", e)
@@ -123,62 +129,70 @@ class AutoContentService:
         return embed
 
     async def _post_weekly_fraud(self, channel: discord.TextChannel) -> None:
-        # Aggregate last 7 days
-        since = (datetime.now() - timedelta(days=7)).isoformat()
-        with self.repo.db.connect() as conn:
-            rows = conn.execute(
-                """SELECT ea_id, AVG(rating) as avg_rating, SUM(possession_losses) as total_losses
-                   FROM player_match_stats
-                   WHERE created_at > ?
-                   GROUP BY ea_id
-                   ORDER BY avg_rating ASC, total_losses DESC
-                   LIMIT 1""",
-                (since,),
-            ).fetchall()
-        if not rows:
-            return
-        row = rows[0]
-        identity = self.squad.find_by_ea_id(row["ea_id"])
-        if identity:
-            text = f"🚨 **Fraud of the Week**: {identity.nickname}\nAvg Rating: {row['avg_rating']:.1f} | Possession Losses: {row['total_losses']}"
-            await channel.send(text)
+        try:
+            since = (datetime.now() - timedelta(days=7)).isoformat()
+            with self.repo.db.connect() as conn:
+                rows = conn.execute(
+                    """SELECT ea_id, AVG(rating) as avg_rating, SUM(possession_losses) as total_losses
+                    FROM player_match_stats
+                    WHERE created_at > ?
+                    GROUP BY ea_id
+                    ORDER BY avg_rating ASC, total_losses DESC
+                    LIMIT 1""",
+                    (since,),
+                ).fetchall()
+            if not rows:
+                return
+            row = rows[0]
+            identity = self.squad.find_by_ea_id(row["ea_id"])
+            if identity:
+                text = f"🚨 **Fraud of the Week**: {identity.nickname}\\nAvg Rating: {row['avg_rating']:.1f} | Possession Losses: {row['total_losses']}"
+                await channel.send(text)
+        except Exception as e:
+            logger.error("Weekly fraud post failed: %s", e)
 
     async def _post_weekly_ghost(self, channel: discord.TextChannel) -> None:
-        since = (datetime.now() - timedelta(days=7)).isoformat()
-        with self.repo.db.connect() as conn:
-            rows = conn.execute(
-                """SELECT ea_id, AVG(minutes) as avg_minutes, COUNT(*) as matches
-                   FROM player_match_stats
-                   WHERE created_at > ?
-                   GROUP BY ea_id
-                   ORDER BY avg_minutes ASC
-                   LIMIT 1""",
-                (since,),
-            ).fetchall()
-        if not rows:
-            return
-        row = rows[0]
-        identity = self.squad.find_by_ea_id(row["ea_id"])
-        if identity:
-            text = f"👻 **Ghost of the Week**: {identity.nickname}\nAvg Minutes: {row['avg_minutes']:.0f} over {row['matches']} matches"
-            await channel.send(text)
+        try:
+            since = (datetime.now() - timedelta(days=7)).isoformat()
+            with self.repo.db.connect() as conn:
+                rows = conn.execute(
+                    """SELECT ea_id, AVG(minutes) as avg_minutes, COUNT(*) as matches
+                    FROM player_match_stats
+                    WHERE created_at > ?
+                    GROUP BY ea_id
+                    ORDER BY avg_minutes ASC
+                    LIMIT 1""",
+                    (since,),
+                ).fetchall()
+            if not rows:
+                return
+            row = rows[0]
+            identity = self.squad.find_by_ea_id(row["ea_id"])
+            if identity:
+                text = f"👻 **Ghost of the Week**: {identity.nickname}\\nAvg Minutes: {row['avg_minutes']:.0f} over {row['matches']} matches"
+                await channel.send(text)
+        except Exception as e:
+            logger.error("Weekly ghost post failed: %s", e)
 
     async def _post_weekly_mvp(self, channel: discord.TextChannel) -> None:
-        since = (datetime.now() - timedelta(days=7)).isoformat()
-        with self.repo.db.connect() as conn:
-            rows = conn.execute(
-                """SELECT ea_id, AVG(rating) as avg_rating, SUM(goals) as total_goals, SUM(assists) as total_assists
-                   FROM player_match_stats
-                   WHERE created_at > ?
-                   GROUP BY ea_id
-                   ORDER BY avg_rating DESC, total_goals DESC
-                   LIMIT 1""",
-                (since,),
-            ).fetchall()
-        if not rows:
-            return
-        row = rows[0]
-        identity = self.squad.find_by_ea_id(row["ea_id"])
-        if identity:
-            text = f"🔥 **MVP of the Week**: {identity.nickname}\nAvg Rating: {row['avg_rating']:.1f} | G+A: {row['total_goals']}+{row['total_assists']}"
-            await channel.send(text)
+        try:
+            since = (datetime.now() - timedelta(days=7)).isoformat()
+            with self.repo.db.connect() as conn:
+                rows = conn.execute(
+                    """SELECT ea_id, AVG(rating) as avg_rating, SUM(goals) as total_goals, SUM(assists) as total_assists
+                    FROM player_match_stats
+                    WHERE created_at > ?
+                    GROUP BY ea_id
+                    ORDER BY avg_rating DESC, total_goals DESC
+                    LIMIT 1""",
+                    (since,),
+                ).fetchall()
+            if not rows:
+                return
+            row = rows[0]
+            identity = self.squad.find_by_ea_id(row["ea_id"])
+            if identity:
+                text = f"🔥 **MVP of the Week**: {identity.nickname}\\nAvg Rating: {row['avg_rating']:.1f} | G+A: {row['total_goals']}+{row['total_assists']}"
+                await channel.send(text)
+        except Exception as e:
+            logger.error("Weekly MVP post failed: %s", e)
