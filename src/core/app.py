@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 from src.core.config import Settings, load_settings
@@ -71,6 +72,9 @@ def create_app() -> AppContext:
         records=records,
         auto=auto,
     )
+
+    # Pre-warm browser in background so first /sync is fast
+    asyncio.create_task(pct.prewarm())
 
     return AppContext(
         settings=settings,
