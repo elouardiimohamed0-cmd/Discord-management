@@ -30,11 +30,23 @@ class ProClubsTrackerClient:
         self.parser = ProClubsTrackerParser()
         self.browser = BrowserManager(headless=headless)
         self._initialized = False
+        self._initializing = False
 
     async def ensure_browser(self) -> None:
-        if not self._initialized:
+        if self._initialized:
+            return
+        if self._initializing:
+            # Wait for another task to finish initializing
+            while self._initializing:
+                await asyncio.sleep(0.1)
+            return
+        self._initializing = True
+        try:
             await self.browser.start()
             self._initialized = True
+            logger.info("Browser initialized")
+        finally:
+            self._initializing = False
 
     async def prewarm(self) -> None:
         """Start browser early so it's ready when needed."""
@@ -59,6 +71,7 @@ class ProClubsTrackerClient:
     async def _scrape_with_retry(self, url: str, max_retries: int = 3) -> ClubSnapshot:
         last_error = ""
         for attempt in range(max_retries):
+            page = None
             try:
                 page = await self.browser.new_page()
                 await page.goto(url, wait_until="networkidle", timeout=30000)
@@ -69,7 +82,6 @@ class ProClubsTrackerClient:
                     if (window.__DATA__) return window.__DATA__;
                     return null;
                 }""")
-                await page.close()
                 snapshot = self.parser.parse_club_page(html, url, raw_json)
                 logger.info("Scraped %d matches", len(snapshot.matches))
                 return snapshot
@@ -77,6 +89,12 @@ class ProClubsTrackerClient:
                 last_error = str(e)
                 logger.warning("Scrape attempt %d failed: %s", attempt + 1, e)
                 await asyncio.sleep(2 ** attempt)
+            finally:
+                if page:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
 
         self.repo.log_scrape(source="proclubs_tracker", success=False, error=last_error, request_count=max_retries)
         raise Exception(f"Failed to scrape after {max_retries} attempts: {last_error}")
