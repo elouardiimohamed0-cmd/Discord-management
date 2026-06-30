@@ -45,7 +45,7 @@ def create_app() -> AppContext:
     repo.upsert_identities(squad.all())
 
     pct = ProClubsTrackerClient(settings=settings, squad=squad, repository=repo)
-    # NOTE: Do NOT prewarm here. Browser initializes lazily on first use.
+    # NOTE: Do NOT prewarm here. The browser will be initialized lazily on first use.
     # This avoids double-initialization and race conditions during startup.
 
     matches = MatchService(client=pct, repository=repo, squad=squad)
