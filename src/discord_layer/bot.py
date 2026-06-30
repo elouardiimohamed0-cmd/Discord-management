@@ -1,6 +1,5 @@
-from __future__ import annotations
-
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from src.core.config import Settings
