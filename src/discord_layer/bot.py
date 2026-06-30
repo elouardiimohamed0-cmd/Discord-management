@@ -11,6 +11,7 @@ from src.engine.roast_engine import RoastEngine
 from src.engine.video_engine import VideoEngine
 from src.services.auto_service import AutoContentService
 from src.services.match_service import MatchService
+from src.services.records_service import RecordsService
 from src.squad.registry import SquadRegistry
 
 logger = get_logger(__name__)
@@ -23,6 +24,7 @@ def build_bot(
     roast: RoastEngine,
     cards: CardEngine,
     video: VideoEngine,
+    records: RecordsService,
     auto: AutoContentService,
 ) -> commands.Bot:
     intents = discord.Intents.default()
@@ -35,6 +37,7 @@ def build_bot(
     bot.roast = roast  # type: ignore[attr-defined]
     bot.cards = cards  # type: ignore[attr-defined]
     bot.video = video  # type: ignore[attr-defined]
+    bot.records = records  # type: ignore[attr-defined]
     bot.auto = auto  # type: ignore[attr-defined]
 
     @bot.event
