@@ -57,89 +57,79 @@ class RoastEngine:
         return random.choice(memes)
 
     def mvp_roast(self, player: PlayerMatchStats, identity: PlayerIdentity) -> str:
-        lines = [
+        return "\n".join([
             self._pick("mvp", MVP_PHRASES),
             f"**{identity.nickname}** | Rating: {player.rating} | G+A: {player.goals}+{player.assists}",
             self._player_meme(identity),
-        ]
-        return "\n".join(lines)
+        ])
 
     def fraud_roast(self, player: PlayerMatchStats, identity: PlayerIdentity) -> str:
-        lines = [
+        return "\n".join([
             self._pick("fraud", FRAUD_PHRASES),
             f"**{identity.nickname}** | Rating: {player.rating} | Losses: {player.possession_losses}",
             self._player_meme(identity),
-        ]
-        return "\n".join(lines)
+        ])
 
     def ghost_roast(self, player: PlayerMatchStats, identity: PlayerIdentity) -> str:
-        lines = [
+        return "\n".join([
             self._pick("ghost", GHOST_PHRASES),
             f"**{identity.nickname}** | Minutes: {player.minutes} | Rating: {player.rating}",
             self._player_meme(identity),
-        ]
-        return "\n".join(lines)
+        ])
 
     def carry_roast(self, player: PlayerMatchStats, identity: PlayerIdentity) -> str:
-        lines = [
+        return "\n".join([
             self._pick("carry", CARRY_PHRASES),
             f"**{identity.nickname}** | G+A: {player.goals}+{player.assists} | Impact: {player.goals + player.assists + player.key_passes}",
             self._player_meme(identity),
-        ]
-        return "\n".join(lines)
+        ])
 
     def ball_loser_roast(self, player: PlayerMatchStats, identity: PlayerIdentity) -> str:
-        lines = [
+        return "\n".join([
             self._pick("ball_loser", BALL_LOSER_PHRASES),
             f"**{identity.nickname}** | Possession Losses: {player.possession_losses} | Pass%: {player.pass_accuracy}%",
             self._player_meme(identity),
-        ]
-        return "\n".join(lines)
+        ])
 
     def playmaker_roast(self, player: PlayerMatchStats, identity: PlayerIdentity) -> str:
-        lines = [
+        return "\n".join([
             self._pick("playmaker", PLAYMAKER_PHRASES),
             f"**{identity.nickname}** | Assists: {player.assists} | Key Passes: {player.key_passes} | Pass%: {player.pass_accuracy}%",
             self._player_meme(identity),
-        ]
-        return "\n".join(lines)
+        ])
 
     def sniper_roast(self, player: PlayerMatchStats, identity: PlayerIdentity) -> str:
         efficiency = (player.goals / max(player.shots, 1)) * 100
-        lines = [
+        return "\n".join([
             f"🎯 **Sniper**",
             f"**{identity.nickname}** | Goals: {player.goals} | Shots: {player.shots} | Efficiency: {efficiency:.1f}%",
             self._player_meme(identity),
-        ]
-        return "\n".join(lines)
+        ])
 
     def who_sold_roast(self, player: PlayerMatchStats, identity: PlayerIdentity) -> str:
-        lines = [
+        return "\n".join([
             self._pick("fraud", FRAUD_PHRASES),
             f"**{identity.nickname}** | Rating: {player.rating} | Errors: {player.possession_losses + player.yellow_cards + player.red_cards}",
             "هادشي ماشي غلطة، هادا مشروع.",
             self._player_meme(identity),
-        ]
-        return "\n".join(lines)
+        ])
 
     def court_case_roast(self, player: PlayerMatchStats, identity: PlayerIdentity) -> str:
-        lines = [
+        return "\n".join([
             "⚖️ **المحكمة العسكرية للكرة القدم**",
             f"**المتهم**: {identity.nickname}",
             f"**التُهم**: Rating {player.rating} | Losses {player.possession_losses} | Cards {player.yellow_cards + player.red_cards}",
             self._pick("court", COURT_CASE_PHRASES),
             self._player_meme(identity),
             "الحكم: **مذنب بجميع التهم**",
-        ]
-        return "\n".join(lines)
+        ])
 
     def general_roast(self, player: PlayerMatchStats, identity: PlayerIdentity) -> str:
-        lines = [
+        return "\n".join([
             self._pick("roast", ROAST_PHRASES),
             f"**{identity.nickname}** | Rating: {player.rating}",
             self._player_meme(identity),
-        ]
-        return "\n".join(lines)
+        ])
 
     def compare_roast(self, p1: PlayerMatchStats, id1: PlayerIdentity, p2: PlayerMatchStats, id2: PlayerIdentity) -> str:
         winner = id1.nickname if p1.rating > p2.rating else id2.nickname
