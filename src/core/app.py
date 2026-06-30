@@ -17,7 +17,6 @@ from src.services.match_service import MatchService
 from src.services.records_service import RecordsService
 from src.squad.registry import SquadRegistry
 
-
 @dataclass
 class AppContext:
     settings: Settings
@@ -46,6 +45,9 @@ def create_app() -> AppContext:
     repo.upsert_identities(squad.all())
 
     pct = ProClubsTrackerClient(settings=settings, squad=squad, repository=repo)
+    # NOTE: Do NOT prewarm here. Browser initializes lazily on first use.
+    # This avoids double-initialization and race conditions during startup.
+
     matches = MatchService(client=pct, repository=repo, squad=squad)
 
     roast = RoastEngine(repository=repo, squad=squad)
@@ -72,9 +74,6 @@ def create_app() -> AppContext:
         records=records,
         auto=auto,
     )
-
-    # Pre-warm browser in background so first /sync is fast
-    asyncio.create_task(pct.prewarm())
 
     return AppContext(
         settings=settings,
