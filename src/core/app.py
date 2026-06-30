@@ -13,6 +13,7 @@ from src.engine.video_engine import VideoEngine
 from src.scraper.proclubs_tracker import ProClubsTrackerClient
 from src.services.auto_service import AutoContentService
 from src.services.match_service import MatchService
+from src.services.records_service import RecordsService
 from src.squad.registry import SquadRegistry
 
 
@@ -27,6 +28,7 @@ class AppContext:
     roast: RoastEngine
     cards: CardEngine
     video: VideoEngine
+    records: RecordsService
     auto: AutoContentService
     bot: object
 
@@ -48,6 +50,7 @@ def create_app() -> AppContext:
     roast = RoastEngine(repository=repo, squad=squad)
     cards = CardEngine(settings=settings, squad=squad)
     video = VideoEngine(settings=settings, squad=squad)
+    records = RecordsService(repository=repo, squad=squad)
 
     auto = AutoContentService(
         settings=settings,
@@ -65,6 +68,7 @@ def create_app() -> AppContext:
         roast=roast,
         cards=cards,
         video=video,
+        records=records,
         auto=auto,
     )
 
@@ -78,6 +82,7 @@ def create_app() -> AppContext:
         roast=roast,
         cards=cards,
         video=video,
+        records=records,
         auto=auto,
         bot=bot,
     )
