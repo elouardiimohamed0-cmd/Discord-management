@@ -21,11 +21,16 @@ async def health_handler(request: web.Request) -> web.Response:
 
 
 async def start_health_server(port: int = 8000) -> None:
+    """Start a minimal health server immediately. Never crashes."""
     app = web.Application()
     app.router.add_get("/health", health_handler)
-    # Also add root path for Fly.io TCP checks
     app.router.add_get("/", health_handler)
+
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
+
+    # Keep the server alive forever
+    while True:
+        await asyncio.sleep(3600)
