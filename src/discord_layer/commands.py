@@ -122,7 +122,8 @@ def register_commands(bot: commands.Bot) -> None:
                 mvp_name = identity.nickname if identity else latest.mvp.display_name
                 lines.append(f"MVP: {mvp_name} ({latest.mvp.rating}⭐)")
 
-            await _safe_followup(interaction, "\n".join(lines))
+            await _safe_followup(interaction, "
+".join(lines))
 
         except Exception as e:
             logger.error("Sync failed: %s", e, exc_info=True)
@@ -508,7 +509,8 @@ def register_commands(bot: commands.Bot) -> None:
                 lines.append(f"")
                 lines.append(memory)
 
-            await _safe_followup(interaction, "\n".join(lines))
+            await _safe_followup(interaction, "
+".join(lines))
         except Exception as e:
             logger.error("Form command error: %s", e)
             await _safe_followup(interaction, f"❌ Error: {e}")
@@ -525,7 +527,8 @@ def register_commands(bot: commands.Bot) -> None:
                     lines = ["🏆 **Hall of Fame Top 5**"]
                     for i, f in enumerate(fame):
                         lines.append(f"{i+1}. {f['nickname']} - Avg {f['avg_rating']} ({f['matches']}M)")
-                    await _safe_followup(interaction, "\n".join(lines))
+                    await _safe_followup(interaction, "
+".join(lines))
                     return
             await _safe_followup(interaction, "Awards system active. Check daily channel for auto-posts.")
         except Exception as e:
@@ -549,7 +552,8 @@ def register_commands(bot: commands.Bot) -> None:
                 return
             cards = _get_cards(bot)
             card_path = cards.generate_legend_card(identity) if cards else None
-            text = f"**{identity.nickname}** | {identity.personality or 'Legend'}\n{identity.raw.get('bio', '')}"
+            text = f"**{identity.nickname}** | {identity.personality or 'Legend'}
+{identity.raw.get('bio', '')}"
             if card_path:
                 await _safe_followup(interaction, content=text, file=discord.File(card_path))
             else:
@@ -646,16 +650,21 @@ def register_commands(bot: commands.Bot) -> None:
                 description=f"Played together in {data['matches_together']} matches",
                 color=0xFF4500,
             )
-            embed.add_field(name=data['player_one'], value=f"Wins: {data['p1_wins']}\nAvg Rating: {data['p1_avg_rating']}", inline=True)
+            embed.add_field(name=data['player_one'], value=f"Wins: {data['p1_wins']}
+Avg Rating: {data['p1_avg_rating']}", inline=True)
             embed.add_field(name="Draws", value=str(data['draws']), inline=True)
-            embed.add_field(name=data['player_two'], value=f"Wins: {data['p2_wins']}\nAvg Rating: {data['p2_avg_rating']}", inline=True)
+            embed.add_field(name=data['player_two'], value=f"Wins: {data['p2_wins']}
+Avg Rating: {data['p2_avg_rating']}", inline=True)
 
             if data['recent_matches']:
-                recent = "\n".join(
+                recent = "
+".join(
                     f"{m['date']} vs {m['opponent']} ({m['result']}): {m['p1_rating']} vs {m['p2_rating']}"
                     for m in data['recent_matches']
                 )
-                embed.add_field(name="Recent battles", value=f"```\n{recent}\n```", inline=False)
+                embed.add_field(name="Recent battles", value=f"```
+{recent}
+```", inline=False)
 
             await _safe_followup(interaction, embed=embed)
         except Exception as e:
@@ -726,7 +735,8 @@ def register_commands(bot: commands.Bot) -> None:
             lines = [f"**Leaderboard: {metric.upper()}**"]
             for i, row in enumerate(rows):
                 lines.append(f"{i+1}. {row['display_name']} - {row['value']:.1f} ({row['matches']}M)")
-            text = "\n".join(lines)
+            text = "
+".join(lines)
             if card_path:
                 await _safe_followup(interaction, content=text, file=discord.File(card_path))
             else:
