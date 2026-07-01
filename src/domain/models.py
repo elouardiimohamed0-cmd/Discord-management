@@ -22,6 +22,7 @@ class PlayerIdentity(BaseModel):
 class PlayerMatchStats(BaseModel):
     ea_id: str
     display_name: str
+    match_id: str = ""  # 🔧 FIX: Added match_id field
     position: Optional[str] = None
     rating: float = 0.0
     minutes: int = 0
@@ -49,8 +50,6 @@ class PlayerMatchStats(BaseModel):
             return 0.0
         return round((self.passes_completed / self.passes_attempted) * 100, 1)
 
-    # FIX: Removed the "played" property — all players from API are real
-
 class Match(BaseModel):
     match_id: str
     date: datetime
@@ -60,9 +59,6 @@ class Match(BaseModel):
     result: Result
     players: List[PlayerMatchStats] = Field(default_factory=list)
     raw: Dict[str, Any] = Field(default_factory=dict)
-
-    # FIX: Removed the @field_validator that stripped all players
-    # The API already gives us real players, no need to filter
 
     def get_player(self, ea_id: str) -> PlayerMatchStats:
         for p in self.players:
