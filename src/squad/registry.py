@@ -11,25 +11,26 @@ class SquadRegistry:
         self._by_ea_id: Dict[str, PlayerIdentity] = {}
         self._by_nickname: Dict[str, PlayerIdentity] = {}
         self._by_psn: Dict[str, PlayerIdentity] = {}
+        self._by_display_name: Dict[str, PlayerIdentity] = {}  # FIX: Added display_name index
         for key, p in players.items():
-            # FIX: Store by actual EA ID, PSN, AND nickname for lookup
-            # The API returns player IDs as the dict key in players[club_id]
-            # We store by PSN (which is the display name in the API) for matching
             self._by_ea_id[p.ea_id.lower()] = p
             self._by_nickname[p.nickname.lower()] = p
             if p.raw.get("psn"):
                 self._by_psn[p.raw["psn"].lower()] = p
+            # Also index by display_name if different
+            if p.ea_id.lower() != p.nickname.lower():
+                self._by_display_name[p.nickname.lower()] = p
 
     @classmethod
     def from_file(cls, path: Path) -> "SquadRegistry":
         data = json.loads(path.read_text(encoding="utf-8"))
         players = {}
         for key, raw in data.items():
-            # FIX: Use PSN as the primary lookup key since the API returns playername=PSN
-            # The EA ID from API is numeric, but playername matches PSN
             psn_name = raw.get("psn", key)
+            # FIX: Use actual EA ID if provided, otherwise use PSN name
+            actual_ea_id = raw.get("ea_id", psn_name)
             players[key] = PlayerIdentity(
-                ea_id=psn_name.lower(),  # FIX: Use PSN as ea_id for matching
+                ea_id=str(actual_ea_id).lower(),
                 nickname=raw.get("nickname", raw.get("name", key)),
                 image=raw.get("image"),
                 personality=raw.get("style") or raw.get("personality"),
@@ -46,26 +47,24 @@ class SquadRegistry:
             self._by_ea_id.get(q)
             or self._by_nickname.get(q)
             or self._by_psn.get(q)
+            or self._by_display_name.get(q)  # FIX: Added display_name lookup
             or self._fuzzy_find(q)
         )
 
     def find_by_ea_id(self, ea_id: str) -> Optional[PlayerIdentity]:
-        # FIX: Also try to find by PSN name since that's what the API uses as playername
-        # The API's playername field matches the PSN name in squad.json
-        ea_id_lower = ea_id.lower()
+        ea_id_lower = ea_id.lower().strip()
         result = self._by_ea_id.get(ea_id_lower)
         if result:
             return result
-        # Fallback: try PSN lookup
-        return self._by_psn.get(ea_id_lower)
+        return self._by_psn.get(ea_id_lower) or self._by_display_name.get(ea_id_lower)
 
     def find_by_display_name(self, display_name: str) -> Optional[PlayerIdentity]:
-        """Find player by display_name from API (which is the PSN name)."""
         q = display_name.lower().strip()
         return (
             self._by_psn.get(q)
             or self._by_ea_id.get(q)
             or self._by_nickname.get(q)
+            or self._by_display_name.get(q)
             or self._fuzzy_find(q)
         )
 
