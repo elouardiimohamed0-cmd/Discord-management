@@ -64,6 +64,7 @@ class APIClient:
             return self._parse_api_response(self._mem_cache)
 
         # Fetch from API
+        logger.info("[API] Starting refresh, force=%s, source=%s", force, source)
         data = await self._fetch_api()
         if not data:
             raise Exception("API fetch failed")
@@ -72,7 +73,22 @@ class APIClient:
         self._cache_time = now
 
         snapshot = self._parse_api_response(data)
-        self.repo.save_snapshot(snapshot)
+        logger.info("[API] Parsed snapshot: %s matches, club=%s", len(snapshot.matches), snapshot.club_name)
+
+        # DEBUG: Log match details before saving
+        for i, match in enumerate(snapshot.matches[:3]):
+            logger.info("[API] Match %d: id=%s, opponent=%s, players=%d, result=%s",
+                        i, match.match_id, match.opponent, len(match.players), match.result)
+
+        # Save to database
+        try:
+            logger.info("[API] Saving snapshot to database...")
+            self.repo.save_snapshot(snapshot)
+            logger.info("[API] Snapshot saved successfully")
+        except Exception as e:
+            logger.error("[API] save_snapshot FAILED: %s", e, exc_info=True)
+            raise
+
         self.repo.log_scrape(source=source, success=True, request_count=1)
         return snapshot
 
@@ -80,9 +96,9 @@ class APIClient:
         client = await self._get_client()
         for attempt in range(3):
             try:
-                logger.info("Fetching API: %s (attempt %d)", PCT_API_URL, attempt + 1)
+                logger.info("[HTTP] GET %s (attempt %d)", PCT_API_URL, attempt + 1)
                 resp = await client.get(PCT_API_URL)
-                logger.info("API status: %d", resp.status_code)
+                logger.info("[HTTP] Status: %d", resp.status_code)
 
                 if resp.status_code == 429:
                     retry_after = int(resp.headers.get("Retry-After", 5 * (attempt + 1)))
@@ -91,7 +107,7 @@ class APIClient:
                     continue
 
                 if resp.status_code != 200:
-                    logger.warning("HTTP %d", resp.status_code)
+                    logger.warning("[HTTP] Status %d", resp.status_code)
                     return None
 
                 raw = resp.content
@@ -111,17 +127,17 @@ class APIClient:
                     data = json.loads(text)
 
                 if not isinstance(data, dict):
-                    logger.error("Response is not a dict: %s", type(data))
+                    logger.error("[HTTP] Response not dict: %s", type(data))
                     return None
 
-                logger.info("API success, keys: %s", list(data.keys()))
+                logger.info("[HTTP] Success — keys: %s", list(data.keys()))
                 return data
 
             except httpx.TimeoutException:
                 logger.warning("Timeout on attempt %d", attempt + 1)
                 await asyncio.sleep(2 ** attempt)
             except Exception as e:
-                logger.error("Fetch error: %s", e)
+                logger.error("[HTTP] Error: %s", e)
                 await asyncio.sleep(2 ** attempt)
 
         return None
@@ -140,11 +156,15 @@ class APIClient:
             + (raw_matches.get("friendly", []) or [])
         )
 
+        logger.info("[PARSE] Found %d total matches from API", len(all_matches))
+
         matches = []
         for rm in all_matches[:30]:
             match = self._parse_match(rm)
             if match:
                 matches.append(match)
+
+        logger.info("[PARSE] Successfully parsed %d matches", len(matches))
 
         return ClubSnapshot(
             club_name=club_info.get("name") or club_info.get("clubName") or "Rachad L3ERGONI",
@@ -170,6 +190,7 @@ class APIClient:
                 else:
                     opp = c
             if not ours:
+                logger.warning("[PARSE] Could not find our club %s in match clubs: %s", our_id, list(clubs.keys()))
                 return None
 
             gf = self._int(ours.get("goals"), 0)
@@ -187,14 +208,19 @@ class APIClient:
             # Parse players
             players = []
             our_players = raw.get("players", {}).get(our_id, {})
+            logger.info("[PARSE] Match %s: found %d players for our club",
+                        raw.get("matchId", "?"), len(our_players))
+
             for pid, p in our_players.items():
                 seconds = self._int(p.get("secondsPlayed"), 0)
                 passes_att = self._int(p.get("passattempts"), 0)
                 passes_comp = self._int(p.get("passesmade"), 0)
 
+                display_name = p.get("playername", "Unknown")
+
                 stats = PlayerMatchStats(
-                    ea_id=str(pid),
-                    display_name=p.get("playername", "Unknown"),
+                    ea_id=str(pid),  # This is the numeric EA ID from API
+                    display_name=display_name,  # This is the PSN name
                     position=p.get("pos", ""),
                     rating=self._float(p.get("rating"), 0.0),
                     minutes=seconds // 60,
@@ -211,8 +237,12 @@ class APIClient:
                     raw=p,
                 )
                 # FIX: Add ALL players, don't filter by "played"
-                # The API already gives us real match players
                 players.append(stats)
+                logger.debug("[PARSE] Added player: %s (ea_id=%s, rating=%.1f, min=%d)",
+                             display_name, pid, stats.rating, stats.minutes)
+
+            logger.info("[PARSE] Match %s: %s vs %s, result=%s, players=%d",
+                        raw.get("matchId", "?"), gf, ga, result, len(players))
 
             return Match(
                 match_id=str(raw.get("matchId", "")),
@@ -225,7 +255,7 @@ class APIClient:
                 raw=raw,
             )
         except Exception as e:
-            logger.warning("Parse match error: %s", e)
+            logger.warning("[PARSE] Match parse error: %s", e, exc_info=True)
             return None
 
     def _int(self, v, d=0):
