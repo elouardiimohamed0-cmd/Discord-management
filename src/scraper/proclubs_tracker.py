@@ -31,27 +31,44 @@ class ProClubsTrackerClient:
         self.browser = BrowserManager(headless=headless)
         self._initialized = False
         self._initializing = False
+        self._init_error: Optional[str] = None
 
     async def ensure_browser(self) -> None:
         if self._initialized:
             return
+        if self._init_error:
+            raise RuntimeError(f"Browser previously failed to initialize: {self._init_error}")
         if self._initializing:
-            # Wait for another task to finish initializing
-            while self._initializing:
+            # Wait for another task to finish initializing (with timeout)
+            for _ in range(300):  # 30 seconds max wait
+                if not self._initializing:
+                    break
                 await asyncio.sleep(0.1)
-            return
+            if self._initialized:
+                return
+            if self._init_error:
+                raise RuntimeError(f"Browser initialization failed: {self._init_error}")
+            raise RuntimeError("Browser initialization timed out")
+
         self._initializing = True
         try:
-            await self.browser.start()
+            await asyncio.wait_for(self.browser.start(), timeout=60.0)
             self._initialized = True
             logger.info("Browser initialized")
+        except Exception as e:
+            self._init_error = str(e)
+            logger.error("Browser initialization failed: %s", e)
+            raise RuntimeError(f"Browser failed to start: {e}")
         finally:
             self._initializing = False
 
     async def prewarm(self) -> None:
         """Start browser early so it's ready when needed."""
-        await self.ensure_browser()
-        logger.info("Browser pre-warmed and ready")
+        try:
+            await self.ensure_browser()
+            logger.info("Browser pre-warmed and ready")
+        except Exception as e:
+            logger.warning("Browser prewarm failed (will retry on first use): %s", e)
 
     async def refresh(self, force: bool = False, source: str = "scheduled") -> ClubSnapshot:
         url = self.settings.pct_club_url
@@ -74,7 +91,12 @@ class ProClubsTrackerClient:
             page = None
             try:
                 page = await self.browser.new_page()
-                await page.goto(url, wait_until="networkidle", timeout=30000)
+                logger.info("Scraping %s (attempt %d/%d)", url, attempt + 1, max_retries)
+
+                response = await page.goto(url, wait_until="networkidle", timeout=30000)
+                if response and response.status >= 400:
+                    raise Exception(f"HTTP {response.status}")
+
                 await page.wait_for_selector("table, .match-row, .club-header", timeout=15000)
                 html = await page.content()
                 raw_json = await page.evaluate("""() => {
@@ -102,3 +124,4 @@ class ProClubsTrackerClient:
     async def close(self) -> None:
         await self.browser.close()
         self._initialized = False
+        self._init_error = None
