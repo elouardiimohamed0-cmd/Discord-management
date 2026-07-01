@@ -316,6 +316,8 @@ class ClubRepository:
         )
 
     def _row_to_player_stats(self, row: Any) -> PlayerMatchStats:
+        # sqlite3.Row doesn't have .get() — use dict() wrapper
+        row_dict = dict(row)
         return PlayerMatchStats(
             ea_id=row["ea_id"],
             display_name=row["display_name"],
@@ -325,10 +327,10 @@ class ClubRepository:
             goals=row["goals"],
             assists=row["assists"],
             shots=row["shots"],
-            shots_on_target=row.get("shots_on_target", 0) or 0,
+            shots_on_target=row_dict.get("shots_on_target", 0) or 0,
             passes_attempted=row["passes_attempted"],
             passes_completed=row["passes_completed"],
-            key_passes=row.get("key_passes", 0) or 0,
+            key_passes=row_dict.get("key_passes", 0) or 0,
             tackles=row["tackles"],
             interceptions=row["interceptions"],
             saves=row["saves"],
@@ -336,7 +338,7 @@ class ClubRepository:
             red_cards=row["red_cards"],
             yellow_cards=row["yellow_cards"],
             clean_sheets=row["clean_sheets"],
-            distance_covered=row.get("distance_covered", 0.0) or 0.0,
-            sprint_speed=row.get("sprint_speed", 0.0) or 0.0,
+            distance_covered=row_dict.get("distance_covered", 0.0) or 0.0,
+            sprint_speed=row_dict.get("sprint_speed", 0.0) or 0.0,
             raw=json.loads(row["raw_json"] or "{}"),
         )
