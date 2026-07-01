@@ -4,8 +4,11 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Iterable, List, Optional
 
+from src.core.logging import get_logger
 from src.data.database import Database
 from src.domain.models import ClubSnapshot, Match, PlayerForm, PlayerIdentity, PlayerMatchStats
+
+logger = get_logger(__name__)
 
 def _now() -> str:
     return datetime.now().isoformat()
@@ -48,33 +51,55 @@ class ClubRepository:
                         now,
                     ),
                 )
+        logger.info("[DB] Upserted %d player identities", len(list(identities)))
 
     def save_snapshot(self, snapshot: ClubSnapshot, raw: dict[str, Any] | None = None) -> None:
         now = _now()
+        logger.info("[DB] save_snapshot called: %s matches, club=%s", len(snapshot.matches), snapshot.club_name)
+
         with self.db.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO club_snapshots
-                (club_name, division, skill_rating, wins, draws, losses, goals_scored, goals_conceded, scraped_at, raw_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    snapshot.club_name,
-                    snapshot.division,
-                    snapshot.skill_rating,
-                    snapshot.wins,
-                    snapshot.draws,
-                    snapshot.losses,
-                    snapshot.goals_scored,
-                    snapshot.goals_conceded,
-                    snapshot.scraped_at.isoformat(),
-                    _json(raw or snapshot.model_dump()),
-                ),
-            )
+            # Save club snapshot
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO club_snapshots
+                    (club_name, division, skill_rating, wins, draws, losses, goals_scored, goals_conceded, scraped_at, raw_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot.club_name,
+                        snapshot.division,
+                        snapshot.skill_rating,
+                        snapshot.wins,
+                        snapshot.draws,
+                        snapshot.losses,
+                        snapshot.goals_scored,
+                        snapshot.goals_conceded,
+                        snapshot.scraped_at.isoformat(),
+                        _json(raw or snapshot.model_dump(mode="json")),
+                    ),
+                )
+                logger.info("[DB] Inserted club_snapshots row")
+            except Exception as e:
+                logger.error("[DB] Failed to insert club_snapshots: %s", e)
+                raise
+
+            # Save each match
+            match_count = 0
+            player_count = 0
             for match in snapshot.matches:
-                self._save_match_with_connection(conn, match, now)
+                try:
+                    self._save_match_with_connection(conn, match, now)
+                    match_count += 1
+                    player_count += len(match.players)
+                except Exception as e:
+                    logger.error("[DB] Failed to save match %s: %s", match.match_id, e)
+                    # Continue saving other matches
+
+            logger.info("[DB] Saved %d matches with %d total players", match_count, player_count)
 
     def _save_match_with_connection(self, conn: Any, match: Match, now: str) -> None:
+        # Save match row
         conn.execute(
             """
             INSERT INTO matches
@@ -101,6 +126,8 @@ class ClubRepository:
                 now,
             ),
         )
+
+        # Save player stats for this match
         for player in match.players:
             conn.execute(
                 """
@@ -171,14 +198,20 @@ class ClubRepository:
             )
 
     def latest_match(self) -> Optional[Match]:
+        logger.info("[DB] Querying latest_match...")
         with self.db.connect() as conn:
             row = conn.execute("SELECT * FROM matches ORDER BY date DESC LIMIT 1").fetchone()
             if not row:
+                logger.warning("[DB] No matches found in database")
                 return None
+            logger.info("[DB] Found match: id=%s, opponent=%s, date=%s", row["match_id"], row["opponent"], row["date"])
+
             player_rows = conn.execute(
                 "SELECT * FROM player_match_stats WHERE match_id = ? ORDER BY rating DESC, goals DESC, assists DESC",
                 (row["match_id"],),
             ).fetchall()
+            logger.info("[DB] Found %d players for match %s", len(player_rows), row["match_id"])
+
             return self._row_to_match(row, player_rows)
 
     def last_matches(self, limit: int = 10) -> List[Match]:
