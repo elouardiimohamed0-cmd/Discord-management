@@ -69,8 +69,7 @@ class Match(BaseModel):
     @field_validator("players")
     @classmethod
     def only_real_played_players(cls, players: List[PlayerMatchStats]) -> List[PlayerMatchStats]:
-        filtered = [p for p in players if p.played]
-        return filtered
+        return players  # FIX: Don't filter anything out
 
     def get_player(self, ea_id: str) -> PlayerMatchStats:
         for p in self.players:
