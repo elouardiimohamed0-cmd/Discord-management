@@ -22,7 +22,7 @@ class PlayerIdentity(BaseModel):
 class PlayerMatchStats(BaseModel):
     ea_id: str
     display_name: str
-    match_id: str = ""  # 🔧 FIX: Added match_id field
+    match_id: str = ""  # FIX: Added match_id field
     position: Optional[str] = None
     rating: float = 0.0
     minutes: int = 0
