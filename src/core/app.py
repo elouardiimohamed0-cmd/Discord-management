@@ -44,7 +44,7 @@ def create_app() -> AppContext:
     repo = ClubRepository(db)
     repo.upsert_identities(squad.all())
 
-    pct = ProClubsTrackerClient(settings=settings, squad=squad, repository=repo)
+    pct = APIClient(settings=settings, squad=squad, repository=repo)
     # NOTE: Do NOT prewarm here. The browser will be initialized lazily on first use.
     # This avoids double-initialization and race conditions during startup.
 
