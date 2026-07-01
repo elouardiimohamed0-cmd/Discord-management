@@ -93,23 +93,64 @@ class ProClubsTrackerClient:
                 page = await self.browser.new_page()
                 logger.info("Scraping %s (attempt %d/%d)", url, attempt + 1, max_retries)
 
-                response = await page.goto(url, wait_until="networkidle", timeout=30000)
-                if response and response.status >= 400:
-                    raise Exception(f"HTTP {response.status}")
+                # Set a shorter timeout for navigation, with better error handling
+                response = await page.goto(url, wait_until="domcontentloaded", timeout=20000)
 
-                await page.wait_for_selector("table, .match-row, .club-header", timeout=15000)
-                html = await page.content()
+                if response:
+                    logger.info("Page loaded: HTTP %s", response.status)
+                    if response.status >= 400:
+                        raise Exception(f"HTTP {response.status}")
+                else:
+                    logger.warning("Page goto returned no response")
+
+                # Wait a bit for JS to execute, then check for content
+                await asyncio.sleep(2)
+
+                # Try to extract JSON from page
                 raw_json = await page.evaluate("""() => {
                     if (window.__INITIAL_STATE__) return window.__INITIAL_STATE__;
                     if (window.__DATA__) return window.__DATA__;
                     return null;
                 }""")
-                snapshot = self.parser.parse_club_page(html, url, raw_json)
-                logger.info("Scraped %d matches", len(snapshot.matches))
+
+                if raw_json:
+                    logger.info("Found window data, parsing JSON...")
+                    html = await page.content()
+                    snapshot = self.parser.parse_club_page(html, url, raw_json)
+                    logger.info("Scraped %d matches from JSON", len(snapshot.matches))
+                    return snapshot
+
+                # Fallback: get HTML and try to parse
+                logger.info("No window data found, falling back to HTML parsing...")
+                html = await page.content()
+
+                # Log page title for debugging
+                title = await page.title()
+                logger.info("Page title: %s", title)
+
+                # Check if we got blocked
+                if "cloudflare" in html.lower() or "cf-browser-verification" in html.lower():
+                    raise Exception("Cloudflare blocked the request")
+                if "access denied" in html.lower():
+                    raise Exception("Access denied by server")
+
+                snapshot = self.parser.parse_club_page(html, url, None)
+                logger.info("Scraped %d matches from HTML", len(snapshot.matches))
                 return snapshot
+
             except Exception as e:
                 last_error = str(e)
                 logger.warning("Scrape attempt %d failed: %s", attempt + 1, e)
+
+                # Take screenshot on failure for debugging
+                if page:
+                    try:
+                        screenshot_path = f"/tmp/scrape_fail_{attempt}.png"
+                        await page.screenshot(path=screenshot_path, full_page=True)
+                        logger.info("Screenshot saved to %s", screenshot_path)
+                    except Exception:
+                        pass
+
                 await asyncio.sleep(2 ** attempt)
             finally:
                 if page:
