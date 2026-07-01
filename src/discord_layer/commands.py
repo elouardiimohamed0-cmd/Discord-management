@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 import discord
@@ -84,6 +85,14 @@ async def _safe_followup(interaction: discord.Interaction, content: str = None, 
 
 
 def register_commands(bot: commands.Bot) -> None:
+    @bot.tree.command(name="ping", description="Check if bot is alive")
+    async def ping(interaction: discord.Interaction) -> None:
+        """Quick health check - no scraper needed."""
+        try:
+            await interaction.response.send_message("\U0001f7e2 Pong! Bot is online.", ephemeral=True)
+        except Exception as e:
+            logger.error("Ping failed: %s", e)
+
     @bot.tree.command(name="sync", description="Fetch latest club data from Pro Clubs Tracker")
     @app_commands.checks.cooldown(1, 30.0, key=lambda i: i.user.id)
     async def sync(interaction: discord.Interaction) -> None:
@@ -92,15 +101,19 @@ def register_commands(bot: commands.Bot) -> None:
 
         svc = _get_match_service(bot)
         if not svc:
-            await _safe_followup(interaction, "Match service not wired.")
+            await _safe_followup(interaction, "\u274c Match service not wired.")
             return
 
         try:
-            snapshot = await svc.refresh(force=True, source="discord:/sync")
+            # Timeout the scraper at 45 seconds (Discord followup window is ~15 min)
+            snapshot = await asyncio.wait_for(
+                svc.refresh(force=True, source="discord:/sync"),
+                timeout=45.0
+            )
             latest = snapshot.latest_match
 
             if not latest:
-                msg = "Sync complete. No new match found this scrape."
+                msg = "\u2705 Sync complete. No new match found this scrape."
                 await _safe_followup(interaction, msg)
                 return
 
@@ -123,9 +136,12 @@ def register_commands(bot: commands.Bot) -> None:
 
             await _safe_followup(interaction, "\n".join(lines))
 
+        except asyncio.TimeoutError:
+            logger.error("Sync timed out after 45s")
+            await _safe_followup(interaction, "\u23f3 Sync timed out. The scraper is taking too long. Try again in a minute.")
         except Exception as e:
             logger.error("Sync failed: %s", e, exc_info=True)
-            await _safe_followup(interaction, f"Sync failed: {str(e)[:500]}")
+            await _safe_followup(interaction, f"\u274c Sync failed: {str(e)[:500]}")
 
     @bot.tree.command(name="status", description="Show current data status")
     async def status(interaction: discord.Interaction) -> None:
@@ -133,7 +149,7 @@ def register_commands(bot: commands.Bot) -> None:
             return
         svc = _get_match_service(bot)
         if not svc:
-            await _safe_followup(interaction, "Match service not wired.")
+            await _safe_followup(interaction, "\u274c Match service not wired.")
             return
         st = svc.status()
         embed = discord.Embed(title="Bot Status", color=0x3498db)
@@ -161,7 +177,7 @@ def register_commands(bot: commands.Bot) -> None:
                 await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("Player command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="mvp", description="Best performer from eligible match players")
     async def mvp(interaction: discord.Interaction) -> None:
@@ -187,7 +203,7 @@ def register_commands(bot: commands.Bot) -> None:
                 await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("MVP command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="fraud", description="Fraud verdict for a player")
     @app_commands.describe(player="Nickname, EA ID, or PSN (optional, defaults to worst)")
@@ -217,7 +233,7 @@ def register_commands(bot: commands.Bot) -> None:
                 await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("Fraud command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="ghost", description="Ghost verdict from match activity")
     async def ghost(interaction: discord.Interaction) -> None:
@@ -243,7 +259,7 @@ def register_commands(bot: commands.Bot) -> None:
                 await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("Ghost command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="carry", description="Who carried the squad")
     async def carry(interaction: discord.Interaction) -> None:
@@ -269,7 +285,7 @@ def register_commands(bot: commands.Bot) -> None:
                 await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("Carry command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="who_sold", description="Who sold the match")
     async def who_sold(interaction: discord.Interaction) -> None:
@@ -295,7 +311,7 @@ def register_commands(bot: commands.Bot) -> None:
                 await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("WhoSold command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="ball_loser", description="Most dangerous ball loss merchant")
     async def ball_loser(interaction: discord.Interaction) -> None:
@@ -321,7 +337,7 @@ def register_commands(bot: commands.Bot) -> None:
                 await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("BallLoser command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="playmaker", description="Chance creator and pass dictator")
     async def playmaker(interaction: discord.Interaction) -> None:
@@ -347,7 +363,7 @@ def register_commands(bot: commands.Bot) -> None:
                 await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("Playmaker command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="sniper", description="Finishing and shot efficiency king")
     async def sniper(interaction: discord.Interaction) -> None:
@@ -373,7 +389,7 @@ def register_commands(bot: commands.Bot) -> None:
                 await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("Sniper command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="compare", description="Compare two players")
     @app_commands.describe(player_one="First player", player_two="Second player")
@@ -394,7 +410,7 @@ def register_commands(bot: commands.Bot) -> None:
                 await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("Compare command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="court_case", description="Open the tribunal case file")
     @app_commands.describe(player="Accused player")
@@ -414,7 +430,7 @@ def register_commands(bot: commands.Bot) -> None:
                 await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("CourtCase command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="club", description="Club summary and squad state")
     async def club(interaction: discord.Interaction) -> None:
@@ -432,7 +448,7 @@ def register_commands(bot: commands.Bot) -> None:
             await _safe_followup(interaction, embed=embed)
         except Exception as e:
             logger.error("Club command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="records", description="Club records and broken records")
     async def records(interaction: discord.Interaction) -> None:
@@ -441,7 +457,7 @@ def register_commands(bot: commands.Bot) -> None:
         try:
             recs = _get_records(bot)
             if not recs:
-                await _safe_followup(interaction, "Records service not available.")
+                await _safe_followup(interaction, "\u274c Records service not available.")
                 return
 
             computed = recs.compute_all_records()
@@ -461,7 +477,7 @@ def register_commands(bot: commands.Bot) -> None:
             await _safe_followup(interaction, embed=embed)
         except Exception as e:
             logger.error("Records command error: %s", e)
-            await _safe_followup(interaction, f"Error loading records: {e}")
+            await _safe_followup(interaction, f"\u274c Error loading records: {e}")
 
     @bot.tree.command(name="form", description="Recent form for a player")
     @app_commands.describe(player="Player", matches="Number of recent matches")
@@ -472,7 +488,7 @@ def register_commands(bot: commands.Bot) -> None:
             squad = _get_squad(bot)
             identity = squad.find(player) if squad else None
             if not identity:
-                await _safe_followup(interaction, "Player not found.")
+                await _safe_followup(interaction, "\u274c Player not found.")
                 return
             svc = _get_match_service(bot)
             history = svc.player_history(identity.ea_id, limit=matches)
@@ -510,7 +526,7 @@ def register_commands(bot: commands.Bot) -> None:
             await _safe_followup(interaction, "\n".join(lines))
         except Exception as e:
             logger.error("Form command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="awards", description="Awards and weekly winners")
     async def awards(interaction: discord.Interaction) -> None:
@@ -529,7 +545,7 @@ def register_commands(bot: commands.Bot) -> None:
             await _safe_followup(interaction, "Awards system active. Check daily channel for auto-posts.")
         except Exception as e:
             logger.error("Awards command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="legend", description="Legend card and lore")
     @app_commands.describe(player="Optional player")
@@ -544,7 +560,7 @@ def register_commands(bot: commands.Bot) -> None:
                 import random
                 identity = random.choice(squad.all()) if squad else None
             if not identity:
-                await _safe_followup(interaction, "Player not found.")
+                await _safe_followup(interaction, "\u274c Player not found.")
                 return
             cards = _get_cards(bot)
             card_path = cards.generate_legend_card(identity) if cards else None
@@ -555,7 +571,7 @@ def register_commands(bot: commands.Bot) -> None:
                 await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("Legend command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="hall_of_shame", description="Historic fraud museum")
     async def hall_of_shame(interaction: discord.Interaction) -> None:
@@ -564,7 +580,7 @@ def register_commands(bot: commands.Bot) -> None:
         try:
             recs = _get_records(bot)
             if not recs:
-                await _safe_followup(interaction, "Records service not available.")
+                await _safe_followup(interaction, "\u274c Records service not available.")
                 return
             shame = recs.get_hall_of_shame(limit=10)
             if not shame:
@@ -585,7 +601,7 @@ def register_commands(bot: commands.Bot) -> None:
             await _safe_followup(interaction, embed=embed)
         except Exception as e:
             logger.error("HallOfShame command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="hall_of_fame", description="Historic elite performances")
     async def hall_of_fame(interaction: discord.Interaction) -> None:
@@ -594,7 +610,7 @@ def register_commands(bot: commands.Bot) -> None:
         try:
             recs = _get_records(bot)
             if not recs:
-                await _safe_followup(interaction, "Records service not available.")
+                await _safe_followup(interaction, "\u274c Records service not available.")
                 return
             fame = recs.get_hall_of_fame(limit=10)
             if not fame:
@@ -615,7 +631,7 @@ def register_commands(bot: commands.Bot) -> None:
             await _safe_followup(interaction, embed=embed)
         except Exception as e:
             logger.error("HallOfFame command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="rivalry", description="Head-to-head between two players")
     @app_commands.describe(player_one="First player", player_two="Second player")
@@ -627,12 +643,12 @@ def register_commands(bot: commands.Bot) -> None:
             id1 = squad.find(player_one) if squad else None
             id2 = squad.find(player_two) if squad else None
             if not id1 or not id2:
-                await _safe_followup(interaction, "One or both players not found.")
+                await _safe_followup(interaction, "\u274c One or both players not found.")
                 return
 
             recs = _get_records(bot)
             if not recs:
-                await _safe_followup(interaction, "Records service not available.")
+                await _safe_followup(interaction, "\u274c Records service not available.")
                 return
 
             data = recs.get_rivalry(id1.ea_id, id2.ea_id)
@@ -659,7 +675,7 @@ def register_commands(bot: commands.Bot) -> None:
             await _safe_followup(interaction, embed=embed)
         except Exception as e:
             logger.error("Rivalry command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="memory", description="Squad historian report for a player")
     @app_commands.describe(player="Player name")
@@ -670,17 +686,17 @@ def register_commands(bot: commands.Bot) -> None:
             squad = _get_squad(bot)
             identity = squad.find(player) if squad else None
             if not identity:
-                await _safe_followup(interaction, "Player not found.")
+                await _safe_followup(interaction, "\u274c Player not found.")
                 return
             recs = _get_records(bot)
             if not recs:
-                await _safe_followup(interaction, "Records service not available.")
+                await _safe_followup(interaction, "\u274c Records service not available.")
                 return
             text = recs.generate_memory(identity.ea_id)
             await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("Memory command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="match_report", description="Latest match report with banter")
     async def match_report(interaction: discord.Interaction) -> None:
@@ -703,7 +719,7 @@ def register_commands(bot: commands.Bot) -> None:
             await _safe_followup(interaction, embed=embed)
         except Exception as e:
             logger.error("MatchReport command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     @bot.tree.command(name="leaderboard", description="Leaderboard by metric")
     @app_commands.describe(metric="goals, assists, rating, minutes, losses, saves, matches, key_passes, tackles")
@@ -714,7 +730,7 @@ def register_commands(bot: commands.Bot) -> None:
             svc = _get_match_service(bot)
             repo = getattr(svc, "repo", None)
             if not repo:
-                await _safe_followup(interaction, "Repository not available.")
+                await _safe_followup(interaction, "\u274c Repository not available.")
                 return
             rows = repo.aggregate_leaderboard(metric=metric, limit=10)
             if not rows:
@@ -732,6 +748,6 @@ def register_commands(bot: commands.Bot) -> None:
                 await _safe_followup(interaction, text)
         except Exception as e:
             logger.error("Leaderboard command error: %s", e)
-            await _safe_followup(interaction, f"Error: {e}")
+            await _safe_followup(interaction, f"\u274c Error: {e}")
 
     logger.info("Registered all commands")
