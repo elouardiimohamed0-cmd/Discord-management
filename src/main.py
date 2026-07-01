@@ -7,8 +7,7 @@ import traceback
 
 from src.services.health import start_health_server
 
-# Start health server FIRST before any imports that might crash
-# This ensures Fly.io always sees port 8000 open
+
 async def _main() -> None:
     # 1. Start health server immediately so Fly.io smoke checks pass
     health_task = asyncio.create_task(start_health_server(port=8000))
@@ -22,10 +21,8 @@ async def _main() -> None:
         configure_logging(app.settings.log_level)
         logger = get_logger(__name__)
     except Exception as e:
-        # Log the crash but keep health server alive so Fly.io doesn't kill us
         print(f"FATAL: Failed to initialize app: {e}", file=sys.stderr)
         traceback.print_exc()
-        # Keep health server running so we can inspect logs
         await health_task
         return
 
