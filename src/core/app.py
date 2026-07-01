@@ -11,11 +11,12 @@ from src.discord_layer.bot import build_bot
 from src.engine.card_engine import CardEngine
 from src.engine.roast_engine import RoastEngine
 from src.engine.video_engine import VideoEngine
-from src.scraper.api_client import APIClient
+from src.scraper.proclubs_tracker import ProClubsTrackerClient  # FIX: Correct import
 from src.services.auto_service import AutoContentService
 from src.services.match_service import MatchService
 from src.services.records_service import RecordsService
 from src.squad.registry import SquadRegistry
+
 
 @dataclass
 class AppContext:
@@ -23,7 +24,7 @@ class AppContext:
     squad: SquadRegistry
     db: Database
     repo: ClubRepository
-    pct: ProClubsTrackerClient
+    pct: ProClubsTrackerClient  # FIX: Correct type
     matches: MatchService
     roast: RoastEngine
     cards: CardEngine
@@ -44,9 +45,9 @@ def create_app() -> AppContext:
     repo = ClubRepository(db)
     repo.upsert_identities(squad.all())
 
-    pct = APIClient(settings=settings, squad=squad, repository=repo)
-    # NOTE: Do NOT prewarm here. The browser will be initialized lazily on first use.
-    # This avoids double-initialization and race conditions during startup.
+    pct = ProClubsTrackerClient(  # FIX: Correct class name
+        settings=settings, squad=squad, repository=repo
+    )
 
     matches = MatchService(client=pct, repository=repo, squad=squad)
 
