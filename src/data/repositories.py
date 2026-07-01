@@ -250,7 +250,7 @@ class ClubRepository:
         expression = allowed.get(metric, allowed["goals"])
         with self.db.connect() as conn:
             rows = conn.execute(
-                f"""
+              f"""
                 SELECT ea_id, display_name, {expression} AS value, COUNT(DISTINCT match_id) AS matches
                 FROM player_match_stats
                 GROUP BY ea_id, display_name
@@ -351,6 +351,7 @@ class ClubRepository:
         return PlayerMatchStats(
             ea_id=row["ea_id"],
             display_name=row["display_name"],
+            match_id=row_dict.get("match_id", ""),  # FIX: Added match_id
             position=row["position"],
             rating=row["rating"],
             minutes=row["minutes"],
