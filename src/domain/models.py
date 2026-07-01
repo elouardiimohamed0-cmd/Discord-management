@@ -9,7 +9,6 @@ from src.core.errors import PlayerNotInMatch
 
 Result = Literal["W", "D", "L"]
 
-
 class PlayerIdentity(BaseModel):
     ea_id: str
     nickname: str
@@ -19,7 +18,6 @@ class PlayerIdentity(BaseModel):
     position: Optional[str] = None
     number: Optional[int] = None
     raw: Dict[str, Any] = Field(default_factory=dict)
-
 
 class PlayerMatchStats(BaseModel):
     ea_id: str
@@ -53,8 +51,8 @@ class PlayerMatchStats(BaseModel):
 
     @property
     def played(self) -> bool:
-        # FIX: Don't filter out players with 0 minutes — they might still have stats
-        return self.minutes >= 0 or self.rating > 0 or bool(self.raw) or self.goals > 0 or self.assists > 0
+        # FIX: Accept all players with any meaningful stats
+        return self.minutes >= 0 or self.rating > 0 or self.goals > 0 or self.assists > 0 or bool(self.raw)
 
 class Match(BaseModel):
     match_id: str
@@ -69,7 +67,10 @@ class Match(BaseModel):
     @field_validator("players")
     @classmethod
     def only_real_played_players(cls, players: List[PlayerMatchStats]) -> List[PlayerMatchStats]:
-        return players  # FIX: Don't filter anything out
+        # FIX: Don't filter out players — the API already gives us real players
+        # Only remove completely empty entries
+        filtered = [p for p in players if p.ea_id and p.display_name and p.display_name != "Unknown"]
+        return filtered
 
     def get_player(self, ea_id: str) -> PlayerMatchStats:
         for p in self.players:
@@ -125,7 +126,6 @@ class Match(BaseModel):
             return None
         return max(eligible, key=lambda p: (p.goals / max(p.shots, 1), p.shots_on_target / max(p.shots, 1)))
 
-
 class ClubSnapshot(BaseModel):
     club_name: str
     division: int = 0
@@ -143,7 +143,6 @@ class ClubSnapshot(BaseModel):
         if not self.matches:
             return None
         return max(self.matches, key=lambda m: m.date)
-
 
 class PlayerForm(BaseModel):
     ea_id: str
