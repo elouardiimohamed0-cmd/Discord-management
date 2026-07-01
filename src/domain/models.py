@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from src.core.errors import PlayerNotInMatch
 
@@ -49,10 +49,8 @@ class PlayerMatchStats(BaseModel):
             return 0.0
         return round((self.passes_completed / self.passes_attempted) * 100, 1)
 
-    @property
-    def played(self) -> bool:
-        # FIX: Accept all players with any meaningful stats
-        return self.minutes >= 0 or self.rating > 0 or self.goals > 0 or self.assists > 0 or bool(self.raw)
+    # FIX: Removed the "played" property that was filtering out valid players
+    # All players from the API are real match participants
 
 class Match(BaseModel):
     match_id: str
@@ -64,13 +62,8 @@ class Match(BaseModel):
     players: List[PlayerMatchStats] = Field(default_factory=list)
     raw: Dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("players")
-    @classmethod
-    def only_real_played_players(cls, players: List[PlayerMatchStats]) -> List[PlayerMatchStats]:
-        # FIX: Don't filter out players — the API already gives us real players
-        # Only remove completely empty entries
-        filtered = [p for p in players if p.ea_id and p.display_name and p.display_name != "Unknown"]
-        return filtered
+    # FIX: Removed the @field_validator that was stripping all players
+    # The API already gives us real players, no need to filter
 
     def get_player(self, ea_id: str) -> PlayerMatchStats:
         for p in self.players:
