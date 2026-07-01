@@ -1,4 +1,3 @@
-# src/scraper/api_client.py
 from __future__ import annotations
 
 import asyncio
@@ -35,7 +34,6 @@ HEADERS = {
     "DNT": "1",
     "Connection": "keep-alive",
 }
-
 
 class APIClient:
     """Direct API client for ProClubsTracker — fast, no browser needed."""
@@ -212,8 +210,9 @@ class APIClient:
                     clean_sheets=self._int(p.get("cleansheetsany"), 0),
                     raw=p,
                 )
-                if stats.played:
-                    players.append(stats)
+                # FIX: Add ALL players, don't filter by "played"
+                # The API already gives us real match players
+                players.append(stats)
 
             return Match(
                 match_id=str(raw.get("matchId", "")),
