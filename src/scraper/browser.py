@@ -10,6 +10,44 @@ from src.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+STEALTH_SCRIPT = """
+// Remove webdriver property
+Object.defineProperty(navigator, 'webdriver', {
+    get: () => undefined,
+});
+
+// Fake plugins
+Object.defineProperty(navigator, 'plugins', {
+    get: () => [
+        {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer'},
+        {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai'},
+        {name: 'Native Client', filename: 'internal-nacl-plugin'}
+    ],
+});
+
+// Fake languages
+Object.defineProperty(navigator, 'languages', {
+    get: () => ['en-US', 'en'],
+});
+
+// Override permissions
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (parameters) => (
+    parameters.name === 'notifications'
+        ? Promise.resolve({state: Notification.permission})
+        : originalQuery(parameters)
+);
+
+// Override iframe contentWindow
+const originalAttachShadow = Element.prototype.attachShadow;
+Element.prototype.attachShadow = function attachShadow(options) {
+    const shadow = originalAttachShadow.call(this, options);
+    Object.defineProperty(shadow, 'mode', {value: options.mode});
+    return shadow;
+};
+"""
+
+
 class BrowserManager:
     def __init__(self, headless: bool = True, stealth: bool = True):
         self.headless = headless
@@ -29,24 +67,37 @@ class BrowserManager:
 
             logger.info("Starting browser...")
             self._playwright = await async_playwright().start()
+
+            # Launch with more realistic args to avoid detection
+            launch_args = [
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-accelerated-2d-canvas",
+                "--disable-gpu",
+                "--window-size=1920,1080",
+            ]
+
             self._browser = await self._playwright.chromium.launch(
                 headless=self.headless,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                ],
+                args=launch_args,
             )
+
+            # Create context with realistic settings
             self._context = await self._browser.new_context(
                 viewport={"width": 1920, "height": 1080},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.0",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                locale="en-US",
+                timezone_id="Europe/Paris",
+                color_scheme="light",
+                reduced_motion="no-preference",
             )
+
             if self.stealth:
-                await self._context.add_init_script("""
-                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-                """)
+                await self._context.add_init_script(STEALTH_SCRIPT)
+                logger.info("Stealth mode enabled")
+
             logger.info("Browser started successfully")
 
     async def new_page(self) -> Page:
