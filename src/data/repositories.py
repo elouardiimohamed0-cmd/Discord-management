@@ -7,14 +7,11 @@ from typing import Any, Iterable, List, Optional
 from src.data.database import Database
 from src.domain.models import ClubSnapshot, Match, PlayerForm, PlayerIdentity, PlayerMatchStats
 
-
 def _now() -> str:
     return datetime.now().isoformat()
 
-
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
-
 
 class ClubRepository:
     def __init__(self, db: Database):
@@ -30,14 +27,14 @@ class ClubRepository:
                     (ea_id, nickname, image, personality, meme_tags_json, position, number, raw_json, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(ea_id) DO UPDATE SET
-                        nickname=excluded.nickname,
-                        image=excluded.image,
-                        personality=excluded.personality,
-                        meme_tags_json=excluded.meme_tags_json,
-                        position=excluded.position,
-                        number=excluded.number,
-                        raw_json=excluded.raw_json,
-                        updated_at=excluded.updated_at
+                    nickname=excluded.nickname,
+                    image=excluded.image,
+                    personality=excluded.personality,
+                    meme_tags_json=excluded.meme_tags_json,
+                    position=excluded.position,
+                    number=excluded.number,
+                    raw_json=excluded.raw_json,
+                    updated_at=excluded.updated_at
                     """,
                     (
                         player.ea_id,
@@ -84,13 +81,13 @@ class ClubRepository:
             (match_id, date, opponent, score_for, score_against, result, raw_json, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(match_id) DO UPDATE SET
-                date=excluded.date,
-                opponent=excluded.opponent,
-                score_for=excluded.score_for,
-                score_against=excluded.score_against,
-                result=excluded.result,
-                raw_json=excluded.raw_json,
-                updated_at=excluded.updated_at
+            date=excluded.date,
+            opponent=excluded.opponent,
+            score_for=excluded.score_for,
+            score_against=excluded.score_against,
+            result=excluded.result,
+            raw_json=excluded.raw_json,
+            updated_at=excluded.updated_at
             """,
             (
                 match.match_id,
@@ -109,33 +106,33 @@ class ClubRepository:
                 """
                 INSERT INTO player_match_stats
                 (match_id, ea_id, display_name, position, rating, minutes, goals, assists, shots,
-                 shots_on_target, passes_attempted, passes_completed, key_passes, tackles, interceptions,
-                 saves, possession_losses, red_cards, yellow_cards, clean_sheets, distance_covered,
-                 sprint_speed, raw_json, created_at, updated_at)
+                shots_on_target, passes_attempted, passes_completed, key_passes, tackles, interceptions,
+                saves, possession_losses, red_cards, yellow_cards, clean_sheets, distance_covered,
+                sprint_speed, raw_json, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(match_id, ea_id) DO UPDATE SET
-                    display_name=excluded.display_name,
-                    position=excluded.position,
-                    rating=excluded.rating,
-                    minutes=excluded.minutes,
-                    goals=excluded.goals,
-                    assists=excluded.assists,
-                    shots=excluded.shots,
-                    shots_on_target=excluded.shots_on_target,
-                    passes_attempted=excluded.passes_attempted,
-                    passes_completed=excluded.passes_completed,
-                    key_passes=excluded.key_passes,
-                    tackles=excluded.tackles,
-                    interceptions=excluded.interceptions,
-                    saves=excluded.saves,
-                    possession_losses=excluded.possession_losses,
-                    red_cards=excluded.red_cards,
-                    yellow_cards=excluded.yellow_cards,
-                    clean_sheets=excluded.clean_sheets,
-                    distance_covered=excluded.distance_covered,
-                    sprint_speed=excluded.sprint_speed,
-                    raw_json=excluded.raw_json,
-                    updated_at=excluded.updated_at
+                display_name=excluded.display_name,
+                position=excluded.position,
+                rating=excluded.rating,
+                minutes=excluded.minutes,
+                goals=excluded.goals,
+                assists=excluded.assists,
+                shots=excluded.shots,
+                shots_on_target=excluded.shots_on_target,
+                passes_attempted=excluded.passes_attempted,
+                passes_completed=excluded.passes_completed,
+                key_passes=excluded.key_passes,
+                tackles=excluded.tackles,
+                interceptions=excluded.interceptions,
+                saves=excluded.saves,
+                possession_losses=excluded.possession_losses,
+                red_cards=excluded.red_cards,
+                yellow_cards=excluded.yellow_cards,
+                clean_sheets=excluded.clean_sheets,
+                distance_covered=excluded.distance_covered,
+                sprint_speed=excluded.sprint_speed,
+                raw_json=excluded.raw_json,
+                updated_at=excluded.updated_at
                 """,
                 (
                     match.match_id,
@@ -182,7 +179,7 @@ class ClubRepository:
                 "SELECT * FROM player_match_stats WHERE match_id = ? ORDER BY rating DESC, goals DESC, assists DESC",
                 (row["match_id"],),
             ).fetchall()
-        return self._row_to_match(row, player_rows)
+            return self._row_to_match(row, player_rows)
 
     def last_matches(self, limit: int = 10) -> List[Match]:
         with self.db.connect() as conn:
@@ -200,10 +197,10 @@ class ClubRepository:
         with self.db.connect() as conn:
             rows = conn.execute(
                 """SELECT * FROM player_match_stats
-                   WHERE ea_id = ? ORDER BY created_at DESC LIMIT ?""",
+                WHERE ea_id = ? ORDER BY created_at DESC LIMIT ?""",
                 (ea_id, limit),
             ).fetchall()
-        return [self._row_to_player_stats(r) for r in rows]
+            return [self._row_to_player_stats(r) for r in rows]
 
     def aggregate_leaderboard(self, metric: str = "goals", limit: int = 10) -> List[dict[str, Any]]:
         allowed = {
@@ -229,7 +226,7 @@ class ClubRepository:
                 """,
                 (limit,),
             ).fetchall()
-        return [dict(row) for row in rows]
+            return [dict(row) for row in rows]
 
     def save_form(self, form: PlayerForm) -> None:
         with self.db.connect() as conn:
@@ -239,11 +236,11 @@ class ClubRepository:
                 (ea_id, match_id, form_score, impact_score, clutch_score, error_score, throwing_score, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(ea_id, match_id) DO UPDATE SET
-                    form_score=excluded.form_score,
-                    impact_score=excluded.impact_score,
-                    clutch_score=excluded.clutch_score,
-                    error_score=excluded.error_score,
-                    throwing_score=excluded.throwing_score
+                form_score=excluded.form_score,
+                impact_score=excluded.impact_score,
+                clutch_score=excluded.clutch_score,
+                error_score=excluded.error_score,
+                throwing_score=excluded.throwing_score
                 """,
                 (
                     form.ea_id,
@@ -261,22 +258,22 @@ class ClubRepository:
         with self.db.connect() as conn:
             rows = conn.execute(
                 """SELECT * FROM player_form WHERE ea_id = ?
-                   ORDER BY created_at DESC LIMIT ?""",
+                ORDER BY created_at DESC LIMIT ?""",
                 (ea_id, matches),
             ).fetchall()
-        return [
-            PlayerForm(
-                ea_id=r["ea_id"],
-                match_id=r["match_id"],
-                form_score=r["form_score"],
-                impact_score=r["impact_score"],
-                clutch_score=r["clutch_score"],
-                error_score=r["error_score"],
-                throwing_score=r["throwing_score"],
-                created_at=datetime.fromisoformat(r["created_at"]),
-            )
-            for r in rows
-        ]
+            return [
+                PlayerForm(
+                    ea_id=r["ea_id"],
+                    match_id=r["match_id"],
+                    form_score=r["form_score"],
+                    impact_score=r["impact_score"],
+                    clutch_score=r["clutch_score"],
+                    error_score=r["error_score"],
+                    throwing_score=r["throwing_score"],
+                    created_at=datetime.fromisoformat(r["created_at"]),
+                )
+                for r in rows
+            ]
 
     def record_reply(self, category: str, text: str) -> None:
         import hashlib
@@ -289,7 +286,7 @@ class ClubRepository:
             # Keep only last 50 per category
             conn.execute(
                 """DELETE FROM recent_replies WHERE id NOT IN (
-                    SELECT id FROM recent_replies WHERE category = ? ORDER BY used_at DESC LIMIT 50
+                SELECT id FROM recent_replies WHERE category = ? ORDER BY used_at DESC LIMIT 50
                 )""",
                 (category,),
             )
@@ -300,7 +297,7 @@ class ClubRepository:
                 "SELECT reply_text FROM recent_replies WHERE category = ? ORDER BY used_at DESC LIMIT ?",
                 (category, limit),
             ).fetchall()
-        return [r["reply_text"] for r in rows]
+            return [r["reply_text"] for r in rows]
 
     def _row_to_match(self, row: Any, player_rows: Iterable[Any]) -> Match:
         players = [self._row_to_player_stats(p) for p in player_rows]
@@ -316,7 +313,7 @@ class ClubRepository:
         )
 
     def _row_to_player_stats(self, row: Any) -> PlayerMatchStats:
-        # sqlite3.Row doesn't have .get() — use dict() wrapper
+        # FIX: sqlite3.Row doesn't have .get() — wrap in dict() first
         row_dict = dict(row)
         return PlayerMatchStats(
             ea_id=row["ea_id"],
