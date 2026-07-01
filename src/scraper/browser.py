@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+from typing import Any, Optional
 
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
@@ -27,6 +27,7 @@ class BrowserManager:
             if self._browser and self._browser.is_connected():
                 return  # Already started
 
+            logger.info("Starting browser...")
             self._playwright = await async_playwright().start()
             self._browser = await self._playwright.chromium.launch(
                 headless=self.headless,
@@ -39,14 +40,14 @@ class BrowserManager:
             )
             self._context = await self._browser.new_context(
                 viewport={"width": 1920, "height": 1080},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.0",
             )
             if self.stealth:
                 await self._context.add_init_script("""
                     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                     Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
                 """)
-            logger.info("Browser started")
+            logger.info("Browser started successfully")
 
     async def new_page(self) -> Page:
         if not self._context:
