@@ -49,8 +49,7 @@ class PlayerMatchStats(BaseModel):
             return 0.0
         return round((self.passes_completed / self.passes_attempted) * 100, 1)
 
-    # FIX: Removed the "played" property that was filtering out valid players
-    # All players from the API are real match participants
+    # FIX: Removed the "played" property — all players from API are real
 
 class Match(BaseModel):
     match_id: str
@@ -62,7 +61,7 @@ class Match(BaseModel):
     players: List[PlayerMatchStats] = Field(default_factory=list)
     raw: Dict[str, Any] = Field(default_factory=dict)
 
-    # FIX: Removed the @field_validator that was stripping all players
+    # FIX: Removed the @field_validator that stripped all players
     # The API already gives us real players, no need to filter
 
     def get_player(self, ea_id: str) -> PlayerMatchStats:
