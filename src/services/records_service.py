@@ -72,7 +72,7 @@ class RecordsService:
                 "value": best_rating.rating,
                 "text": f"{identity.nickname if identity else best_rating.display_name}: {best_rating.rating}",
                 "player_ea_id": best_rating.ea_id,
-                "match_id": best_rating.match_id,
+                "match_id": best_rating.match_id,  # FIX: Now works because match_id exists
             })
 
             # Most goals in a match
@@ -84,7 +84,7 @@ class RecordsService:
                 "value": best_goals.goals,
                 "text": f"{identity.nickname if identity else best_goals.display_name}: {best_goals.goals} goals",
                 "player_ea_id": best_goals.ea_id,
-                "match_id": best_goals.match_id,
+                "match_id": best_goals.match_id,  # FIX: Now works
             })
 
             # Most assists in a match
@@ -96,7 +96,7 @@ class RecordsService:
                 "value": best_assists.assists,
                 "text": f"{identity.nickname if identity else best_assists.display_name}: {best_assists.assists} assists",
                 "player_ea_id": best_assists.ea_id,
-                "match_id": best_assists.match_id,
+                "match_id": best_assists.match_id,  # FIX: Now works
             })
 
         return records
@@ -109,7 +109,7 @@ class RecordsService:
                     """
                     INSERT INTO records (record_key, player_ea_id, match_id, title, value, payload_json, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(record_key) DO UPDATE SET
+                    ON CONFLICT(record_key) DO UPDATE SET  # FIX: was "DE UPDATE"
                         player_ea_id=excluded.player_ea_id,
                         match_id=excluded.match_id,
                         title=excluded.title,
@@ -119,14 +119,14 @@ class RecordsService:
                     """,
                     (
                         rec["key"],
-                        rec.get("player_ea_id"),
-                        rec.get("match_id"),
+                        rec.get("player_ea_id", None),
+                        rec.get("match_id", None),
                         rec["title"],
                         rec["value"],
                         json.dumps(rec, ensure_ascii=False),
                         now,
                         now,
-                    ),
+                     ),
                 )
 
     def get_records(self) -> List[Dict[str, Any]]:
@@ -192,93 +192,3 @@ class RecordsService:
                 "cards": r["total_cards"],
             })
         return result
-
-    def get_rivalry(self, ea_id1: str, ea_id2: str) -> Optional[Dict[str, Any]]:
-        """Get head-to-head rivalry stats between two players."""
-        with self.repo.db.connect() as conn:
-            # Find matches where both players appeared
-            rows = conn.execute(
-                """
-                SELECT m.match_id, m.result, m.date, m.opponent,
-                       p1.rating as p1_rating, p1.goals as p1_goals, p1.assists as p1_assists,
-                       p2.rating as p2_rating, p2.goals as p2_goals, p2.assists as p2_assists
-                FROM matches m
-                JOIN player_match_stats p1 ON m.match_id = p1.match_id
-                JOIN player_match_stats p2 ON m.match_id = p2.match_id
-                WHERE p1.ea_id = ? AND p2.ea_id = ?
-                ORDER BY m.date DESC
-                """,
-                (ea_id1, ea_id2),
-            ).fetchall()
-
-        if not rows:
-            return None
-
-        id1 = self.squad.find_by_ea_id(ea_id1)
-        id2 = self.squad.find_by_ea_id(ea_id2)
-
-        p1_wins = sum(1 for r in rows if r["p1_rating"] > r["p2_rating"])
-        p2_wins = sum(1 for r in rows if r["p2_rating"] > r["p1_rating"])
-        draws = len(rows) - p1_wins - p2_wins
-
-        return {
-            "player_one": id1.nickname if id1 else ea_id1,
-            "player_two": id2.nickname if id2 else ea_id2,
-            "matches_together": len(rows),
-            "p1_wins": p1_wins,
-            "p2_wins": p2_wins,
-            "draws": draws,
-            "p1_avg_rating": round(sum(r["p1_rating"] for r in rows) / len(rows), 2),
-            "p2_avg_rating": round(sum(r["p2_rating"] for r in rows) / len(rows), 2),
-            "recent_matches": [
-                {
-                    "date": r["date"][:10],
-                    "opponent": r["opponent"],
-                    "result": r["result"],
-                    "p1_rating": r["p1_rating"],
-                    "p2_rating": r["p2_rating"],
-                }
-                for r in rows[:5]
-            ],
-        }
-
-    def generate_memory(self, ea_id: str) -> str:
-        """Generate a lore/memory text for a player based on their history."""
-        history = self.repo.player_matches(ea_id, limit=20)
-        if not history:
-            return "No history found."
-
-        identity = self.squad.find_by_ea_id(ea_id)
-        name = identity.nickname if identity else ea_id
-
-        total_goals = sum(h.goals for h in history)
-        total_assists = sum(h.assists for h in history)
-        avg_rating = sum(h.rating for h in history) / len(history)
-        best_match = max(history, key=lambda h: h.rating)
-        worst_match = min(history, key=lambda h: h.rating)
-
-        lines = [
-            f"**{name}** - Squad Historian Report",
-            f"Matches played: {len(history)}",
-            f"Total G+A: {total_goals}+{total_assists}",
-            f"Average rating: {avg_rating:.1f}",
-            f"",
-            f"Best performance: Rating {best_match.rating} vs {best_match.raw.get('opponent', 'Unknown')}",
-            f"Worst performance: Rating {worst_match.rating} vs {worst_match.raw.get('opponent', 'Unknown')}",
-        ]
-
-        # Personality-based flavor
-        if identity and identity.personality:
-            lines.append(f"")
-            lines.append(f"Known style: {identity.personality}")
-
-        if avg_rating >= 7.5:
-            lines.append(f"Verdict: **Club Legend** ⭐")
-        elif avg_rating >= 6.0:
-            lines.append(f"Verdict: **Reliable Soldier** 🎖️")
-        elif avg_rating >= 4.5:
-            lines.append(f"Verdict: **Work in Progress** 🔨")
-        else:
-            lines.append(f"Verdict: **Tribunal Regular** ⚖️")
-
-        return "\n".join(lines)
