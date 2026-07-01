@@ -11,7 +11,7 @@ from src.discord_layer.bot import build_bot
 from src.engine.card_engine import CardEngine
 from src.engine.roast_engine import RoastEngine
 from src.engine.video_engine import VideoEngine
-from src.scraper.proclubs_tracker import ProClubsTrackerClient
+from src.scraper.api_client import APIClient
 from src.services.auto_service import AutoContentService
 from src.services.match_service import MatchService
 from src.services.records_service import RecordsService
