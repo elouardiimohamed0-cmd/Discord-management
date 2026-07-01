@@ -96,7 +96,7 @@ class ProClubsTrackerClient:
         # Fallback to browser
         logger.warning("API failed, falling back to browser...")
         snapshot = await self._scrape_with_browser(url)
-        self.cache.set(url, snapshot.model_dump())
+        self.cache.set(url, snapshot.model_dump(mode="json"))
         self.repo.save_snapshot(snapshot)
         self.repo.log_scrape(source=source, success=True, request_count=2)
         return snapshot
@@ -214,7 +214,7 @@ class ProClubsTrackerClient:
             ts = raw.get("timestamp")
             date = datetime.now()
             if ts:
-                try:
+               try:
                     date = datetime.fromtimestamp(int(ts))
                 except Exception:
                     pass
@@ -222,6 +222,7 @@ class ProClubsTrackerClient:
             # Parse players
             players = []
             our_players = raw.get("players", {}).get(our_id, {})
+            match_id = str(raw.get("matchId", ""))  # FIX: Extract match_id
             for pid, p in our_players.items():
                 seconds = self._int(p.get("secondsPlayed"), 0)
                 passes_att = self._int(p.get("passattempts"), 0)
@@ -230,6 +231,7 @@ class ProClubsTrackerClient:
                 stats = PlayerMatchStats(
                     ea_id=str(pid),
                     display_name=p.get("playername", "Unknown"),
+                    match_id=match_id,  # FIX: Pass match_id to PlayerMatchStats
                     position=p.get("pos", ""),
                     rating=self._float(p.get("rating"), 0.0),
                     minutes=seconds // 60,
