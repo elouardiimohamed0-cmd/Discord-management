@@ -53,8 +53,8 @@ class PlayerMatchStats(BaseModel):
 
     @property
     def played(self) -> bool:
-        return self.minutes > 0 or self.rating > 0 or bool(self.raw)
-
+        # FIX: Don't filter out players with 0 minutes — they might still have stats
+        return self.minutes >= 0 or self.rating > 0 or bool(self.raw) or self.goals > 0 or self.assists > 0
 
 class Match(BaseModel):
     match_id: str
