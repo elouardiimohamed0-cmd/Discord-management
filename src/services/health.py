@@ -1,7 +1,6 @@
 """Lightweight HTTP health server to keep Fly.io happy."""
 from __future__ import annotations
 
-import asyncio
 from aiohttp import web
 
 from src.core.logging import get_logger
