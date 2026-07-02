@@ -1,42 +1,27 @@
 app = "discord-management"
-primary_region = "iad"
+primary_region = "cdg"
 
 [build]
-  dockerfile = "Dockerfile"
 
-[env]
-  PORT = "8000"
-  PYTHONUNBUFFERED = "1"
-  DISCORD_STARTUP_DELAY = "15"
-  SCRAPE_INTERVAL_MINUTES = "10"
-  DEFAULT_PERSONALITY = "casablanca"
-  ROAST_FREQUENCY = "0.95"
-  SQUAD_FILE = "squad.json"
-  ASSETS_DIR = "assets"
-  SQLITE_PATH = "/app/rachad_data.db"
-
-[[services]]
+[[http_service]]
   internal_port = 8000
-  protocol = "tcp"
-  auto_stop_machines = false
-  auto_start_machines = true
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = false
   min_machines_running = 1
 
-  [[services.ports]]
-    handlers = ["http"]
-    port = 80
-
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 443
-
-  [[services.tcp_checks]]
-    grace_period = "30s"
-    interval = "15s"
-    timeout = "2s"
-    restart_limit = 0
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
 
 [[vm]]
   memory = "512mb"
   cpu_kind = "shared"
   cpus = 1
+
+[mounts]
+  source = "data"
+  destination = "/app/data"
