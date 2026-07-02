@@ -1,138 +1,63 @@
+"""Playwright browser manager for fallback scraping."""
 from __future__ import annotations
 
-import asyncio
-from typing import Any, Optional
+from typing import Optional
 
-from playwright.async_api import Browser, BrowserContext, Page, async_playwright
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-STEALTH_SCRIPT = """
-// Remove webdriver property
-Object.defineProperty(navigator, 'webdriver', {
-    get: () => undefined,
-});
-
-// Fake plugins
-Object.defineProperty(navigator, 'plugins', {
-    get: () => [
-        {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer'},
-        {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai'},
-        {name: 'Native Client', filename: 'internal-nacl-plugin'}
-    ],
-});
-
-// Fake languages
-Object.defineProperty(navigator, 'languages', {
-    get: () => ['en-US', 'en'],
-});
-
-// Override permissions
-const originalQuery = window.navigator.permissions.query;
-window.navigator.permissions.query = (parameters) => (
-    parameters.name === 'notifications'
-        ? Promise.resolve({state: Notification.permission})
-        : originalQuery(parameters)
-);
-
-// Override iframe contentWindow
-const originalAttachShadow = Element.prototype.attachShadow;
-Element.prototype.attachShadow = function attachShadow(options) {
-    const shadow = originalAttachShadow.call(this, options);
-    Object.defineProperty(shadow, 'mode', {value: options.mode});
-    return shadow;
-};
-"""
-
-
 class BrowserManager:
-    def __init__(self, headless: bool = True, stealth: bool = True):
+    """Manages a Playwright browser instance."""
+
+    def __init__(self, headless: bool = True):
         self.headless = headless
-        self.stealth = stealth
-        self._playwright: Optional[Any] = None
+        self._playwright = None
         self._browser: Optional[Browser] = None
         self._context: Optional[BrowserContext] = None
-        self._lock = asyncio.Lock()
 
     async def start(self) -> None:
-        async with self._lock:
-            if self._browser and not self._browser.is_connected():
-                logger.warning("Browser disconnected, restarting...")
-                await self._cleanup()
-            if self._browser and self._browser.is_connected():
-                return  # Already started
+        """Start the browser if not already running."""
+        if self._browser and not self._browser.is_connected():
+            await self.close()
 
-            logger.info("Starting browser...")
+        if not self._browser:
             self._playwright = await async_playwright().start()
-
-            # Launch with more realistic args to avoid detection
-            launch_args = [
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-accelerated-2d-canvas",
-                "--disable-gpu",
-                "--window-size=1920,1080",
-            ]
-
             self._browser = await self._playwright.chromium.launch(
                 headless=self.headless,
-                args=launch_args,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-accelerated-2d-canvas",
+                    "--disable-gpu",
+                    "--window-size=1920,1080",
+                ],
             )
-
-            # Create context with realistic settings
             self._context = await self._browser.new_context(
                 viewport={"width": 1920, "height": 1080},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                locale="en-US",
-                timezone_id="Europe/Paris",
-                color_scheme="light",
-                reduced_motion="no-preference",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             )
-
-            if self.stealth:
-                await self._context.add_init_script(STEALTH_SCRIPT)
-                logger.info("Stealth mode enabled")
-
-            logger.info("Browser started successfully")
+            logger.info("[Browser] Started (headless=%s)", self.headless)
 
     async def new_page(self) -> Page:
+        """Create a new page in the browser context."""
         if not self._context:
-            raise RuntimeError("Browser not started")
+            await self.start()
         return await self._context.new_page()
 
     async def close(self) -> None:
-        async with self._lock:
-            await self._cleanup()
-
-    async def _cleanup(self) -> None:
+        """Close the browser and cleanup."""
         if self._context:
-            try:
-                await self._context.close()
-            except Exception as e:
-                logger.debug("Context close error: %s", e)
+            await self._context.close()
             self._context = None
         if self._browser:
-            try:
-                await self._browser.close()
-            except Exception as e:
-                logger.debug("Browser close error: %s", e)
+            await self._browser.close()
             self._browser = None
         if self._playwright:
-            try:
-                await self._playwright.stop()
-            except Exception as e:
-                logger.debug("Playwright stop error: %s", e)
+            await self._playwright.stop()
             self._playwright = None
-        logger.info("Browser closed")
-
-    async def __aenter__(self):
-        await self.start()
-        return self
-
-    async def __aexit__(self, *args):
-        await self.close()
+        logger.info("[Browser] Closed")
