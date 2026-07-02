@@ -16,6 +16,13 @@ async def main() -> None:
     app = create_app()
     bot = app.bot
 
+    # Start health server for Fly.io
+    try:
+        from health_server import start_health_server
+        asyncio.create_task(start_health_server(port=8000))
+    except ImportError:
+        logger.warning("[Main] Health server not available, skipping")
+
     # Handle graceful shutdown
     def shutdown_handler(signum, frame):
         logger.info("[Main] Shutdown signal received")
