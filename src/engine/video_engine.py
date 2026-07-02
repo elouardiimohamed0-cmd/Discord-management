@@ -1,81 +1,16 @@
+"""Video engine for generating highlight videos."""
 from __future__ import annotations
-
-import asyncio
-from pathlib import Path
-from typing import Optional
-
-import aiohttp
 
 from src.core.config import Settings
 from src.core.logging import get_logger
-from src.domain.models import PlayerIdentity, PlayerMatchStats
 from src.squad.registry import SquadRegistry
 
 logger = get_logger(__name__)
 
 
 class VideoEngine:
+    """Generate highlight videos."""
+
     def __init__(self, settings: Settings, squad: SquadRegistry):
         self.settings = settings
         self.squad = squad
-        self.cache_dir = settings.cache_dir / "videos"
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-
-    async def generate_highlight(
-        self,
-        player: PlayerMatchStats,
-        identity: PlayerIdentity,
-        card_type: str = "mvp",
-    ) -> Optional[Path]:
-        from PIL import Image
-        from src.engine.card_engine import CardEngine
-
-        cards = CardEngine(self.settings, self.squad)
-        generator = getattr(cards, f"generate_{card_type}_card", cards.generate_mvp_card)
-        base_card = generator(player, identity)
-
-        frames = []
-        base_img = Image.open(base_card)
-
-        for i in range(5):
-            frame = base_img.copy()
-            zoom = 1.0 + (i * 0.02)
-            w, h = frame.size
-            new_w, new_h = int(w * zoom), int(h * zoom)
-            frame = frame.resize((new_w, new_h), Image.LANCZOS)
-            left = (new_w - w) // 2
-            top = (new_h - h) // 2
-            frame = frame.crop((left, top, left + w, top + h))
-            frames.append(frame)
-
-        gif_path = self.cache_dir / f"{card_type}_{identity.ea_id}_{player.match_id}.gif"
-        frames[0].save(
-            gif_path,
-            save_all=True,
-            append_images=frames[1:],
-            duration=600,
-            loop=0,
-        )
-        logger.info("Generated highlight GIF: %s", gif_path)
-        return gif_path
-
-    async def generate_meme_video(
-        self,
-        text: str,
-        identity: PlayerIdentity,
-    ) -> Optional[Path]:
-        import urllib.parse
-        prompt = f"football meme, dramatic lighting, {identity.nickname}, {text[:50]}, cinematic, 4k"
-        url = f"{self.settings.pollinations_url}{urllib.parse.quote(prompt)}"
-
-        img_path = self.cache_dir / f"meme_{identity.ea_id}_{hash(text)}.png"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                    if resp.status == 200:
-                        data = await resp.read()
-                        img_path.write_bytes(data)
-                        return img_path
-        except Exception as e:
-            logger.warning("Pollinations fetch failed: %s", e)
-        return None
