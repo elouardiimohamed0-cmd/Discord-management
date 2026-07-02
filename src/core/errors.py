@@ -1,33 +1,21 @@
-from __future__ import annotations
+"""Custom application exceptions."""
 
 
-class BotError(Exception):
-    """Base application error."""
+class NoMatchesFound(Exception):
+    """Raised when no matches exist in the database."""
+    pass
 
 
-class ConfigurationError(BotError):
-    """Raised when required configuration is missing or invalid."""
+class PlayerNotInMatch(Exception):
+    """Raised when a player is not found in a match."""
+    pass
 
 
-class DataRuleViolation(BotError):
-    """Raised when a hard data rule would be violated."""
+class SquadNotLoaded(Exception):
+    """Raised when the squad registry failed to load."""
+    pass
 
 
-class PlayerNotInMatch(DataRuleViolation):
-    """Raised when a command tries to use a player absent from match.players."""
-
-
-class NoMatchesFound(BotError):
-    """No matches in database."""
-
-
-class ScraperError(BotError):
-    """Playwright/scraper failure."""
-
-
-class CardError(BotError):
-    """Image generation failure."""
-
-
-class VideoError(BotError):
-    """Video generation failure."""
+class ScrapeFailed(Exception):
+    """Raised when the scraper fails after all retries."""
+    pass
